@@ -1,0 +1,82 @@
+cmake_minimum_required(VERSION 3.10)
+project(prox_mpc_core)
+
+# C++ version
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
+# Build type: Release by default to optimize the SQP/QP solver hot path.
+if(NOT CMAKE_BUILD_TYPE)
+  set(CMAKE_BUILD_TYPE "Release")
+endif()
+
+# Compiler warnings
+if(CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+  add_compile_options(-Wall -Wextra -Wpedantic)
+endif()
+
+# Remove Eigen's internal assertions in the hot path (safe under Release)
+add_compile_definitions(EIGEN_NO_DEBUG)
+
+# Packages
+find_package(ament_cmake REQUIRED)
+find_package(rclcpp REQUIRED)
+find_package(Eigen3 REQUIRED)
+find_package(proxsuite REQUIRED)
+find_package(geometry_msgs REQUIRED)
+find_package(nav_msgs REQUIRED)
+find_package(sensor_msgs REQUIRED)
+find_package(std_msgs REQUIRED)
+
+# Library
+add_library(${PROJECT_NAME}
+  src/model.cpp
+  src/mpc.cpp
+  src/proxqp.cpp
+  src/utils.cpp
+)
+target_include_directories(${PROJECT_NAME} PUBLIC
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  $<INSTALL_INTERFACE:include>
+)
+target_link_libraries(${PROJECT_NAME}
+  Eigen3::Eigen
+  proxsuite::proxsuite
+)
+ament_target_dependencies(${PROJECT_NAME}
+  rclcpp
+  geometry_msgs
+  nav_msgs
+  sensor_msgs
+  std_msgs
+)
+
+# Install
+install(
+  DIRECTORY include/
+  DESTINATION include
+)
+install(
+  TARGETS ${PROJECT_NAME}
+  EXPORT export_${PROJECT_NAME}
+  ARCHIVE DESTINATION lib
+  LIBRARY DESTINATION lib
+  RUNTIME DESTINATION bin
+)
+
+# Export (so prox_mpc_controller and prox_mpc_demo can link the library)
+ament_export_targets(export_${PROJECT_NAME} HAS_LIBRARY_TARGET)
+ament_export_dependencies(rclcpp Eigen3 proxsuite geometry_msgs nav_msgs sensor_msgs std_msgs)
+
+# Tests
+if(BUILD_TESTING)
+  find_package(ament_lint_auto REQUIRED)
+  # uncrustify is the enforced C++ formatter; cpplint is intentionally disabled
+  # to avoid duplicating/contradicting its checks. Copyright is disabled because
+  # files carry a short SPDX header (full text lives in LICENSE).
+  set(ament_cmake_cpplint_FOUND TRUE)
+  set(ament_cmake_copyright_FOUND TRUE)
+  ament_lint_auto_find_test_dependencies()
+endif()
+
+ament_package()

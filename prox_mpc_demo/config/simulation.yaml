@@ -1,0 +1,31 @@
+prox_mpc_simulation:
+  ros__parameters:
+    # Model: "bike" (4 states, bicycle) or "r2d2" (3 states, unicycle).
+    model: "bike"
+
+    # Horizons and step size.
+    np: 20            # prediction horizon shooting nodes
+    nc: 20            # control horizon shooting nodes
+    dt: 0.1           # step size [s]
+
+    # Cost weights (diagonal, sized to the model).
+    q_pos: 10.0       # intermediate position weight
+    q_theta: 1.0      # intermediate heading/steering weight
+    s_factor: 2.0     # terminal weight = s_factor * Q
+    r_weight: 0.1     # control weight
+    w_weight: 100.0   # obstacle slack penalty
+
+    # Reference.
+    v_ref: 1.0        # desired forward speed [m/s]
+    goal_x: 5.0       # goal position x [m]
+    goal_y: 0.0       # goal position y [m]
+    goal_theta: 0.0   # goal heading [rad]
+
+    # Obstacle (off by default for a clean tracking demo).
+    obstacle_enable: false
+    obs_x: 2.5
+    obs_y: 0.6
+
+    # Logging.
+    report_period: 50         # log solve-time stats every N control steps
+    log_level: "info"         # debug | info | warn | error | fatal

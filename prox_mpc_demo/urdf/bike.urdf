@@ -1,0 +1,91 @@
+<?xml version="1.0"?>
+<!--
+  Minimal car-like body for the kinematic "bike" (Bicycle) model, authored for
+  ProxMPC and covered by the repository LICENSE.
+
+  Dimensions mirror prox_mpc_core/include/prox_mpc/models/bike.hpp: chassis length 2.7 m, width
+  1.0 m, wheelbase L = 1.6 m (rear axle at x = -0.8, single steered front wheel
+  at x = +0.8). The root link base_link sits on the z = 0 ground plane at the
+  model's (x, y) reference point; all joints are fixed, so no /joint_states are
+  needed. This is a visual approximation, not a physically exact vehicle.
+-->
+<robot name="bike">
+
+  <material name="bike_body">
+    <color rgba="0.20 0.45 0.70 1"/>
+  </material>
+  <material name="bike_wheel">
+    <color rgba="0.05 0.05 0.05 1"/>
+  </material>
+
+  <!-- Empty root at ground level; the chassis is lifted onto the wheels. -->
+  <link name="base_link"/>
+
+  <link name="chassis">
+    <visual>
+      <geometry>
+        <box size="2.7 1.0 0.4"/>
+      </geometry>
+      <material name="bike_body"/>
+    </visual>
+  </link>
+
+  <joint name="base_to_chassis" type="fixed">
+    <parent link="base_link"/>
+    <child link="chassis"/>
+    <origin xyz="0 0 0.5"/>
+  </joint>
+
+  <link name="rear_left_wheel">
+    <visual>
+      <origin rpy="1.5707963 0 0" xyz="0 0 0"/>
+      <geometry>
+        <cylinder length="0.2" radius="0.3"/>
+      </geometry>
+      <material name="bike_wheel"/>
+    </visual>
+  </link>
+  <joint name="rear_left_wheel_joint" type="fixed">
+    <parent link="base_link"/>
+    <child link="rear_left_wheel"/>
+    <origin xyz="-0.8 0.5 0.3"/>
+  </joint>
+
+  <link name="rear_right_wheel">
+    <visual>
+      <origin rpy="1.5707963 0 0" xyz="0 0 0"/>
+      <geometry>
+        <cylinder length="0.2" radius="0.3"/>
+      </geometry>
+      <material name="bike_wheel"/>
+    </visual>
+  </link>
+  <joint name="rear_right_wheel_joint" type="fixed">
+    <parent link="base_link"/>
+    <child link="rear_right_wheel"/>
+    <origin xyz="-0.8 -0.5 0.3"/>
+  </joint>
+
+  <!-- Single steered front wheel (held at zero steering for visualization). -->
+  <link name="steering_link"/>
+  <joint name="steering_joint" type="fixed">
+    <parent link="base_link"/>
+    <child link="steering_link"/>
+    <origin xyz="0.8 0 0.3"/>
+  </joint>
+
+  <link name="front_wheel">
+    <visual>
+      <origin rpy="1.5707963 0 0" xyz="0 0 0"/>
+      <geometry>
+        <cylinder length="0.2" radius="0.3"/>
+      </geometry>
+      <material name="bike_wheel"/>
+    </visual>
+  </link>
+  <joint name="front_wheel_joint" type="fixed">
+    <parent link="steering_link"/>
+    <child link="front_wheel"/>
+    <origin xyz="0 0 0"/>
+  </joint>
+</robot>

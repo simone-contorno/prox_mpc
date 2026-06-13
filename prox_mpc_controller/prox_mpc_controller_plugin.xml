@@ -1,0 +1,11 @@
+<library path="prox_mpc_controller">
+  <class
+    type="prox_mpc_controller::ProxMpcController"
+    base_class_type="nav2_core::Controller">
+    <description>
+      ProxMPC Nav2 controller plugin (skeleton): a nonlinear Model Predictive
+      Control solved by a Sequential Quadratic Programming loop over the ProxQP
+      solver. The control law is under development.
+    </description>
+  </class>
+</library>
