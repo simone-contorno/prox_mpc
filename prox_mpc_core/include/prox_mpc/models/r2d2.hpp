@@ -4,13 +4,18 @@
 #ifndef PROX_MPC__MODELS__R2D2_HPP_
 #define PROX_MPC__MODELS__R2D2_HPP_
 
+#include <map>
+#include <string>
+
 #include <prox_mpc/model.hpp>
 #include <prox_mpc/utils.hpp>
 
 namespace prox_mpc
 {
 
-/* Unicycle (differential-drive) kinematic model. */
+/* Unicycle (differential-drive) kinematic model.
+ * Control is [v, omega], a body twist, so toTwist() uses the base identity
+ * mapping (linear.x = v, angular.z = omega). */
 class Unicycle : public Model
 {
 public:
@@ -35,30 +40,38 @@ public:
     setIneq("du", 0, -.5, .5);   // linear acceleration [m/s^2]
     setIneq("du", 1, -.5, .5);   // angular acceleration [rad/s^2]
 
-    setObsAvoid(true, 0.2);  // Euclidean clearance [m]
-
-    setBoxWidth(.5);
-    setBoxLength(.4);
-    setPoseWidth(getBoxWidth() / 2);
-    setPoseLength(getBoxLength() / 2);
-    setBoxPoints(20);
+    setObsAvoid(true);  // this model supports obstacle avoidance
   }
 
-  void updatec(double dt, VectorXd x_next)
+  /*!
+   * Configure the model constants from a params map. Absent keys keep the
+   * constructor literals, so an empty map reproduces the hardcoded values.
+   * Keys: bound limits "v_min"/"v_max" (u[0]), "w_min"/"w_max" (u[1]),
+   * "a_min"/"a_max" (du[0]), "alpha_min"/"alpha_max" (du[1]).
+   */
+  void configure(const std::map<std::string, double> & params) override
+  {
+    overrideBound(params, "u", 0, "v_min", "v_max");
+    overrideBound(params, "u", 1, "w_min", "w_max");
+    overrideBound(params, "du", 0, "a_min", "a_max");
+    overrideBound(params, "du", 1, "alpha_min", "alpha_max");
+  }
+
+  void updatec(double dt, VectorXd x_next) override
   {
     c << getX()(0) - x_next(0) + dt * getU()(0) * cos(getX()(2)),
       getX()(1) - x_next(1) + dt * getU()(0) * sin(getX()(2)),
       getX()(2) - x_next(2) + dt * getU()(1);
   }
 
-  void updateA(double dt)
+  void updateA(double dt) override
   {
     A << 1.0, 0.0, -dt * getU()(0) * sin(getX()(2)),
       0.0, 1.0, +dt * getU()(0) * cos(getX()(2)),
       0.0, 0.0, 1.0;
   }
 
-  void updateB()
+  void updateB() override
   {
     B << cos(getX()(2)), 0.0,
       sin(getX()(2)), 0.0,

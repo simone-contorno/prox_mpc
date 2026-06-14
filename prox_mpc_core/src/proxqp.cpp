@@ -4,6 +4,8 @@
 
 #include <prox_mpc/proxqp.hpp>
 
+#include <cmath>
+#include <limits>
 #include <stdexcept>
 
 namespace prox_mpc
@@ -22,32 +24,37 @@ constexpr double kObsNormalEps = 1e-9;
  */
 void ProxQP::init(std::shared_ptr<Model> model)
 {
-    /* Robot model. */
+  /* Robot model. */
   this->model = model;
 
-    /* Problem dimensions */
+  /* Problem dimensions */
   this->n = model->getN();
   this->m = model->getM();
 
-    /* Constraints */
+  /* Constraints */
 
-    // Equalities
+  // Equalities
   n_eq += 2;                            // update the number of equalities
   eq_idx = VectorXd::Zero(n_eq);
   eq_idx(0) = n;                        // first state = initial pose
   eq_idx(1) = eq_idx(0) + Np * n;       // kinematics
   eq_tot = eq_idx(eq_idx.size() - 1);
 
-    // Inequalities
+  // Inequalities
 
-    /* Update the number of inequalities */
-  n_ineq += 1;                                      // first control input
-  if (model->getObsFlag() == true) {n_ineq += 1;}   // obstacle avoidance
+  /* Obstacle avoidance is active only if the model declares it and a capacity
+   * K > 0 was set; K = 0 (or the model flag off) reduces to the obstacle-off QP. */
+  const bool obstacle_active = model->getObsFlag() == true && max_obs > 0;
 
-    /* Build the inequality indices vector */
+  /* Update the number of inequality blocks: the first control input, plus the
+   * obstacle constraint block and the slack lower-bound block when active. */
+  n_ineq += 1;                                  // first control input
+  if (obstacle_active == true) {n_ineq += 2;}   // obstacle rows + slack lower-bound rows
+
+  /* Build the inequality indices vector */
   ineq_idx = VectorXd::Zero(n_ineq);
 
-    /* Set inequality constraint indices */
+  /* Set inequality constraint indices */
   size_t i = 0;
 
   ineq_idx(i) = m;                                              // first control input velocity
@@ -68,25 +75,26 @@ void ProxQP::init(std::shared_ptr<Model> model)
     i++;
   }
 
-  if (model->getObsFlag() == true) {                            // obstacle avoidance
-    ineq_idx(i) = ineq_idx(i - 1) + Np;
+  if (obstacle_active == true) {
+    ineq_idx(i) = ineq_idx(i - 1) + Np * max_obs;   // obstacle constraint rows (Np*K)
     i++;
-
-    for (size_t j = 0; j < model->getIneq("w").size(); j++) {   // slack variables
-      ineq_idx(i) = ineq_idx(i - 1) + Np;
-      i++;
-    }
+    ineq_idx(i) = ineq_idx(i - 1) + Np * max_obs;   // slack lower-bound rows (Np*K, s >= 0)
+    i++;
   }
 
   ineq_tot = ineq_idx(ineq_idx.size() - 1);
 
-    /* Decision variables */
+  /* Decision variables */
   x_start = 0;
   u_start = x_start + (Np + 1) * n;
   w_start = u_start + Nc * m;
-  n_dvars = (Np + 1) * n + Nc * m + (Np + 1);
+  const size_t n_slack = obstacle_active == true ? Np * max_obs : 0;
+  n_dvars = w_start + n_slack;
 
-    /* ProxQP */
+  /* Per-slot signed-distance cache (populated each iteration in setC). */
+  obs_h = VectorXd::Zero(n_slack);
+
+  /* ProxQP */
   H = MatrixXd::Zero(n_dvars, n_dvars);
   E = MatrixXd::Zero(eq_tot, n_dvars);
   C = MatrixXd::Zero(ineq_tot, n_dvars);
@@ -95,34 +103,34 @@ void ProxQP::init(std::shared_ptr<Model> model)
   upp = VectorXd::Zero(ineq_tot);
   low = VectorXd::Zero(ineq_tot);
 
-    /* Optimal results */
+  /* Optimal results */
   result_x = VectorXd::Zero(H.cols());
   result_lambda = VectorXd::Zero(E.rows());
   result_mu = VectorXd::Zero(C.rows());
 
-    /* Settings */
+  /* Settings */
   setH();   // Hessian matrix
 
   qp_dim = n_dvars;
   qp_eq = eq_tot;
   qp_ineq = ineq_tot;
 
-    /* Sparse problem */
+  /* Sparse problem */
   if (qp_type == false) {
-        // Sparse matrices
+    // Sparse matrices
     H_sparse = H.sparseView();
     E_sparse = E.sparseView();
     C_sparse = C.sparseView();
 
-        // QP settings
+    // QP settings
     qp_sparse = sparse::QP<double, isize>(qp_dim, qp_eq, qp_ineq);
     qp_sparse.settings.max_iter = max_out_iter;
     qp_sparse.settings.max_iter_in = max_inn_iter;
     qp_sparse.settings.compute_timings = true;
   }
-    // Dense problem
+  // Dense problem
   else {
-        // QP settings
+    // QP settings
     qp_dense = dense::QP<double>(qp_dim, qp_eq, qp_ineq);
     qp_dense.settings.max_iter = max_out_iter;
     qp_dense.settings.max_iter_in = max_inn_iter;
@@ -145,59 +153,59 @@ ProxQP::solve(
   MatrixXd x, MatrixXd u, const VectorXd & u_prev, VectorXd w, const MatrixXd & goal_x,
   const MatrixXd & goal_u)
 {
-    /* Configure QP problem */
+  /* Configure QP problem */
   setc(x, u, w, goal_x, goal_u);    // c
   setE(x, u);                       // E
   setb(x, u);                       // b
   setC(x);                          // C
   setd(x, u, u_prev, w);            // d
 
-    /* Sparse problem */
+  /* Sparse problem */
   if (qp_type == false) {
-        // Make constraints matrices sparse
+    // Make constraints matrices sparse
     E_sparse = E.sparseView();
     C_sparse = C.sparseView();
 
-        // QP problem initialization
+    // QP problem initialization
     qp_sparse.init(H_sparse, c, E_sparse, b, C_sparse, low, upp);
 
-        // Solve
+    // Solve
     if (guess == true) {   // warm start
       qp_sparse.solve(result_x, result_lambda, result_mu);
     } else {
       qp_sparse.solve();
     }
 
-        // Take results
+    // Take results
     result_x = qp_sparse.results.x;
     result_lambda = qp_sparse.results.y;
     result_mu = qp_sparse.results.z;
 
-        // Take QP info
+    // Take QP info
     qp_info = qp_sparse.results.info;
   }
-    /* Dense problem */
+  /* Dense problem */
   else {
-        // Initialize the problem
+    // Initialize the problem
     qp_dense.init(H, c, E, b, C, low, upp);
 
-        // Solve
+    // Solve
     if (guess == true) {   // warm start
       qp_dense.solve(result_x, result_lambda, result_mu);
     } else {
       qp_dense.solve();
     }
 
-        // Take results
+    // Take results
     result_x = qp_dense.results.x;
     result_lambda = qp_dense.results.y;
     result_mu = qp_dense.results.z;
 
-        // Take QP info
+    // Take QP info
     qp_info = qp_dense.results.info;
   }
 
-    /* Update decision variables */
+  /* Update decision variables */
   for (size_t i = x_start; i < u_start; i += n) {
     x.row(i / n) = result_x.segment(i, n);
   }                                                                                             // states
@@ -214,21 +222,21 @@ ProxQP::solve(
 /* Fill the objective function Hessian matrix H. */
 void ProxQP::setH()
 {
-    // Intermediate states
+  // Intermediate states
   for (size_t i = x_start; i < u_start - n; i += n) {
     H.block(i, i, n, n) = 2 * Q;
   }
 
-    // Final state
+  // Final state
   H.block(u_start - n, u_start - n, n, n) = 2 * S;
 
-    // Control inputs
+  // Control inputs
   for (size_t i = u_start; i < w_start - m; i += m) {
     H.block(i, i, m, m) = 2 * R;
   }
 
-    // Slack variable
-  if (model->getObsFlag() == true) {
+  // Slack variable
+  if (model->getObsFlag() == true && max_obs > 0) {
     for (size_t i = w_start; i < n_dvars; i++) {
       H.block(i, i, 1, 1) = 2 * W;
     }
@@ -249,24 +257,24 @@ void ProxQP::setc(
 {
   size_t count = 0;
 
-    // Intermediate states
+  // Intermediate states
   for (size_t i = x_start; i < u_start - n; i += n) {
     c.segment(i, n) = 2 * Q * (x.row(count) - goal_x.row(count)).transpose();
     count++;
   }
 
-    // Final state
+  // Final state
   c.segment(u_start - n, n) = 2 * S * (x.row(count) - goal_x.row(count)).transpose();
 
-    // Control inputs
+  // Control inputs
   count = 0;
   for (size_t i = u_start; i < w_start - m; i += m) {
     c.segment(i, m) = 2 * R * (u.row(count).transpose() - goal_u.row(count).transpose());
     count++;
   }
 
-    // Slack variable
-  if (model->getObsFlag() == true) {
+  // Slack variable
+  if (model->getObsFlag() == true && max_obs > 0) {
     count = 0;
     for (size_t i = w_start; i < n_dvars; i++) {
       c.segment(i, 1) = 2 * W * w(count);
@@ -282,27 +290,27 @@ void ProxQP::setc(
  */
 void ProxQP::setE(const MatrixXd & x, const MatrixXd & u)
 {
-    /* Initial state */
+  /* Initial state */
   for (size_t i = x_start; i < eq_idx(0); i += n) {
     E.block(i, i, n, n) = MatrixXd::Identity(n, n);
   }
 
-    /* Model kinematics (Euler) */
+  /* Model kinematics (Euler) */
   size_t count = 0;
   size_t col;
   for (size_t i = eq_idx(0); i < eq_idx(1); i += n) {
-        // Update for the current step
+    // Update for the current step
     model->setX(x.row(count));
     model->setU(u.row(std::clamp((int)(count), 0, (int)(u.rows() - 1))));
 
     model->updateA(dt);
     model->updateB();
 
-        // State
+    // State
     E.block(i, i - eq_idx(0), n, n) = model->getA();                // current
     E.block(i, i - eq_idx(0) + n, n, n) = -MatrixXd::Identity(n, n); // next
 
-        // Control input
+    // Control input
     col = u_start + (i - eq_idx(0)) / n * m;
     E.block(i, std::clamp((int)(col), 0, (int)(w_start - m)), n, m) = model->getB() * dt;
 
@@ -319,9 +327,9 @@ void ProxQP::setb(const MatrixXd & x, const MatrixXd & u)
 {
   size_t count = 0;
 
-    /* Model kinematics */
+  /* Model kinematics */
   for (size_t i = eq_idx(0); i < eq_idx(1); i += n) {
-        // Update for the current step
+    // Update for the current step
     model->setX(x.row(count));                                              // state vector
     model->setU(u.row(std::clamp((int)(count), 0, (int)(u.rows() - 1))));   // control input
     model->updatec(dt, x.row(count + 1));                                   // local function approximation.
@@ -342,12 +350,12 @@ void ProxQP::setC(const MatrixXd & x)
   size_t idx;
   size_t col;
 
-    /* First control input's constraint */
+  /* First control input's constraint */
   for (size_t j = 0; j < model->getIneq("du").size(); j++) {
     C(j, u_start + j) = 1;
   }
 
-    /* States' constraints */
+  /* States' constraints */
   for (size_t j = 0; j < model->getIneq("x").size(); j++) { // for each state inequality constraint
     for (size_t l = ineq_idx(i); l < ineq_idx(i + 1); l++) { // for each step
       idx = x_start + model->getIneq("x").at(j)[0] + n * (l - ineq_idx(i));
@@ -356,7 +364,7 @@ void ProxQP::setC(const MatrixXd & x)
     i++;
   }
 
-    /* Control inputs' constraints */
+  /* Control inputs' constraints */
   for (size_t j = 0; j < model->getIneq("u").size(); j++) { // for each control inequality constraint
     for (size_t l = ineq_idx(i); l < ineq_idx(i + 1); l++) { // for each step
       idx = u_start + model->getIneq("u").at(j)[0] + m * (l - ineq_idx(i));
@@ -365,7 +373,7 @@ void ProxQP::setC(const MatrixXd & x)
     i++;
   }
 
-    /* Control inputs derivatives' constraints */
+  /* Control inputs derivatives' constraints */
   for (size_t j = 0; j < model->getIneq("du").size(); j++) { // for each control derivative inequality constraint
     for (size_t l = ineq_idx(i); l < ineq_idx(i + 1); l++) { // for each step
       idx = u_start + model->getIneq("du").at(j)[0] + m * (l - ineq_idx(i));
@@ -375,34 +383,36 @@ void ProxQP::setC(const MatrixXd & x)
     i++;
   }
 
-    /* Obstacle avoidance */
-  if (model->getObsFlag() == true) {
-    for (size_t j = ineq_idx(i); j < ineq_idx(i + 1); j++) {
-            /* Indeces */
-      idx = j - ineq_idx(i);
-      col = x_start + n * (idx + 1);
+  /* Obstacle avoidance (linearized signed-distance half-plane, K slots/node) */
+  if (model->getObsFlag() == true && max_obs > 0) {
+    /* Obstacle constraint rows: n^T (p_k - o) + s >= d_safe, recomputed each
+     * SQP iteration. Row and slack share the same (node, slot) index. */
+    for (size_t r = ineq_idx(i); r < ineq_idx(i + 1); r++) {
+      const size_t slot = r - ineq_idx(i);          // 0 .. Np*K-1
+      const size_t node = slot / max_obs;           // predicted-node index 0 .. Np-1
+      col = x_start + n * (node + 1);               // position block of predicted node (node+1)
 
-            /* Compute distance on x and y */
-      dist_x = x(idx, 0) - obs(std::clamp((int)(idx), 0, (int)(obs.rows() - 1)), 0);
-      dist_y = x(idx, 1) - obs(std::clamp((int)(idx), 0, (int)(obs.rows() - 1)), 1);
-
-            /* Fill the matrix with the obstacle avoidance constraint */
-      double norm = sqrt(pow(dist_x, 2) + pow(dist_y, 2));
+      const double dx = x(node + 1, 0) - obs(slot, 0);
+      const double dy = x(node + 1, 1) - obs(slot, 1);
+      double norm = sqrt(dx * dx + dy * dy);
       if (norm < kObsNormalEps) {norm = kObsNormalEps;}
-      C(j, col) = dist_x / norm;                                            // x
-      C(j, col + 1) = dist_y / norm;                                        // y
-      C(j, w_start + idx + 1) = 1;                                          // w
+      const double nx = dx / norm;
+      const double ny = dy / norm;
+
+      C(r, col) = nx;                               // x
+      C(r, col + 1) = ny;                           // y
+      C(r, w_start + slot) = 1;                     // slack
+
+      obs_h(slot) = norm - obs(slot, 2);            // signed distance ||p - o|| - d_safe
     }
     i++;
 
-        /* Slack variable */
-    for (size_t j = 0; j < model->getIneq("w").size(); j++) {   // for each slack variable inequality constraint
-      for (size_t l = ineq_idx(i); l < ineq_idx(i + 1); l++) {   // for each step
-        idx = w_start + model->getIneq("w").at(j)[0] + 1 * (l - ineq_idx(i));
-        C(l, idx + 1) = 1;
-      }
-      i++;
+    /* Slack lower-bound rows (s >= 0), same (node, slot) index. */
+    for (size_t r = ineq_idx(i); r < ineq_idx(i + 1); r++) {
+      const size_t slot = r - ineq_idx(i);
+      C(r, w_start + slot) = 1;
     }
+    i++;
   }
 }
 
@@ -422,14 +432,14 @@ void ProxQP::setd(
   size_t col;
   size_t idx;
 
-    /* First control input's bounds */
+  /* First control input's bounds */
   for (size_t j = 0; j < model->getIneq("du").size(); j++) { // first control input bounds
     idx = model->getIneq("du").at(j)[0];
     low(j) = model->getIneq("du").at(j)[1] * dt + u_prev(idx) - u(0, idx);
     upp(j) = model->getIneq("du").at(j)[2] * dt + u_prev(idx) - u(0, idx);
   }
 
-    /* States' bounds */
+  /* States' bounds */
   for (size_t j = 0; j < model->getIneq("x").size(); j++) { // for each state inequality constraint
     for (size_t l = ineq_idx(i); l < ineq_idx(i + 1); l++) { // for each step
       row = l - ineq_idx(i);
@@ -440,7 +450,7 @@ void ProxQP::setd(
     i++;
   }
 
-    /* Control inputs' bounds */
+  /* Control inputs' bounds */
   for (size_t j = 0; j < model->getIneq("u").size(); j++) { // for each control inequality constraint
     for (size_t l = ineq_idx(i); l < ineq_idx(i + 1); l++) { // for each step
       row = l - ineq_idx(i);
@@ -451,7 +461,7 @@ void ProxQP::setd(
     i++;
   }
 
-    /* Control inputs derivatives' bounds */
+  /* Control inputs derivatives' bounds */
   for (size_t j = 0; j < model->getIneq("du").size(); j++) { // for each control derivative inequality constraint
     for (size_t l = ineq_idx(i); l < ineq_idx(i + 1); l++) { // for each step
       row = l - ineq_idx(i);
@@ -463,63 +473,24 @@ void ProxQP::setd(
     i++;
   }
 
-    /* Obstacle avoidance */
-  if (model->getObsFlag() == true) {
-        /* Obstacle distance */
-    for (size_t j = ineq_idx(i); j < ineq_idx(i + 1); j++) { // obstacle distance
-      idx = j - ineq_idx(i);
-
-            /* Robot box computation */
-      robot_box = computeBox(x.row(idx),
-                                    model->getBoxLength(),
-                                    model->getBoxWidth(),
-                                    model->getPoseLength(),
-                                    model->getPoseWidth(),
-                                    model->getBoxPoints());
-
-            // obs stores only (x, y) per step, so build an axis-aligned
-            // obstacle pose (heading 0); passing obs.row() directly would make
-            // computeBox read pose(2) past the 2-element row.
-      int obs_row = std::clamp((int)(idx), 0, (int)(obs.rows() - 1));
-      VectorXd obs_pose(3);
-      obs_pose << obs(obs_row, 0), obs(obs_row, 1), 0.0;
-      obs_box = computeBox(obs_pose,
-                                    obs_l,
-                                    obs_w,
-                                    obs_pose_l,
-                                    obs_pose_w,
-                                    model->getBoxPoints());
-
-            /* Compute the closest point between*/
-      auto [robot_idx, obs_idx] = closestBoxPoints(robot_box, obs_box);
-
-            /* Compute distance on x and y */
-      dist_x = x(idx, 0) - obs(std::clamp((int)(idx), 0, (int)(obs.rows() - 1)), 0);
-      dist_y = x(idx, 1) - obs(std::clamp((int)(idx), 0, (int)(obs.rows() - 1)), 1);
-
-            /* Compute euclidean distance */
-      robot_edist = sqrt(pow(robot_box(robot_idx, 0) - x(idx, 0),
-          2) + pow(robot_box(robot_idx, 1) - x(idx, 1), 2));
-      obs_edist = sqrt(pow(obs_box(obs_idx,
-          0) - obs(std::clamp((int)(idx), 0, (int)(obs.rows() - 1)), 0), 2) +
-                                  pow(obs_box(obs_idx,
-          1) - obs(std::clamp((int)(idx), 0, (int)(obs.rows() - 1)), 1), 2));
-      dist = model->getObsDist() + robot_edist + obs_edist;
-
-      low(j) = dist - sqrt(pow(dist_x, 2) + pow(dist_y, 2)) - w(idx);
-      upp(j) = std::numeric_limits<double>::infinity();
+  /* Obstacle avoidance (linearized signed-distance half-plane, K slots/node) */
+  if (model->getObsFlag() == true && max_obs > 0) {
+    /* Obstacle bounds: n^T dp + dw >= d_safe - ||p - o|| - w = -h - w,
+     * using the signed distance h cached in setC for this iterate. */
+    for (size_t r = ineq_idx(i); r < ineq_idx(i + 1); r++) {
+      const size_t slot = r - ineq_idx(i);
+      low(r) = -obs_h(slot) - w(slot);
+      upp(r) = std::numeric_limits<double>::infinity();
     }
     i++;
 
-        /* Slack variables' bounds */
-    for (size_t j = 0; j < model->getIneq("w").size(); j++) {   // for each slack variable inequality constraint
-      for (size_t l = ineq_idx(i); l < ineq_idx(i + 1); l++) {   // for each step
-        row = l - ineq_idx(i);
-        low(l) = model->getIneq("w").at(j)[1] - w(row);
-        upp(l) = model->getIneq("w").at(j)[2] - w(row);
-      }
-      i++;
+    /* Slack lower bounds: dw >= -w, i.e. s = w + dw >= 0. */
+    for (size_t r = ineq_idx(i); r < ineq_idx(i + 1); r++) {
+      const size_t slot = r - ineq_idx(i);
+      low(r) = -w(slot);
+      upp(r) = std::numeric_limits<double>::infinity();
     }
+    i++;
   }
 }
 
@@ -633,29 +604,17 @@ void ProxQP::setQPType(bool qp_type) {this->qp_type = qp_type;}
 void ProxQP::setGuess(bool guess) {this->guess = guess;}
 
 /*!
- * Set desired goals for obstacle avoidance.
- * @param obs goals matrix.
+ * Set the obstacle-slot capacity K per predicted node (0 disables avoidance).
+ * Must be set before init() so the QP is sized once.
+ * @param max_obs capacity K.
  */
-void ProxQP::setObs(MatrixXd obs) {this->obs = obs;}
+void ProxQP::setMaxObs(size_t max_obs) {this->max_obs = max_obs;}
 
 /*!
- * Set obstacle box dimensions.
- * @param obs_l obstacle box length (>= 0).
- * @param obs_w obstacle box width (>= 0).
- * @param obs_pose_l obstacle pose distance by back side (>= 0).
- * @param obs_pose_w obstacle pose distance by right side (>= 0).
+ * Set the obstacle triples for the current cycle.
+ * @param obs (Np*K) x 3 matrix of [o_x, o_y, d_safe] per (node, slot); empty
+ *   slots should hold a far sentinel so their soft constraint is non-binding.
  */
-void ProxQP::setObsDim(double obs_l, double obs_w, double obs_pose_l, double obs_pose_w)
-{
-  if (obs_l < 0.) {throw std::invalid_argument("ProxQP::setObsDim: obs_l must be >= 0");}
-  if (obs_w < 0.) {throw std::invalid_argument("ProxQP::setObsDim: obs_w must be >= 0");}
-  if (obs_pose_l < 0.) {throw std::invalid_argument("ProxQP::setObsDim: obs_pose_l must be >= 0");}
-  if (obs_pose_w < 0.) {throw std::invalid_argument("ProxQP::setObsDim: obs_pose_w must be >= 0");}
-
-  this->obs_l = obs_l;
-  this->obs_w = obs_w;
-  this->obs_pose_l = obs_pose_l;
-  this->obs_pose_w = obs_pose_w;
-}
+void ProxQP::setObs(MatrixXd obs) {this->obs = obs;}
 
 }  // namespace prox_mpc

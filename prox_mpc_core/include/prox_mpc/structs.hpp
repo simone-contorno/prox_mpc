@@ -67,8 +67,7 @@ struct Constraints
   size_t map_idx_w;
 
   /* Obstacle avoidance */
-  bool obs_flag;    // Obstacle avoidance active/inactive.
-  double obs_dist;  // Minimum distance by the closest obstacle.
+  bool obs_flag;  // Whether the model supports obstacle avoidance.
 };
 
 }  // namespace prox_mpc

@@ -51,10 +51,6 @@ install(
   DIRECTORY launch config urdf rviz
   DESTINATION share/${PROJECT_NAME}
 )
-install(
-  PROGRAMS scripts/plot_results.py
-  DESTINATION lib/${PROJECT_NAME}
-)
 
 # Tests
 if(BUILD_TESTING)

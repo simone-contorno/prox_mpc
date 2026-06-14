@@ -4,6 +4,11 @@
 #ifndef PROX_MPC__MODELS__BIKE_HPP_
 #define PROX_MPC__MODELS__BIKE_HPP_
 
+#include <map>
+#include <string>
+
+#include <geometry_msgs/msg/twist.hpp>
+
 #include <prox_mpc/model.hpp>
 #include <prox_mpc/utils.hpp>
 
@@ -36,16 +41,45 @@ public:
     setIneq("du", 0, -.5, .5);             // linear acceleration [m/s^2]
     setIneq("du", 1, -.5, .5);             // steering acceleration [rad/s^2]
 
-    setObsAvoid(true, 0.2);  // Euclidean clearance [m]
-
-    setBoxWidth(1.);
-    setBoxLength(2.7);
-    setPoseWidth(getBoxWidth() / 2);
-    setPoseLength(L);
-    setBoxPoints(20);
+    setObsAvoid(true);  // this model supports obstacle avoidance
   }
 
-  void updatec(double dt, VectorXd x_next)
+  /*!
+   * Configure the model constants from a params map. Absent keys keep the
+   * constructor literals, so an empty map reproduces the hardcoded values.
+   * Keys: "L" (wheelbase); bound limits "delta_min"/"delta_max" (x[3]),
+   * "v_min"/"v_max" (u[0]), "delta_rate_min"/"delta_rate_max" (u[1]),
+   * "a_min"/"a_max" (du[0]), "delta_acc_min"/"delta_acc_max" (du[1]).
+   */
+  void configure(const std::map<std::string, double> & params) override
+  {
+    if (params.count("L") > 0) {
+      VectorXd p(1);
+      p << params.at("L");
+      setParams(p);
+    }
+    overrideBound(params, "x", 3, "delta_min", "delta_max");
+    overrideBound(params, "u", 0, "v_min", "v_max");
+    overrideBound(params, "u", 1, "delta_rate_min", "delta_rate_max");
+    overrideBound(params, "du", 0, "a_min", "a_max");
+    overrideBound(params, "du", 1, "delta_acc_min", "delta_acc_max");
+  }
+
+  /*!
+   * Map control [v, delta_dot] to a body twist. The bicycle's second control is
+   * a steering rate, not a yaw rate, so the yaw rate is derived from the current
+   * steering state delta: omega = v * sin(delta) / L. The caller must have set
+   * the model state (delta at index 3) to the current state before calling.
+   */
+  geometry_msgs::msg::Twist toTwist(const VectorXd & u) const override
+  {
+    geometry_msgs::msg::Twist twist;
+    twist.linear.x = u(0);                                  // forward speed v
+    twist.angular.z = u(0) * sin(this->x(3)) / this->params(0);  // omega = v sin(delta)/L
+    return twist;
+  }
+
+  void updatec(double dt, VectorXd x_next) override
   {
     c << getX()(0) - x_next(0) + dt * getU()(0) * cos(getX()(2) + getX()(3)),
       getX()(1) - x_next(1) + dt * getU()(0) * sin(getX()(2) + getX()(3)),
@@ -53,7 +87,7 @@ public:
       getX()(3) - x_next(3) + dt * getU()(1);
   }
 
-  void updateA(double dt)
+  void updateA(double dt) override
   {
     A << 1.0, 0.0, -dt * getU()(0) * sin(getX()(2) + getX()(3)),
       -dt * getU()(0) * sin(getX()(2) + getX()(3)),
@@ -63,7 +97,7 @@ public:
       0.0, 0.0, 0.0, 1.0;
   }
 
-  void updateB()
+  void updateB() override
   {
     B << cos(getX()(2) + getX()(3)), 0.0,
       sin(getX()(2) + getX()(3)), 0.0,

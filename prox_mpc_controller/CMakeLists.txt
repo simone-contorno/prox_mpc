@@ -77,6 +77,10 @@ install(
   FILES prox_mpc_controller_plugin.xml
   DESTINATION share/${PROJECT_NAME}
 )
+install(
+  DIRECTORY config
+  DESTINATION share/${PROJECT_NAME}
+)
 
 # Export
 ament_export_include_directories(include)

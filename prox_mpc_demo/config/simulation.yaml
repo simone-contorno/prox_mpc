@@ -23,6 +23,8 @@ prox_mpc_simulation:
 
     # Obstacle (off by default for a clean tracking demo).
     obstacle_enable: false
+    max_obstacles: 1      # K: obstacle slots per predicted node (capacity)
+    d_safe: 1.0           # required clearance [m] (robot radius + inflation + margin)
     obs_x: 2.5
     obs_y: 0.6
 

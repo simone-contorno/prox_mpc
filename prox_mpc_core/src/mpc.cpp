@@ -15,14 +15,14 @@ namespace prox_mpc
  */
 void MPC::init(std::shared_ptr<Model> model)
 {
-    /* Model */
+  /* Model */
   this->model = model;
 
-    /* MPC */
+  /* MPC */
   n = model->getN();
   m = model->getM();
 
-    /* Default-initialize unset weight matrices and validate their dimensions */
+  /* Default-initialize unset weight matrices and validate their dimensions */
   if (Q.size() == 0) {Q = MatrixXd::Identity(n, n);}
   if (S.size() == 0) {S = MatrixXd::Identity(n, n);}
   if (R.size() == 0) {R = MatrixXd::Identity(m, m);}
@@ -42,19 +42,26 @@ void MPC::init(std::shared_ptr<Model> model)
 
   x = MatrixXd::Zero(Np + 1, n);
   u = MatrixXd::Zero(Nc, m);
-  w = VectorXd::Zero(Np + 1);
+  const bool obstacle_active = model->getObsFlag() == true && max_obs > 0;
+  w = VectorXd::Zero(obstacle_active == true ? Np * max_obs : 0);
   u0 = u.row(0);
 
   n_eq = 0;
   n_ineq = model->getIneq("x").size() + model->getIneq("u").size() + model->getIneq("du").size() +
     model->getIneq("w").size();
 
-    /* ProxQP */
+  /* ProxQP */
   proxqp = std::make_shared<ProxQP>();
   configProxQP();
 
-    /* Obstacle avoidance */
-  obs = MatrixXd::Zero(Np + 1, 2);
+  /* Obstacle avoidance: capacity K of (o_x, o_y, d_safe) slots per predicted
+   * node; unused slots default to the far sentinel so they stay non-binding. */
+  obs = MatrixXd::Zero(Np * max_obs, 3);
+  for (Eigen::Index r = 0; r < obs.rows(); r++) {
+    obs(r, 0) = kObsFarSentinel;
+    obs(r, 1) = kObsFarSentinel;
+    obs(r, 2) = 0.0;
+  }
 }
 
 /* Configure the ProxQP solver. */
@@ -73,38 +80,43 @@ void MPC::configProxQP()
   proxqp->setMaxOutIter(max_ext_qp);
   proxqp->setQPType(qp_type);
   proxqp->setGuess(guess);
+  proxqp->setMaxObs(max_obs);
   proxqp->init(model);
 }
 
 /*!
- * Compute the state and the control input evolution for the whole prediction horizon.
+ * Run one SQP cycle and return the predicted state and control trajectories.
+ * Convergence must be checked by the caller through qp_info.status, which equals
+ * PROXQP_SOLVED on success. On non-convergence solve() takes no safety action;
+ * the returned first control is the last (non-converged) iterate and must not be
+ * applied as is. The caller is responsible for the fallback, for example a
+ * deceleration ramp toward zero that respects the robot's limits.
  */
 std::tuple<MatrixXd, MatrixXd> MPC::solve()
 {
-    /* Slide states and control by 1 position */
+  /* Slide states and control by 1 position */
   x.block(0, 0, x.rows() - 1, x.cols()) = x.block(1, 0, x.rows() - 1, x.cols());
   x.row(x.rows() - 1) = x.row(x.rows() - 2);
 
   u.block(0, 0, u.rows() - 1, u.cols()) = u.block(1, 0, u.rows() - 1, u.cols());
   u.row(u.rows() - 1) = u.row(u.rows() - 2);
 
-    /* Update current predicted state with the current real pose */
+  /* Update current predicted state with the current real pose */
   x.row(0) = pose;
   u.row(0) = u0;
 
-    /* Set ProxQP */
+  /* Set ProxQP */
   proxqp->setdt(dt);
   proxqp->setObs(obs);
-  proxqp->setObsDim(obs_l, obs_w, obs_pose_l, obs_pose_w);
 
-    /* Start SQP */
+  /* Start SQP */
   sqp_iter = 0;
   qp_iter_ext = 0;
   do{
-        /* Solve the QP sub-problem */
+    /* Solve the QP sub-problem */
     auto [x_sol, u_sol, w_sol, info] = proxqp->solve(x, u, u0, w, goal_x, goal_u);
 
-        /* Update */
+    /* Update */
     x += x_sol;                             // state
     u += u_sol;                             // control
     w += w_sol;                             // slack variable
@@ -114,15 +126,13 @@ std::tuple<MatrixXd, MatrixXd> MPC::solve()
   } while (qp_info.status != proxsuite::proxqp::QPSolverOutput::PROXQP_SOLVED &&
     sqp_iter < max_iter_sqp);
 
-    /* Problem  NOT solved */
-  if (sqp_iter >= max_iter_sqp) {
-    std::cout << "[SQP] Fail: maximum number of iterations reached." << std::endl;
-
-        /* TODO: Braking? */
-    u.row(0) = VectorXd::Zero(u.cols());
+  /* On a converged solve the first control becomes the command sent to the robot
+   * and the warm-start reference for the next cycle. On non-convergence solve()
+   * takes no safety action: it keeps the last good command and reports the
+   * failure through qp_info.status, leaving the fallback policy to the caller. */
+  if (qp_info.status == proxsuite::proxqp::QPSolverOutput::PROXQP_SOLVED) {
+    u0 = u.row(0);
   }
-
-  u0 = u.row(0);   // update last control input sent to the robot
 
   return {x, u};
 }
@@ -300,29 +310,20 @@ void MPC::setGuess(bool guess) {this->guess = guess;}
 void MPC::setQPtype(bool qp_type) {this->qp_type = qp_type;}
 
 /*!
- * Set desired goal for obstacle avoidance.
- * @param obs goals matrix.
+ * Set the obstacle-slot capacity K per predicted node (0 disables avoidance).
+ * Must be set before init()/configProxQP() so the QP is sized once for K.
+ * @param max_obs capacity K.
  */
-void MPC::setObs(MatrixXd obs) {this->obs = obs;}
+void MPC::setMaxObs(size_t max_obs) {this->max_obs = max_obs;}
+
+/* Get the obstacle-slot capacity K per predicted node. */
+size_t MPC::getMaxObs() {return max_obs;}
 
 /*!
- * Set obstacle box dimensions.
- * @param obs_l obstacle box length (>= 0).
- * @param obs_w obstacle box width (>= 0).
- * @param obs_pose_l obstacle pose distance by back side (>= 0).
- * @param obs_pose_w obstacle pose distance by right side (>= 0).
+ * Set the obstacle triples for the current cycle.
+ * @param obs (Np*K) x 3 matrix of [o_x, o_y, d_safe] per (node, slot); empty
+ *   slots should hold the far sentinel so their soft constraint is non-binding.
  */
-void MPC::setObsDim(double obs_l, double obs_w, double obs_pose_l, double obs_pose_w)
-{
-  if (obs_l < 0.) {throw std::invalid_argument("MPC::setObsDim: obs_l must be >= 0");}
-  if (obs_w < 0.) {throw std::invalid_argument("MPC::setObsDim: obs_w must be >= 0");}
-  if (obs_pose_l < 0.) {throw std::invalid_argument("MPC::setObsDim: obs_pose_l must be >= 0");}
-  if (obs_pose_w < 0.) {throw std::invalid_argument("MPC::setObsDim: obs_pose_w must be >= 0");}
-
-  this->obs_l = obs_l;
-  this->obs_w = obs_w;
-  this->obs_pose_l = obs_pose_l;
-  this->obs_pose_w = obs_pose_w;
-}
+void MPC::setObs(MatrixXd obs) {this->obs = obs;}
 
 }  // namespace prox_mpc

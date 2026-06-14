@@ -1,0 +1,20 @@
+<library path="prox_mpc_core">
+  <class
+    name="prox_mpc_core/Bicycle"
+    type="prox_mpc::Bicycle"
+    base_class_type="prox_mpc::Model">
+    <description>
+      Kinematic bicycle reference model: state [x, y, theta, delta] (n=4),
+      control [v, delta_dot] (m=2). Bundled prox_mpc::Model plugin.
+    </description>
+  </class>
+  <class
+    name="prox_mpc_core/Unicycle"
+    type="prox_mpc::Unicycle"
+    base_class_type="prox_mpc::Model">
+    <description>
+      Unicycle (differential-drive) reference model: state [x, y, theta] (n=3),
+      control [v, omega] (m=2). Bundled prox_mpc::Model plugin.
+    </description>
+  </class>
+</library>

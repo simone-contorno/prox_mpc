@@ -18,8 +18,14 @@ converges in a single QP solve.
 | [prox_mpc_controller](prox_mpc_controller) | A Nav2 `nav2_core::Controller` plugin built on the core. **Skeleton**: the control law is under development. |
 | [prox_mpc_demo](prox_mpc_demo) | A self-contained closed-loop simulation and benchmark for the core — no external simulator. |
 
-See [docs/architecture.md](docs/architecture.md) for the class structure, the QP
-formulation, and the solve data flow.
+Each package keeps its own `docs/`.
+See [prox_mpc_core/docs/architecture.md](prox_mpc_core/docs/architecture.md) for
+the core design overview,
+[prox_mpc_core/docs/nmpc.md](prox_mpc_core/docs/nmpc.md) for the NMPC/SQP/QP math,
+and
+[prox_mpc_core/docs/obstacle-avoidance.md](prox_mpc_core/docs/obstacle-avoidance.md)
+for the obstacle constraints;
+[prox_mpc_controller/docs/](prox_mpc_controller/docs/) covers the Nav2 controller.
 
 ## Requirements
 
@@ -45,16 +51,20 @@ ros2 launch prox_mpc_demo simulation.launch.py
 Building `prox_mpc_controller` additionally requires Nav2; see its
 [README](prox_mpc_controller/README.md).
 
-## Lint
+## Test and lint
 
 ```bash
 colcon test --packages-select prox_mpc_core prox_mpc_demo
 colcon test-result --all --verbose
 ```
 
-The C++ style is enforced by `uncrustify` (the ROS 2 default formatter);
-`cpplint` and `ament_copyright` are disabled (single enforced formatter, and a
-short SPDX header per file with the full text in [LICENSE](LICENSE)).
+`prox_mpc_core` ships GoogleTest suites that cover the model interface and its
+analytic Jacobians, an obstacle-off regression against recorded reference values,
+a custom model driven through the interface, and the obstacle-avoidance
+constraints. The C++ style is enforced by `uncrustify` (the ROS 2 default
+formatter); `cpplint` and `ament_copyright` are disabled (single enforced
+formatter, and a short SPDX header per file with the full text in
+[LICENSE](LICENSE)).
 
 ## Provenance
 

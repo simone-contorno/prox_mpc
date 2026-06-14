@@ -22,9 +22,10 @@ add_compile_definitions(EIGEN_NO_DEBUG)
 find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(Eigen3 REQUIRED)
-find_package(proxsuite REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(nav_msgs REQUIRED)
+find_package(pluginlib REQUIRED)
+find_package(proxsuite REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(std_msgs REQUIRED)
 
@@ -32,6 +33,7 @@ find_package(std_msgs REQUIRED)
 add_library(${PROJECT_NAME}
   src/model.cpp
   src/mpc.cpp
+  src/plugins.cpp
   src/proxqp.cpp
   src/utils.cpp
 )
@@ -44,17 +46,26 @@ target_link_libraries(${PROJECT_NAME}
   proxsuite::proxsuite
 )
 ament_target_dependencies(${PROJECT_NAME}
-  rclcpp
   geometry_msgs
   nav_msgs
+  pluginlib
+  rclcpp
   sensor_msgs
   std_msgs
 )
+
+# Export prox_mpc::Model as a pluginlib base so models are selected outside the
+# core (no core edit per new model). Bicycle/Unicycle are the bundled plugins.
+pluginlib_export_plugin_description_file(prox_mpc_core prox_mpc_core_plugins.xml)
 
 # Install
 install(
   DIRECTORY include/
   DESTINATION include
+)
+install(
+  FILES prox_mpc_core_plugins.xml
+  DESTINATION share/${PROJECT_NAME}
 )
 install(
   TARGETS ${PROJECT_NAME}
@@ -66,7 +77,8 @@ install(
 
 # Export (so prox_mpc_controller and prox_mpc_demo can link the library)
 ament_export_targets(export_${PROJECT_NAME} HAS_LIBRARY_TARGET)
-ament_export_dependencies(rclcpp Eigen3 proxsuite geometry_msgs nav_msgs sensor_msgs std_msgs)
+ament_export_dependencies(
+  rclcpp Eigen3 proxsuite geometry_msgs nav_msgs pluginlib sensor_msgs std_msgs)
 
 # Tests
 if(BUILD_TESTING)
@@ -77,6 +89,30 @@ if(BUILD_TESTING)
   set(ament_cmake_cpplint_FOUND TRUE)
   set(ament_cmake_copyright_FOUND TRUE)
   ament_lint_auto_find_test_dependencies()
+
+  find_package(ament_cmake_gtest REQUIRED)
+
+  # (a) model interface, (b) regression baseline, (c) custom model, (d) obstacle K
+  foreach(test_name
+      test_model_interface
+      test_mpc_regression
+      test_custom_model
+      test_obstacle_k)
+    ament_add_gtest(${test_name} test/${test_name}.cpp)
+    target_link_libraries(${test_name}
+      ${PROJECT_NAME}
+      Eigen3::Eigen
+      proxsuite::proxsuite
+    )
+    ament_target_dependencies(${test_name}
+      geometry_msgs
+      nav_msgs
+      pluginlib
+      rclcpp
+      sensor_msgs
+      std_msgs
+    )
+  endforeach()
 endif()
 
 ament_package()

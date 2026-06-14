@@ -47,9 +47,6 @@ namespace prox_mpc
 {
 
 void normalizeAngle(double & angle);
-MatrixXd computeBox(
-  const VectorXd & pose, double l, double w, double l_down, double l_right, size_t points);
-std::tuple<size_t, size_t> closestBoxPoints(const MatrixXd & box_1, const MatrixXd & box_2);
 Path optimPath(const MatrixXd & x, const rclcpp::Time & now);
 
 }  // namespace prox_mpc

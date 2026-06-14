@@ -65,8 +65,15 @@ public:
 
   /* Obstacle avoidance */
 
+  void setMaxObs(size_t max_obs);
   void setObs(MatrixXd obs);
-  void setObsDim(double obs_l, double obs_w, double obs_pose_l, double obs_pose_w);
+
+  /* Accessors for the assembled inequality system (valid after a solve()). */
+  const MatrixXd & getC() const {return C;}
+  const VectorXd & getIneqIdx() const {return ineq_idx;}
+  size_t getWStart() const {return w_start;}
+  size_t getNDvars() const {return n_dvars;}
+  size_t getMaxObs() const {return max_obs;}
 
 private:
   /* Robot model. */
@@ -128,18 +135,13 @@ private:
   proxsuite::proxqp::sparse::Vec<double> result_mu;      // Optimal inequality Lagrange multipliers.
   proxsuite::proxqp::Info<double> qp_info;               // QP information.
 
-  /* Obstacle avoidance */
-  MatrixXd obs;                         // Obstacle's goals.
-  MatrixXd obs_box;                     // Obstacle's box.
-  MatrixXd robot_box;                   // Robot's box.
-  double dist_x, dist_y;                // Distance between robot and obstacle on x.
-  double robot_edist, obs_edist, dist;  // Distance between robot and obstacle on y.
+  /* Obstacle avoidance: linearized signed-distance half-plane, K slots per node. */
+  size_t max_obs = 0;  // Capacity K of obstacle slots per predicted node (0 = disabled).
+  MatrixXd obs;        // Per (node, slot) obstacle triples (Np*K) x [o_x, o_y, d_safe].
 
-  /* Obstacle dimensions */
-  double obs_l;       // Obstacle box length.
-  double obs_w;       // Obstacle box width.
-  double obs_pose_l;  // Obstacle box distance between pose point and back side.
-  double obs_pose_w;  // Obstacle box distance between pose point and right side.
+  // Signed distance h = ||p_k - o|| - d_safe per (node, slot), computed while
+  // filling the inequality matrix in setC() and reused for the bounds in setd().
+  VectorXd obs_h;
 };
 
 }  // namespace prox_mpc

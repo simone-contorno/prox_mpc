@@ -32,12 +32,15 @@ ros2 run prox_mpc_demo prox_mpc_simulation --ros-args -p model:=r2d2
 | `q_pos`, `q_theta`, `s_factor`, `r_weight`, `w_weight` | — | cost weights |
 | `v_ref`, `goal_x`, `goal_y`, `goal_theta` | — | reference speed and goal pose |
 | `obstacle_enable`, `obs_x`, `obs_y` | `false` | optional obstacle |
+| `max_obstacles` | `1` | obstacle-slot capacity per node when avoidance is on |
+| `d_safe` | `1.0` | required clearance [m] for the obstacle |
 | `report_period` | `50` | log solve-time stats every N control steps |
 | `log_level` | `info` | this node's logger level only |
 
 Published topics:
 
-- `/robot/cmd_vel` (`geometry_msgs/Twist`) — first control input each cycle.
+- `/robot/cmd_vel` (`geometry_msgs/Twist`) — the first control mapped to a body
+  twist by the model each cycle.
 - `/prox_mpc/path` (`nav_msgs/Path`) — the predicted optimal trajectory.
 
 Add `rviz:=true` to also launch RViz, `robot_state_publisher`, and
@@ -57,11 +60,3 @@ The `~Hz budget` is `1/dt`. Confirm the actual published rate with:
 ```bash
 ros2 topic hz /robot/cmd_vel
 ```
-
-## Status
-
-This package carries the simulation as it stood when the project was split out of
-the legacy repository. The launch file references a trajectory-CSV / PNG plotting
-hook (`scripts/plot_results.py`) whose node-side CSV writing and RViz marker
-publishing are not yet wired in the node; the plot step no-ops gracefully when no
-CSV is produced. Completing that tooling is tracked as follow-up work.

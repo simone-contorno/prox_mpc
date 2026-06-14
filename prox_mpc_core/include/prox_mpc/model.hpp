@@ -8,6 +8,8 @@
 #include <string>
 #include <vector>
 
+#include <geometry_msgs/msg/twist.hpp>
+
 #include <prox_mpc/utils.hpp>
 #include <prox_mpc/structs.hpp>
 
@@ -29,6 +31,12 @@ public:
     this->map_idx_w = 0;
   }
 
+  /*!
+   * Virtual destructor. Model is owned polymorphically through std::shared_ptr<Model>
+   * and the pluginlib class loader, so destruction must occur through the base class.
+   */
+  virtual ~Model() = default;
+
   /* Set */
 
   void setName(std::string name);
@@ -40,17 +48,9 @@ public:
   void setB(const MatrixXd & B);
   void setIneq(std::string var, size_t idx_vec, double low, double upp);
   void updateIneq(std::string var, size_t idx_vec, double low, double upp);
-  void setObsAvoid(bool obs_flag, double obs_dist = 2.);
+  void setObsAvoid(bool obs_flag);
   void setX(const VectorXd & x);
   void setU(const VectorXd & u);
-
-  /* Set model box dimensions */
-
-  void setBoxWidth(double width);
-  void setBoxLength(double length);
-  void setPoseWidth(double pose_width);
-  void setPoseLength(double pose_length);
-  void setBoxPoints(size_t points);
 
   /* Virtual set functions */
 
@@ -59,17 +59,41 @@ public:
    * @param dt step size.
    * @param x_next next state.
    */
-  virtual void updatec([[maybe_unused]] double dt, [[maybe_unused]] VectorXd x_next) {}
+  virtual void updatec(double dt, VectorXd x_next) = 0;
 
   /*!
    * Set the state matrix in the kinematics equality constraint for the QP sub-problem.
    */
-  virtual void updateA([[maybe_unused]] double dt) {}
+  virtual void updateA(double dt) = 0;
 
   /*!
    * Set the control matrix in the kinematics equality constraint for the QP sub-problem.
    */
-  virtual void updateB() {}
+  virtual void updateB() = 0;
+
+  /*!
+   * Configure the model constants by name after construction. This complements
+   * the default constructor required for runtime loading, where parameters cannot
+   * be passed in. The default implementation reads no keys; an overriding model
+   * applies any present key and keeps its constructor value for any absent key.
+   * @param params model constants by name (e.g. "L"); absent keys keep the literal.
+   */
+  virtual void configure([[maybe_unused]] const std::map<std::string, double> & params) {}
+
+  /*!
+   * Map a control vector to a body Twist message.
+   * The default is the identity mapping (first control -> linear.x, second
+   * control -> angular.z). Models whose control is not a body twist (for example
+   * a steering rate) override this.
+   * @param u control vector (length m).
+   */
+  virtual geometry_msgs::msg::Twist toTwist(const VectorXd & u) const
+  {
+    geometry_msgs::msg::Twist twist;
+    if (u.size() > 0) {twist.linear.x = u(0);}
+    if (u.size() > 1) {twist.angular.z = u(1);}
+    return twist;
+  }
 
   /* Get */
 
@@ -84,23 +108,21 @@ public:
   MatrixXd getB();
   const std::map<int, std::vector<double>> & getIneq(std::string var);
   bool getObsFlag();
-  double getObsDist();
 
-  /* Get model box dimensions */
-
-  double getBoxWidth();
-  double getBoxLength();
-  double getPoseWidth();
-  double getPoseLength();
-  double getBoxPoints();
-
-private:
-  /* Model box */
-  double width;        // Model box width.
-  double length;       // Model box length.
-  double pose_width;   // Pose distance from the model box right side.
-  double pose_length;  // Pose distance from the model box back side.
-  size_t points;       // Box points for each side.
+protected:
+  /*!
+   * Override one inequality bound from a configure() params map, keeping the
+   * current (constructor) value for any side whose key is absent. The bound for
+   * idx_vec must already exist (declared in the constructor via setIneq).
+   * @param params configure() params map.
+   * @param var "x", "u", "du" or "w".
+   * @param idx_vec vector index whose bound is overridden.
+   * @param key_low params key for the lower bound (kept current if absent).
+   * @param key_upp params key for the upper bound (kept current if absent).
+   */
+  void overrideBound(
+    const std::map<std::string, double> & params, std::string var, size_t idx_vec,
+    std::string key_low, std::string key_upp);
 };
 
 }  // namespace prox_mpc

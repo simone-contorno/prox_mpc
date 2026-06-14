@@ -58,18 +58,18 @@ public:
     goal_y_ = declare_parameter<double>("goal_y", 0.0);
     goal_theta_ = declare_parameter<double>("goal_theta", 0.0);
     obstacle_enable_ = declare_parameter<bool>("obstacle_enable", false);
+    max_obstacles_ = static_cast<size_t>(declare_parameter<int>("max_obstacles", 1));
+    d_safe_ = declare_parameter<double>("d_safe", 1.0);
     obs_x_ = declare_parameter<double>("obs_x", 2.5);
     obs_y_ = declare_parameter<double>("obs_y", 0.6);
     report_period_ = static_cast<size_t>(declare_parameter<int>("report_period", 50));
 
-    /* Model. */
-    std::shared_ptr<Model> model;
-    if (model_name_ == "r2d2") {model = std::make_shared<Unicycle>();} else {
-      model = std::make_shared<Bicycle>();
+    /* Model. The handle is retained so the node can map controls to a twist. */
+    if (model_name_ == "r2d2") {model_ = std::make_shared<Unicycle>();} else {
+      model_ = std::make_shared<Bicycle>();
     }
-    model->setObsAvoid(obstacle_enable_, model->getObsDist());
-    n_ = model->getN();
-    m_ = model->getM();
+    n_ = model_->getN();
+    m_ = model_->getM();
 
     /* Weights sized to the chosen model. */
     VectorXd q_diag = VectorXd::Constant(n_, q_theta);
@@ -81,6 +81,7 @@ public:
     MatrixXd W = MatrixXd::Constant(1, 1, w_weight);
 
     /* MPC. */
+    const size_t k_obs = obstacle_enable_ ? max_obstacles_ : 0;
     mpc_ = std::make_shared<MPC>();
     mpc_->setNp(np_);
     mpc_->setNc(nc_);
@@ -89,7 +90,8 @@ public:
     mpc_->setS(S);
     mpc_->setR(R);
     mpc_->setW(W);
-    mpc_->init(model);
+    mpc_->setMaxObs(k_obs);   // capacity K per node; sizes the QP once (0 = avoidance off)
+    mpc_->init(model_);
 
     /* References. */
     MatrixXd goal_x = MatrixXd::Zero(np_ + 1, n_);
@@ -103,10 +105,22 @@ public:
     mpc_->setGoalX(goal_x);
     mpc_->setGoalU(goal_u);
 
-    MatrixXd obs = MatrixXd::Zero(np_ + 1, 2);
-    for (size_t k = 0; k <= np_; k++) {obs(k, 0) = obs_x_; obs(k, 1) = obs_y_;}
-    mpc_->setObs(obs);
-    mpc_->setObsDim(1.0, 1.0, 0.5, 0.5);
+    /* Obstacle triples: one fixed world obstacle in slot 0 of every node, the
+     * remaining slots left at the far sentinel (non-binding). */
+    if (k_obs > 0) {
+      MatrixXd obs = MatrixXd::Zero(np_ * k_obs, 3);
+      for (Eigen::Index r = 0; r < obs.rows(); r++) {
+        obs(r, 0) = MPC::kObsFarSentinel;
+        obs(r, 1) = MPC::kObsFarSentinel;
+        obs(r, 2) = 0.0;
+      }
+      for (size_t node = 0; node < np_; node++) {
+        obs(node * k_obs, 0) = obs_x_;
+        obs(node * k_obs, 1) = obs_y_;
+        obs(node * k_obs, 2) = d_safe_;
+      }
+      mpc_->setObs(obs);
+    }
 
     pose_ = VectorXd::Zero(n_);
 
@@ -145,11 +159,11 @@ private:
                   max_ms_, mpc_->sqp_iter, mpc_->qp_iter_ext, 1.0 / dt_);
     }
 
-    /* Publish first control as a twist (linear.x = v, angular.z = 2nd input). */
-    geometry_msgs::msg::Twist cmd;
-    cmd.linear.x = u(0, 0);
-    cmd.angular.z = u(0, 1);
-    pub_cmd_->publish(cmd);
+    /* Publish the first control as a body twist. The mapping is model specific,
+     * so the model derives it (and reads the current state where needed). */
+    VectorXd u0 = u.row(0);
+    model_->setX(pose_);
+    pub_cmd_->publish(model_->toTwist(u0));
 
     /* Publish the predicted trajectory for visualization. */
     pub_path_->publish(optimPath(x, now()));
@@ -161,10 +175,12 @@ private:
 
   std::string model_name_;
   size_t np_, nc_, n_, m_;
-  double dt_, v_ref_, goal_x_, goal_y_, goal_theta_, obs_x_, obs_y_;
+  double dt_, v_ref_, goal_x_, goal_y_, goal_theta_, d_safe_, obs_x_, obs_y_;
   bool obstacle_enable_;
+  size_t max_obstacles_;
   size_t report_period_;
 
+  std::shared_ptr<Model> model_;
   std::shared_ptr<MPC> mpc_;
   VectorXd pose_;
 

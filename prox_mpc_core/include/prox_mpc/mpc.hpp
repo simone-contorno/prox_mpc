@@ -71,12 +71,20 @@ public:
   size_t getMaxIntIterQP();
   size_t getMaxExtIterQP();
   size_t getMaxIterSQP();
+  size_t getMaxObs();
   bool getGuess();
 
   /* Obstacle avoidance */
 
+  void setMaxObs(size_t max_obs);
   void setObs(MatrixXd obs);
-  void setObsDim(double obs_l, double obs_w, double obs_pose_l, double obs_pose_w);
+
+  /* Access the underlying QP solver, exposing the assembled problem for inspection. */
+  std::shared_ptr<ProxQP> getSolver() {return proxqp;}
+
+  /* Far sentinel for unused obstacle slots: a slot placed at (kObsFarSentinel,
+   * kObsFarSentinel) with zero clearance yields a non-binding soft constraint. */
+  static constexpr double kObsFarSentinel = 1e6;
 
   /* Variables */
   proxsuite::proxqp::Info<double> qp_info;  // QP information.
@@ -108,14 +116,9 @@ protected:
   /* SQP */
   size_t max_iter_sqp = kDefaultMaxIterSQP;  // Max SQP iterations.
 
-  /* Obstacle avoidance goals. */
-  MatrixXd obs;
-
-  /* Obstacle dimensions */
-  double obs_l;       // Obstacle box length.
-  double obs_w;       // Obstacle box width.
-  double obs_pose_l;  // Obstacle box distance between pose point and back side.
-  double obs_pose_w;  // Obstacle box distance between pose point and right side.
+  /* Obstacle avoidance (linearized signed-distance, bounded K per node). */
+  size_t max_obs = 0;  // Capacity K of obstacle slots per predicted node (0 = disabled).
+  MatrixXd obs;        // Per (node, slot) obstacle triples (Np*K) x [o_x, o_y, d_safe].
 };
 
 }  // namespace prox_mpc

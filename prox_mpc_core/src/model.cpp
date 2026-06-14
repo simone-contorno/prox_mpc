@@ -56,24 +56,6 @@ const std::map<int, std::vector<double>> & Model::getIneq(std::string var)
 /* Get obstacle avoidance flag. */
 bool Model::getObsFlag() {return obs_flag;}
 
-/* Get obstacle avoidance minimum distance. */
-double Model::getObsDist() {return obs_dist;}
-
-/* Get the model box width. */
-double Model::getBoxWidth() {return width;}
-
-/* Get the model box length. */
-double Model::getBoxLength() {return length;}
-
-/* Get the pose distance from the model box right side. */
-double Model::getPoseWidth() {return pose_width;}
-
-/* Get the pose distance from the model box back side. */
-double Model::getPoseLength() {return pose_length;}
-
-/* Get the number of box points for each side. */
-double Model::getBoxPoints() {return points;}
-
 /********************************************************************************/
 /************************************* Set **************************************/
 /********************************************************************************/
@@ -217,67 +199,44 @@ void Model::updateIneq(std::string var, size_t idx_vec, double low, double upp)
 }
 
 /*!
- * Set the obstacle avoidance constraint.
- * @param obs_flag false (inactive) or true (active) (default: false).
- * @param obs_dist minimum distance by the closest obstacle.
+ * Declare whether the model supports obstacle avoidance.
+ * @param obs_flag true if the model participates in obstacle avoidance.
  */
-void Model::setObsAvoid(bool obs_flag, double obs_dist)
+void Model::setObsAvoid(bool obs_flag)
 {
   this->obs_flag = obs_flag;
-  this->obs_dist = obs_dist;
 }
 
 /*!
- * Set the model box width.
- * @param width width (>= 0).
+ * Override one inequality bound from a configure() params map, keeping the
+ * current value for any side whose key is absent.
+ * @param params configure() params map.
+ * @param var "x", "u", "du" or "w".
+ * @param idx_vec vector index whose bound is overridden.
+ * @param key_low params key for the lower bound (kept current if absent).
+ * @param key_upp params key for the upper bound (kept current if absent).
  */
-void Model::setBoxWidth(double width)
+void Model::overrideBound(
+  const std::map<std::string, double> & params, std::string var, size_t idx_vec,
+  std::string key_low, std::string key_upp)
 {
-  if (width < 0.) {throw std::invalid_argument("Model::setBoxWidth: width must be >= 0");}
-  this->width = width;
-}
-
-/*!
- * Set the model box length.
- * @param length length (>= 0).
- */
-void Model::setBoxLength(double length)
-{
-  if (length < 0.) {throw std::invalid_argument("Model::setBoxLength: length must be >= 0");}
-  this->length = length;
-}
-
-/*!
- * Set the pose distance from the model box right side.
- * @param pose_width distance (>= 0).
- */
-void Model::setPoseWidth(double pose_width)
-{
-  if (pose_width < 0.) {
-    throw std::invalid_argument("Model::setPoseWidth: pose_width must be >= 0");
+  /* Read the current bound so an absent key keeps the constructor literal. */
+  const std::map<int, std::vector<double>> & ineq = getIneq(var);
+  double low = 0.;
+  double upp = 0.;
+  bool found = false;
+  for (const auto & entry : ineq) {
+    if (static_cast<size_t>(entry.second[0]) == idx_vec) {
+      low = entry.second[1];
+      upp = entry.second[2];
+      found = true;
+    }
   }
-  this->pose_width = pose_width;
-}
+  if (found == false) {return;}
 
-/*!
- * Set the pose distance from the model box back side.
- * @param pose_length distance (>= 0).
- */
-void Model::setPoseLength(double pose_length)
-{
-  if (pose_length < 0.) {
-    throw std::invalid_argument("Model::setPoseLength: pose_length must be >= 0");
-  }
-  this->pose_length = pose_length;
-}
-
-/*!
- * Set the number of model box points for each side.
- * @param points number (>= 0).
- */
-void Model::setBoxPoints(size_t points)
-{
-  this->points = points;
+  if (params.count(key_low) > 0) {low = params.at(key_low);}
+  if (params.count(key_upp) > 0) {upp = params.at(key_upp);}
+  updateIneq(var, idx_vec, low, upp);
 }
 
 }  // namespace prox_mpc
