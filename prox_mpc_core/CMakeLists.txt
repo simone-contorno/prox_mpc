@@ -30,10 +30,12 @@ find_package(sensor_msgs REQUIRED)
 find_package(std_msgs REQUIRED)
 
 # Library
-add_library(${PROJECT_NAME}
+# SHARED so the core can be linked into downstream shared plugin libraries (for
+# example prox_mpc_controller) with position-independent code. The bundled Model
+# plugins are registered in a separate ${PROJECT_NAME}_models library below.
+add_library(${PROJECT_NAME} SHARED
   src/model.cpp
   src/mpc.cpp
-  src/plugins.cpp
   src/proxqp.cpp
   src/utils.cpp
 )
@@ -46,6 +48,32 @@ target_link_libraries(${PROJECT_NAME}
   proxsuite::proxsuite
 )
 ament_target_dependencies(${PROJECT_NAME}
+  geometry_msgs
+  nav_msgs
+  pluginlib
+  rclcpp
+  sensor_msgs
+  std_msgs
+)
+
+# Model plugins exported for pluginlib. These live in a dedicated library that
+# downstream code does NOT link, so pluginlib's class loader is the only loader of
+# their factories (mirrors nav2_costmap_2d's core vs layers/filters split).
+# Linking this library directly would register the factories outside the class
+# loader, leaving them unfindable at load time.
+add_library(${PROJECT_NAME}_models SHARED
+  src/plugins.cpp
+)
+target_include_directories(${PROJECT_NAME}_models PUBLIC
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  $<INSTALL_INTERFACE:include>
+)
+target_link_libraries(${PROJECT_NAME}_models
+  ${PROJECT_NAME}
+  Eigen3::Eigen
+  proxsuite::proxsuite
+)
+ament_target_dependencies(${PROJECT_NAME}_models
   geometry_msgs
   nav_msgs
   pluginlib
@@ -70,6 +98,14 @@ install(
 install(
   TARGETS ${PROJECT_NAME}
   EXPORT export_${PROJECT_NAME}
+  ARCHIVE DESTINATION lib
+  LIBRARY DESTINATION lib
+  RUNTIME DESTINATION bin
+)
+# The model-plugin library is loaded only by pluginlib, so it is installed but not
+# exported as a link target (nothing downstream should link it).
+install(
+  TARGETS ${PROJECT_NAME}_models
   ARCHIVE DESTINATION lib
   LIBRARY DESTINATION lib
   RUNTIME DESTINATION bin
