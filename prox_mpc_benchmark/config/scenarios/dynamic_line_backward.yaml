@@ -1,0 +1,15 @@
+scenario:
+  name: dynamic_line_backward
+  description: "Same crossing patrol as dynamic_line_forward but the first leg runs backward (to -> from)."
+  map:
+    base: prox_mpc_open
+    scale: 1.0
+  start: {x: -3.0, y: 0.0, yaw: 0.0}
+  goals:
+    - {x: 3.0, y: 0.0, yaw: 0.0}
+  obstacles:
+    # Patrol from (0,-2) to (0,2); -speed = backward leg first (starts at "to"). Crosses y=0 at x=0.
+    - {type: dynamic, motion: line, from: {x: 0.0, y: -2.0}, to: {x: 0.0, y: 2.0}, speed: -0.6, clearance: 0.6}
+  models: [r2d2, bike]
+  controllers: [proxmpc]
+  run: {repeats: 5, timeout_s: 60, seed: 0}

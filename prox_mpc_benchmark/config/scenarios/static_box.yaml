@@ -1,0 +1,18 @@
+scenario:
+  name: static_box
+  description: "One static box on the straight path; the controller must bend around it and recover."
+  map:
+    base: prox_mpc_open   # reuse the demo 7x7 m open world/map as the backdrop
+    scale: 1.0            # map-scaling factor (section 3); 1.0 = the 7x7 m baseline
+  start: {x: -3.0, y: 0.0, yaw: 0.0}
+  goals:
+    - {x: 3.0, y: 0.0, yaw: 0.0}
+  obstacles:
+    # Offset off the dead-centre line (y>0) so the keep-out disc blocks the path
+    # asymmetrically and the controller has a clear side (below) to pass. A
+    # perfectly head-on symmetric point obstacle has no lateral preference and
+    # stalls a soft-constraint avoider — not a meaningful avoidance test.
+    - {type: static, shape: box, pose: {x: 0.0, y: 0.5}, size: {x: 0.5, y: 0.5, z: 0.5}, clearance: 0.6}
+  models: [r2d2, bike]
+  controllers: [proxmpc]
+  run: {repeats: 5, timeout_s: 60, seed: 0}

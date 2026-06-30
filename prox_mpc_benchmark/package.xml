@@ -1,0 +1,65 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>prox_mpc_benchmark</name>
+  <version>0.1.0</version>
+  <description>
+    Scenario-driven benchmarking harness for the ProxMPC stack: a controller-
+    agnostic C++ live metrics node (cross-track / goal error + solver-diagnostics
+    tap) plus installed Python tooling to orchestrate the scenario x model x
+    controller x mode matrix, compute per-run metrics, and aggregate them. Reuses
+    the demo worlds/maps/models; owns the result artifacts (gitignored).
+  </description>
+  <maintainer email="simone.contorno.2000@gmail.com">Simone Contorno</maintainer>
+  <license>Apache-2.0</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <!-- C++ live metrics node. -->
+  <depend>rclcpp</depend>
+  <depend>std_msgs</depend>
+  <depend>geometry_msgs</depend>
+  <depend>nav_msgs</depend>
+  <depend>tf2</depend>
+  <depend>tf2_ros</depend>
+  <depend>prox_mpc_msgs</depend>
+
+  <!-- Python orchestration / metric tooling (installed, not built). -->
+  <exec_depend>rclpy</exec_depend>
+  <exec_depend>ament_index_python</exec_depend>
+  <exec_depend>launch</exec_depend>
+  <exec_depend>launch_ros</exec_depend>
+  <exec_depend>nav2_msgs</exec_depend>
+  <exec_depend>python3-yaml</exec_depend>
+  <exec_depend>python3-numpy</exec_depend>
+  <exec_depend>ros2bag</exec_depend>
+  <exec_depend>rosbag2_py</exec_depend>
+
+  <!-- Stacks the matrix drives (mode a / b1 / b2). Reused, not duplicated. -->
+  <exec_depend>prox_mpc_demo</exec_depend>
+  <exec_depend>prox_mpc_controller</exec_depend>
+  <exec_depend>prox_mpc_obstacle_tracker</exec_depend>
+  <exec_depend>nav2_bringup</exec_depend>
+  <exec_depend>ros_gz_sim</exec_depend>
+  <exec_depend>ros_gz_bridge</exec_depend>
+  <exec_depend>xacro</exec_depend>
+
+  <!-- Mode (b2) Nav2 servers and the cross-controller set (D2) the launch starts. -->
+  <exec_depend>nav2_map_server</exec_depend>
+  <exec_depend>nav2_planner</exec_depend>
+  <exec_depend>nav2_controller</exec_depend>
+  <exec_depend>nav2_behaviors</exec_depend>
+  <exec_depend>nav2_bt_navigator</exec_depend>
+  <exec_depend>nav2_lifecycle_manager</exec_depend>
+  <exec_depend>dwb_core</exec_depend>
+  <exec_depend>nav2_mppi_controller</exec_depend>
+  <exec_depend>nav2_regulated_pure_pursuit_controller</exec_depend>
+
+  <test_depend>ament_lint_auto</test_depend>
+  <test_depend>ament_lint_common</test_depend>
+  <test_depend>ament_cmake_gtest</test_depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>

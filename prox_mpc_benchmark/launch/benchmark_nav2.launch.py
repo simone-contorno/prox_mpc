@@ -1,0 +1,121 @@
+# Copyright 2026 Simone Contorno
+# SPDX-License-Identifier: Apache-2.0
+
+"""
+Bring up the mode (b2) Nav2 stack against the kinematic plant, no Gazebo.
+
+This is the controller-agnostic comparison harness (SIM_SPEC mode b2 / D2): it
+loads the trimmed base params (config/nav2_b2_base.yaml), injects the selected
+controller's FollowPath block from config/controllers/<controller>.yaml (and, for
+ProxMPC, the robot's model pairing from config/robots/<robot>.yaml), and starts
+map_server, planner_server, controller_server, behavior_server, bt_navigator, the
+lifecycle manager, the kinematic plant, and a static map -> odom identity.
+
+The metrics node and the goal sender are launched by run_nav2.py (which owns the
+per-run summary and teardown), not here, so this file only stands up the stack.
+"""
+
+import os
+import tempfile
+
+from ament_index_python.packages import get_package_share_directory
+from launch import LaunchDescription
+from launch.actions import DeclareLaunchArgument, OpaqueFunction
+from launch.substitutions import LaunchConfiguration
+from launch_ros.actions import Node
+import yaml
+
+PKG = 'prox_mpc_benchmark'
+
+
+def _merged_params(context):
+    """Load base params, inject the controller preset, return a written file path."""
+    share = get_package_share_directory(PKG)
+    demo_share = get_package_share_directory('prox_mpc_demo')
+    controller = LaunchConfiguration('controller').perform(context)
+    robot = LaunchConfiguration('robot').perform(context)
+    map_yaml = LaunchConfiguration('map_yaml').perform(context)
+
+    with open(os.path.join(share, 'config', 'nav2_b2_base.yaml')) as fh:
+        params = yaml.safe_load(fh)
+    with open(os.path.join(share, 'config', 'controllers', f'{controller}.yaml')) as fh:
+        follow_path = yaml.safe_load(fh)['FollowPath']
+
+    # ProxMPC needs the robot's prox_mpc model pairing; the stock Nav2 controllers
+    # ignore it. The waffle pairing is Unicycle so the body twist matches diff drive.
+    if controller == 'proxmpc':
+        with open(os.path.join(share, 'config', 'robots', f'{robot}.yaml')) as fh:
+            rb = yaml.safe_load(fh)['robot']
+        follow_path['model_plugin'] = rb['model_plugin']
+        follow_path['model_params'] = {'L': float(rb.get('wheelbase', 0.0))}
+
+    params['controller_server']['ros__parameters']['FollowPath'] = follow_path
+    params['controller_server']['ros__parameters']['controller_plugins'] = ['FollowPath']
+
+    map_path = map_yaml if os.path.isabs(map_yaml) else \
+        os.path.join(demo_share, 'maps', map_yaml)
+    params['map_server']['ros__parameters']['yaml_filename'] = map_path
+
+    # Pin the BT navigator default trees so bringup does not depend on an implicit
+    # default lookup.
+    bt_share = get_package_share_directory('nav2_bt_navigator')
+    bt_dir = os.path.join(bt_share, 'behavior_trees')
+    params['bt_navigator']['ros__parameters']['default_nav_to_pose_bt_xml'] = \
+        os.path.join(bt_dir, 'navigate_to_pose_w_replanning_and_recovery.xml')
+    params['bt_navigator']['ros__parameters']['default_nav_through_poses_bt_xml'] = \
+        os.path.join(bt_dir, 'navigate_through_poses_w_replanning_and_recovery.xml')
+
+    fd, path = tempfile.mkstemp(prefix=f'b2_{controller}_', suffix='.yaml')
+    with os.fdopen(fd, 'w') as fh:
+        yaml.safe_dump(params, fh, default_flow_style=None, sort_keys=False)
+    return path
+
+
+def _setup(context, *args, **kwargs):
+    params_file = _merged_params(context)
+    start_x = LaunchConfiguration('start_x').perform(context)
+    start_y = LaunchConfiguration('start_y').perform(context)
+    start_theta = LaunchConfiguration('start_theta').perform(context)
+
+    lifecycle_nodes = [
+        'map_server', 'planner_server', 'controller_server',
+        'behavior_server', 'bt_navigator',
+    ]
+
+    def server(pkg, exe, name):
+        return Node(package=pkg, executable=exe, name=name, output='screen',
+                    parameters=[params_file])
+
+    return [
+        Node(package='tf2_ros', executable='static_transform_publisher',
+             name='static_map_odom', output='screen',
+             arguments=['--frame-id', 'map', '--child-frame-id', 'odom']),
+        Node(package=PKG, executable='kinematic_plant', name='kinematic_plant',
+             output='screen',
+             parameters=[{
+                 'start_x': float(start_x), 'start_y': float(start_y),
+                 'start_theta': float(start_theta),
+                 'cmd_topic': 'cmd_vel', 'odom_topic': 'odom',
+                 'odom_frame': 'odom', 'base_frame': 'base_link', 'rate_hz': 50.0,
+             }]),
+        server('nav2_map_server', 'map_server', 'map_server'),
+        server('nav2_planner', 'planner_server', 'planner_server'),
+        server('nav2_controller', 'controller_server', 'controller_server'),
+        server('nav2_behaviors', 'behavior_server', 'behavior_server'),
+        server('nav2_bt_navigator', 'bt_navigator', 'bt_navigator'),
+        Node(package='nav2_lifecycle_manager', executable='lifecycle_manager',
+             name='lifecycle_manager_b2', output='screen',
+             parameters=[{'autostart': True, 'node_names': lifecycle_nodes}]),
+    ]
+
+
+def generate_launch_description():
+    return LaunchDescription([
+        DeclareLaunchArgument('controller', default_value='proxmpc'),
+        DeclareLaunchArgument('robot', default_value='waffle'),
+        DeclareLaunchArgument('map_yaml', default_value='prox_mpc_open.yaml'),
+        DeclareLaunchArgument('start_x', default_value='-3.0'),
+        DeclareLaunchArgument('start_y', default_value='0.0'),
+        DeclareLaunchArgument('start_theta', default_value='0.0'),
+        OpaqueFunction(function=_setup),
+    ])

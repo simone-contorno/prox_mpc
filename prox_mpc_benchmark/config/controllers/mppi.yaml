@@ -1,0 +1,25 @@
+# MPPI controller preset (FollowPath block) for cross-controller comparison (D2).
+# Stock nav2_mppi_controller params trimmed to the diff-drive case.
+FollowPath:
+  plugin: "nav2_mppi_controller::MPPIController"
+  time_steps: 56
+  model_dt: 0.05
+  batch_size: 2000
+  vx_std: 0.2
+  vy_std: 0.2
+  wz_std: 0.4
+  vx_max: 0.5
+  vx_min: -0.35
+  vy_max: 0.5
+  wz_max: 1.9
+  iteration_count: 1
+  prune_distance: 1.7
+  transform_tolerance: 0.1
+  temperature: 0.3
+  gamma: 0.015
+  motion_model: "DiffDrive"
+  visualize: false
+  TrajectoryVisualizer:
+    trajectory_step: 5
+    time_step: 3
+  critics: ["ConstraintCritic", "CostCritic", "GoalCritic", "GoalAngleCritic", "PathAlignCritic", "PathFollowCritic", "PathAngleCritic", "PreferForwardCritic"]

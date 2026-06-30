@@ -1,0 +1,3 @@
+# Result artifacts stay local and are never committed by the framework (D7):
+# raw bags, per-run JSON/CSV, plots, generated maps, and progress files.
+results/
