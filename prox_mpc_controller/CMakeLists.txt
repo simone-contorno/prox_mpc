@@ -107,6 +107,32 @@ if(BUILD_TESTING)
   set(ament_cmake_cpplint_FOUND TRUE)
   set(ament_cmake_copyright_FOUND TRUE)
   ament_lint_auto_find_test_dependencies()
+
+  find_package(ament_cmake_gtest REQUIRED)
+
+  # The wrapper unit tests bring up a LifecycleNode, a tf2 buffer, and a
+  # Costmap2DROS, then drive the plugin's public interface and fail-safe
+  # branches; the test owns rclcpp init/shutdown via its own main.
+  ament_add_gtest(test_prox_mpc_controller
+    test/test_prox_mpc_controller.cpp
+    SKIP_LINKING_MAIN_LIBRARIES)
+  target_link_libraries(test_prox_mpc_controller
+    ${PROJECT_NAME}
+    Eigen3::Eigen
+    proxsuite::proxsuite
+  )
+  ament_target_dependencies(test_prox_mpc_controller
+    geometry_msgs
+    nav2_core
+    nav2_costmap_2d
+    nav_msgs
+    pluginlib
+    prox_mpc_core
+    rclcpp
+    rclcpp_lifecycle
+    tf2
+    tf2_ros
+  )
 endif()
 
 ament_package()

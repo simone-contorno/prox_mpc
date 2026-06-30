@@ -20,6 +20,12 @@ controller_server:
       nc: 20
       dt: 0.1
 
+      # Reference tracking. Cruise speed the global plan is sampled at to build
+      # the state/control reference; tapered toward zero near the plan end and
+      # clamped by any active speed limit. Must not exceed the model's speed
+      # bound (the bundled Bicycle/Unicycle default v_max to 3.0 m/s).
+      desired_linear_vel: 1.0   # [m/s]
+
       # Cost weights (assembled as in the demo).
       q_pos: 10.0
       q_theta: 1.0
