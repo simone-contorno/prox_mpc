@@ -53,6 +53,11 @@ x_k^{(3)} - x_{k+1}^{(3)} + \Delta t\, \dot{\delta}_k
 $$
 
 and $A_k$, $B_k$ are its analytic Jacobians.
+The yaw-rate term uses $v_k \sin(\delta_k)/L$ by design, not the textbook
+$v_k \tan(\delta_k)/L$: this is a deliberate modeling choice, applied consistently
+across `updatec`, `updateA`, `updateB`, and `toTwist`, so it is not a typo — the
+two agree for small steering angles and the analytic Jacobians match the $\sin$
+form exactly.
 A purely linear model returns constant $A$, $B$ and a trivial residual; the SQP
 then converges in a single QP solve.
 
@@ -136,7 +141,10 @@ The inequality block enforces, per active constraint and step:
 
 All bounds are expressed relative to the linearization point, because the QP
 solves for increments.
-The four bound categories are exactly `"x"`, `"u"`, `"du"`, and `"w"`.
+The inequality builder assembles exactly three model bound categories — `"x"`,
+`"u"`, and `"du"`. The fourth category, `"w"`, is reserved and not assembled: a
+model-declared `"w"` bound is ignored by the builder (the obstacle slack
+lower-bound `s >= 0` is emitted by the obstacle block, not via `getIneq("w")`).
 
 ## The SQP scheme
 

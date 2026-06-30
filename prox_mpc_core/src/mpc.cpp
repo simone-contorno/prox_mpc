@@ -4,6 +4,7 @@
 
 #include <prox_mpc/mpc.hpp>
 
+#include <chrono>
 #include <stdexcept>
 
 namespace prox_mpc
@@ -47,8 +48,7 @@ void MPC::init(std::shared_ptr<Model> model)
   u0 = u.row(0);
 
   n_eq = 0;
-  n_ineq = model->getIneq("x").size() + model->getIneq("u").size() + model->getIneq("du").size() +
-    model->getIneq("w").size();
+  n_ineq = model->getIneq("x").size() + model->getIneq("u").size() + model->getIneq("du").size();
 
   /* ProxQP */
   proxqp = std::make_shared<ProxQP>();
@@ -80,6 +80,7 @@ void MPC::configProxQP()
   proxqp->setMaxOutIter(max_ext_qp);
   proxqp->setQPType(qp_type);
   proxqp->setGuess(guess);
+  proxqp->setCbfGamma(cbf_gamma);
   proxqp->setMaxObs(max_obs);
   proxqp->init(model);
 }
@@ -94,11 +95,13 @@ void MPC::configProxQP()
  */
 std::tuple<MatrixXd, MatrixXd> MPC::solve()
 {
-  /* Slide states and control by 1 position */
-  x.block(0, 0, x.rows() - 1, x.cols()) = x.block(1, 0, x.rows() - 1, x.cols());
+  /* Slide states and control by 1 position. The right-hand side is .eval()'d into
+   * a temporary because source and destination overlap: Eigen assumes no aliasing
+   * for block/row assignments, so an explicit temporary keeps the shift correct. */
+  x.topRows(x.rows() - 1) = x.bottomRows(x.rows() - 1).eval();
   x.row(x.rows() - 1) = x.row(x.rows() - 2);
 
-  u.block(0, 0, u.rows() - 1, u.cols()) = u.block(1, 0, u.rows() - 1, u.cols());
+  u.topRows(u.rows() - 1) = u.bottomRows(u.rows() - 1).eval();
   u.row(u.rows() - 1) = u.row(u.rows() - 2);
 
   /* Update current predicted state with the current real pose */
@@ -112,6 +115,8 @@ std::tuple<MatrixXd, MatrixXd> MPC::solve()
   /* Start SQP */
   sqp_iter = 0;
   qp_iter_ext = 0;
+  bool timed_out = false;
+  const auto sqp_start = std::chrono::steady_clock::now();
   do{
     /* Solve the QP sub-problem */
     auto [x_sol, u_sol, w_sol, info] = proxqp->solve(x, u, u0, w, goal_x, goal_u);
@@ -123,8 +128,17 @@ std::tuple<MatrixXd, MatrixXd> MPC::solve()
     qp_info = info;                         // QP informations
     qp_iter_ext += qp_info.iter_ext;        // QP external total iterations
     sqp_iter++;                             // SQP iterations
+
+    /* Wall-clock budget (0 disables it): bound the worst-case solve so a slow
+     * SQP cannot overrun the control cycle. On timeout the loop exits with
+     * status != PROXQP_SOLVED, routing the caller to its fail-safe. */
+    if (max_solve_time > 0.0) {
+      const double elapsed =
+        std::chrono::duration<double>(std::chrono::steady_clock::now() - sqp_start).count();
+      timed_out = elapsed >= max_solve_time;
+    }
   } while (qp_info.status != proxsuite::proxqp::QPSolverOutput::PROXQP_SOLVED &&
-    sqp_iter < max_iter_sqp);
+    sqp_iter < max_iter_sqp && !timed_out);
 
   /* On a converged solve the first control becomes the command sent to the robot
    * and the warm-start reference for the next cycle. On non-convergence solve()
@@ -298,6 +312,12 @@ void MPC::setMaxExtIterQP(size_t max_iter) {this->max_ext_qp = max_iter;}
 void MPC::setMaxIterSQP(size_t max_iter) {this->max_iter_sqp = max_iter;}
 
 /*!
+ * Set the wall-clock budget for the whole SQP loop.
+ * @param seconds budget [s]; <= 0 disables it (iteration caps then bound the loop).
+ */
+void MPC::setMaxSolveTime(double seconds) {this->max_solve_time = seconds;}
+
+/*!
  * Set if use initial guesses or not.
  * @param guess flag (default: true).
  */
@@ -310,6 +330,13 @@ void MPC::setGuess(bool guess) {this->guess = guess;}
 void MPC::setQPtype(bool qp_type) {this->qp_type = qp_type;}
 
 /*!
+ * Set the discrete-time CBF rate for the obstacle coupling (forwarded to ProxQP).
+ * Must be set before init()/configProxQP().
+ * @param cbf_gamma rate in (0, 1]; 1.0 reduces to the pointwise constraint.
+ */
+void MPC::setCbfGamma(double cbf_gamma) {this->cbf_gamma = cbf_gamma;}
+
+/*!
  * Set the obstacle-slot capacity K per predicted node (0 disables avoidance).
  * Must be set before init()/configProxQP() so the QP is sized once for K.
  * @param max_obs capacity K.
@@ -318,6 +345,9 @@ void MPC::setMaxObs(size_t max_obs) {this->max_obs = max_obs;}
 
 /* Get the obstacle-slot capacity K per predicted node. */
 size_t MPC::getMaxObs() {return max_obs;}
+
+/* Get the max obstacle soft-keep-out slack over the horizon (0 if avoidance off). */
+double MPC::getMaxObstacleSlack() {return w.size() > 0 ? w.maxCoeff() : 0.0;}
 
 /*!
  * Set the obstacle triples for the current cycle.

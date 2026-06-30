@@ -172,6 +172,50 @@ setd : low(row) = -obs_h - w,  upp(row) = +inf
 A second block enforces $s \ge 0$ in increment form, $\Delta w \ge -w$, as a
 plain lower bound on the slack variable.
 
+## Discrete-time control-barrier-function coupling
+
+The pointwise constraint above requires every node to be safe *independently*
+($h(p_{k+1}) \ge 0$). Near a dense obstacle field this can make a near-zero
+("stay put") command locally optimal — the solver still reports `SOLVED`, but the
+robot stalls. The fix is a **discrete-time control-barrier-function (CBF)**
+coupling between consecutive nodes (Zeng, Zhang & Sreenath, ACC 2021):
+
+$$
+h(p_{k+1}) \ge (1 - \gamma)\, h(p_k), \qquad \gamma \in (0, 1].
+$$
+
+Instead of demanding absolute safety at every node, this only requires the safety
+margin to **decay no faster than the rate $\gamma$**, which stays feasible while
+the robot advances and removes the stay-put local optimum. With $\gamma = 1$ it
+reduces exactly to the pointwise constraint $h(p_{k+1}) \ge 0$, so the parameter
+default preserves the original behavior bit-for-bit.
+
+In increment form, with the slack and the previous-node signed distance $h(p_k)$
+held constant per SQP iteration (only the constrained node $k+1$ is linearized;
+the re-linearization across iterations recovers the exact value):
+
+$$
+n^\top \Delta p_{k+1} + \Delta w \ge (1 - \gamma)\, h(p_k) - h(p_{k+1}) - w.
+$$
+
+```text
+setC : obs_h_prev = ||p_k - o_k|| - d_safe   (signed distance at the previous node)
+setd : low(row) = (1 - cbf_gamma) * obs_h_prev - obs_h - w
+```
+
+Here $o_k$ is the obstacle position **at the previous node's time**: with a static
+fill $o_k = o_{k+1}$, but with the predictive (moving) fill each node carries a
+different obstacle position, so $h(p_k)$ uses the previous node's obstacle slot
+(`obs[slot - max_obs]`). Node $k = 0$ is the fixed current pose, so it reuses the
+node-1 obstacle. Only the constrained node's gradient $n^\top \Delta p_{k+1}$ enters
+$C$; the previous node's signed distance is held constant per SQP iteration, which is
+exact at convergence.
+
+The rate $\gamma$ is the `cbf_gamma` parameter, forwarded from the controller
+through `MPC::setCbfGamma`. This lets the predictive NMPC obstacle term run
+alongside Nav2's planner/costmaps: Nav2 replans the global path while the MPC
+predicts the robot against per-node obstacles over the horizon.
+
 ## Bounded capacity and the far sentinel
 
 The number of obstacle constraints must be fixed before the QP is sized, so the
@@ -187,6 +231,27 @@ Then $\lVert p_k - o \rVert$ is enormous, the constraint is satisfied with zero
 slack, and the slot is provably non-binding.
 This lets a fixed capacity $K$ reduce cleanly to fewer active obstacles without
 resizing the problem.
+
+## Static and predictive per-node fill
+
+The core is agnostic to *how* the controller chooses the per-node triple
+$(o_x, o_y, d_\text{safe})_{k,j}$: it only enforces the half-plane and the CBF
+coupling on whatever positions it is handed.
+Two fills exist on the controller side, both writing the same `setObs` contract:
+
+- **static (costmap)** — the default. For each node the controller scans the
+  local costmap around the robot's *reference* position and emits the nearest
+  occupied cells. The obstacle position varies across nodes only because the robot
+  moves, so the term constrains the robot against where obstacles are *now*.
+- **predictive (tracked obstacles)** — opt-in. A dynamic track is propagated with
+  a constant-velocity model, $o_{k,j} = p_j + v_j\,\Delta t_k$, and bound to the
+  same slot $j$ for every node, so the half-planes track one physical object
+  across the horizon; $d_\text{safe}$ may grow with $\Delta t_k$ as the prediction
+  ages. Remaining slots are filled by the static scan (a hybrid fill).
+
+Because both fills produce identical `(node, slot)` triples, the CBF coupling and
+the rest of this derivation are unchanged. The predictive fill is specified in the
+controller's [control-law.md](../../prox_mpc_controller/docs/control-law.md).
 
 ## Footprint: disc here, exact polygon elsewhere
 
@@ -214,11 +279,11 @@ exact, conservative safety check is the conventional division of responsibility.
   an inflated local costmap.
 - **Real-time robustness.** The soft slack guarantees the QP stays feasible, so
   the control loop never stalls on an infeasible instance.
-- **A clean extension path.** The pointwise half-plane is the $\gamma = 1$ case
-  of a discrete-time control-barrier-function constraint
-  $h(x_{k+1}) \ge (1 - \gamma)\, h(x_k)$, which couples consecutive nodes for
-  smoother avoidance; the cached signed distance makes that a localized addition
-  rather than a redesign.
+- **A CBF generalization.** The pointwise half-plane is the $\gamma = 1$ case of
+  the discrete-time control-barrier-function constraint
+  $h(x_{k+1}) \ge (1 - \gamma)\, h(x_k)$ implemented above, which couples
+  consecutive nodes for smoother avoidance; the cached signed distance makes it a
+  localized addition rather than a redesign.
 
 A note on scope: the controllers bundled with Nav2 are sampling- or
 geometry-based rather than QP-based, so they avoid obstacles differently.

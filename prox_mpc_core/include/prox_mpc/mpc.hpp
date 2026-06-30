@@ -51,8 +51,10 @@ public:
   void setMaxIntIterQP(size_t max_iter);
   void setMaxExtIterQP(size_t max_iter);
   void setMaxIterSQP(size_t max_iter);
+  void setMaxSolveTime(double seconds);
   void setGuess(bool guess);
   void setQPtype(bool qp_type);
+  void setCbfGamma(double cbf_gamma);
 
   /* Get */
 
@@ -74,6 +76,11 @@ public:
   size_t getMaxObs();
   bool getGuess();
 
+  /* Max obstacle soft-keep-out slack over the horizon after the last solve();
+   * 0 when avoidance is disabled. >0 means the keep-out was relaxed (a
+   * safety-feasibility signal exposed for telemetry without re-deriving it). */
+  double getMaxObstacleSlack();
+
   /* Obstacle avoidance */
 
   void setMaxObs(size_t max_obs);
@@ -88,7 +95,7 @@ public:
 
   /* Variables */
   proxsuite::proxqp::Info<double> qp_info;  // QP information.
-  uint qp_iter_ext;                         // Total QP external iterations (summed over SQP).
+  size_t qp_iter_ext;                       // Total QP external iterations (summed over SQP).
   size_t sqp_iter;                          // SQP total iterations.
 
 protected:
@@ -115,6 +122,14 @@ protected:
 
   /* SQP */
   size_t max_iter_sqp = kDefaultMaxIterSQP;  // Max SQP iterations.
+
+  /* Optional wall-clock budget for the whole SQP loop [s]; 0 disables it (the
+   * iteration caps are then the only bound). When exceeded the loop stops early,
+   * leaving qp_info.status != PROXQP_SOLVED so the caller's fail-safe runs. */
+  double max_solve_time = 0.0;
+
+  /* Discrete-time CBF rate forwarded to ProxQP (1.0 = pointwise obstacle term). */
+  double cbf_gamma = 1.0;
 
   /* Obstacle avoidance (linearized signed-distance, bounded K per node). */
   size_t max_obs = 0;  // Capacity K of obstacle slots per predicted node (0 = disabled).

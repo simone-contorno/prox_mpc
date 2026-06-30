@@ -114,6 +114,58 @@ TEST(CustomModel, DummyLinearDrivesTowardGoal)
   EXPECT_EQ(mpc->qp_info.status, proxsuite::proxqp::QPSolverOutput::PROXQP_SOLVED);
 }
 
+// Move-blocking: with Np > Nc the prediction nodes beyond the control horizon
+// reuse the last control block (the setE column clamp). The QP must still size,
+// solve, and drive the terminal state toward the goal.
+TEST(CustomModel, MoveBlockingNpGreaterThanNc)
+{
+  auto model = std::make_shared<DummyLinear>();
+  const size_t n = model->getN();
+  const size_t m = model->getM();
+  const size_t np = 20;
+  const size_t nc = 5;   // Np > Nc
+
+  MatrixXd Q = 10.0 * MatrixXd::Identity(n, n);
+  MatrixXd S = 2.0 * Q;
+  MatrixXd R = 0.1 * MatrixXd::Identity(m, m);
+  MatrixXd W = MatrixXd::Constant(1, 1, 100.0);
+
+  auto mpc = std::make_shared<MPC>();
+  mpc->setNp(np);
+  mpc->setNc(nc);
+  mpc->setdt(0.1);
+  mpc->setQ(Q);
+  mpc->setS(S);
+  mpc->setR(R);
+  mpc->setW(W);
+  mpc->init(model);   // must size and configure with Np != Nc
+
+  const double goal_px = 3.0;
+  const double goal_py = 4.0;
+  MatrixXd goal_x = MatrixXd::Zero(np + 1, n);
+  for (size_t k = 0; k <= np; k++) {
+    goal_x(k, 0) = goal_px;
+    goal_x(k, 1) = goal_py;
+  }
+  MatrixXd goal_u = MatrixXd::Zero(nc, m);
+  mpc->setGoalX(goal_x);
+  mpc->setGoalU(goal_u);
+
+  mpc->setPose(VectorXd::Zero(n));
+  auto [x, u] = mpc->solve();
+
+  // Shapes follow Np (states) and Nc (controls), not a single horizon.
+  ASSERT_EQ(x.rows(), static_cast<Eigen::Index>(np + 1));
+  ASSERT_EQ(u.rows(), static_cast<Eigen::Index>(nc));
+  EXPECT_TRUE(isFinite(x));
+  EXPECT_TRUE(isFinite(u));
+  EXPECT_EQ(mpc->qp_info.status, proxsuite::proxqp::QPSolverOutput::PROXQP_SOLVED);
+
+  const double d_start = std::hypot(x(0, 0) - goal_px, x(0, 1) - goal_py);
+  const double d_end = std::hypot(x(np, 0) - goal_px, x(np, 1) - goal_py);
+  EXPECT_LT(d_end, d_start);
+}
+
 // Negative compile check: a model that omits an override stays abstract and
 // cannot be instantiated. Define PROX_MPC_NEGATIVE_COMPILE_CHECK to confirm the
 // build fails with an abstract-type error.

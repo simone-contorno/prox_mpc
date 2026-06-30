@@ -15,6 +15,8 @@
 #include <cmath>
 #include <limits>
 #include <memory>
+#include <stdexcept>
+#include <vector>
 
 #include <gtest/gtest.h>
 
@@ -55,7 +57,8 @@ void fillSlot(MatrixXd & obs, size_t np, size_t k, size_t slot, double ox, doubl
   }
 }
 
-std::shared_ptr<MPC> makeUnicycleMpc(size_t k_obs, double w_weight = 1000.0)
+std::shared_ptr<MPC> makeUnicycleMpc(
+  size_t k_obs, double w_weight = 1000.0, double cbf_gamma = 1.0)
 {
   auto model = std::make_shared<Unicycle>();
   const size_t n = model->getN();
@@ -77,6 +80,7 @@ std::shared_ptr<MPC> makeUnicycleMpc(size_t k_obs, double w_weight = 1000.0)
   mpc->setR(R);
   mpc->setW(W);
   mpc->setMaxObs(k_obs);
+  mpc->setCbfGamma(cbf_gamma);
   mpc->init(model);
 
   MatrixXd goal_x = MatrixXd::Zero(kNp + 1, n);   // straight reference to (6, 0, 0)
@@ -142,6 +146,38 @@ TEST(ObstacleK, ConstraintGeometryDetour)
   EXPECT_GT(s.max_abs_y, 0.3);
 }
 
+// The discrete-time CBF coupling (cbf_gamma < 1) is wired and active: it changes
+// the avoidance trajectory relative to the pointwise term (cbf_gamma = 1) while
+// both keep clearance and advance past the obstacle. (gamma = 1 must reproduce the
+// pointwise term exactly; that regression is covered by ConstraintGeometryDetour,
+// which runs at the default gamma = 1.)
+TEST(ObstacleK, CbfGammaChangesAvoidanceTrajectory)
+{
+  const double ox = 2.5;
+  const double oy = 0.5;
+  const double d_safe = 1.0;
+
+  auto build = [&](double gamma) {
+      auto mpc = makeUnicycleMpc(1, 1000.0, gamma);
+      MatrixXd obs = makeObs(kNp, 1);
+      fillSlot(obs, kNp, 1, 0, ox, oy, d_safe);
+      mpc->setObs(obs);
+      return mpc;
+    };
+
+  auto s_pointwise = runLoop(build(1.0), 3, 70, ox, oy);   // gamma = 1 -> pointwise
+  auto s_cbf = runLoop(build(0.3), 3, 70, ox, oy);          // gamma < 1 -> CBF coupling
+
+  // Both keep clearance and advance past the obstacle in x.
+  EXPECT_GE(s_pointwise.min_dist, d_safe - 0.15);
+  EXPECT_GE(s_cbf.min_dist, d_safe - 0.15);
+  EXPECT_GT(s_pointwise.last_x(1, 0), ox);
+  EXPECT_GT(s_cbf.last_x(1, 0), ox);
+
+  // The coupling demonstrably changes the realized trajectory.
+  EXPECT_GT(std::abs(s_cbf.max_abs_y - s_pointwise.max_abs_y), 1e-3);
+}
+
 // Each obstacle constraint row and its slack share the same (node, slot), and
 // the slack decision block has exactly Np*K entries with no dangling slack.
 TEST(ObstacleK, IndexingConsistency)
@@ -156,7 +192,7 @@ TEST(ObstacleK, IndexingConsistency)
   mpc->solve();
 
   auto solver = mpc->getSolver();
-  const VectorXd & ineq_idx = solver->getIneqIdx();
+  const std::vector<size_t> & ineq_idx = solver->getIneqIdx();
   const MatrixXd & C = solver->getC();
   const size_t w_start = solver->getWStart();
 
@@ -166,12 +202,12 @@ TEST(ObstacleK, IndexingConsistency)
   EXPECT_EQ(solver->getNDvars() - w_start, kNp * k);
 
   // The last two inequality blocks are the obstacle rows and the slack rows.
-  const Eigen::Index nb = ineq_idx.size();
-  ASSERT_GE(nb, 3);
-  const size_t obs_start = static_cast<size_t>(ineq_idx(nb - 3));
-  const size_t obs_end = static_cast<size_t>(ineq_idx(nb - 2));
-  const size_t slack_start = static_cast<size_t>(ineq_idx(nb - 2));
-  const size_t slack_end = static_cast<size_t>(ineq_idx(nb - 1));
+  const size_t nb = ineq_idx.size();
+  ASSERT_GE(nb, 3u);
+  const size_t obs_start = ineq_idx[nb - 3];
+  const size_t obs_end = ineq_idx[nb - 2];
+  const size_t slack_start = ineq_idx[nb - 2];
+  const size_t slack_end = ineq_idx[nb - 1];
 
   EXPECT_EQ(obs_end - obs_start, kNp * k);      // Np*K obstacle rows
   EXPECT_EQ(slack_end - slack_start, kNp * k);  // Np*K slack rows
@@ -186,6 +222,20 @@ TEST(ObstacleK, IndexingConsistency)
     const size_t slot = r - slack_start;
     EXPECT_DOUBLE_EQ(C(r, w_start + slot), 1.0);
   }
+}
+
+// setObs rejects a wrong-shaped obstacle matrix up front; the per-step assembly
+// indexes obs(slot, .) with EIGEN_NO_DEBUG, so an undersized matrix would
+// otherwise read out of bounds on the hot path instead of being caught.
+TEST(ObstacleK, SetObsRejectsWrongShape)
+{
+  auto mpc = makeUnicycleMpc(2);   // Np = 30, K = 2 -> expects (Np*K) x 3 = 60 x 3
+  auto solver = mpc->getSolver();
+  ASSERT_EQ(solver->getMaxObs(), 2u);
+
+  EXPECT_THROW(solver->setObs(MatrixXd::Zero(10, 3)), std::invalid_argument);       // too few rows
+  EXPECT_THROW(solver->setObs(MatrixXd::Zero(kNp * 2, 2)), std::invalid_argument);  // wrong cols
+  EXPECT_NO_THROW(solver->setObs(makeObs(kNp, 2)));                                  // correct shape
 }
 
 // K=0 reproduces the obstacle-off result exactly, and K=1 with every slot at the

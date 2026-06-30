@@ -20,9 +20,10 @@ NMPC problem, the SQP loop, and the QP sub-problem, and
 publisher, subscriber, topic, or launch file.
 The only ROS-coupled function is `optimPath()`, which converts an optimal state
 trajectory into a `nav_msgs/msg/Path` for visualization.
-Two sibling packages consume the core: `prox_mpc_demo` (a self-contained
-closed-loop simulation and benchmark) and `prox_mpc_controller` (a Nav2
-`nav2_core::Controller` plugin, under development).
+Sibling packages consume the core: `prox_mpc_demo` (a self-contained closed-loop
+simulation and benchmark), `prox_mpc_controller` (a Nav2 `nav2_core::Controller`
+plugin, verified in simulation), and `prox_mpc_test_models` (fault-injection
+`Model` plugins for the controller tests).
 
 ## Source layout
 

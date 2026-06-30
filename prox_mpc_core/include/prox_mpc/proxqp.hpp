@@ -6,6 +6,7 @@
 
 #include <memory>
 #include <tuple>
+#include <vector>
 
 #include <prox_mpc/utils.hpp>
 #include <prox_mpc/model.hpp>
@@ -15,8 +16,6 @@
 #include <proxsuite/proxqp/dense/dense.hpp>
 #include <proxsuite/proxqp/sparse/sparse.hpp>
 #include <proxsuite/proxqp/utils/random_qp_problems.hpp>
-
-using namespace proxsuite::proxqp;
 
 namespace prox_mpc
 {
@@ -62,6 +61,7 @@ public:
   void setMaxOutIter(size_t max_out_iter);
   void setQPType(bool qp_type);
   void setGuess(bool guess);
+  void setCbfGamma(double cbf_gamma);
 
   /* Obstacle avoidance */
 
@@ -70,7 +70,7 @@ public:
 
   /* Accessors for the assembled inequality system (valid after a solve()). */
   const MatrixXd & getC() const {return C;}
-  const VectorXd & getIneqIdx() const {return ineq_idx;}
+  const std::vector<size_t> & getIneqIdx() const {return ineq_idx;}
   size_t getWStart() const {return w_start;}
   size_t getNDvars() const {return n_dvars;}
   size_t getMaxObs() const {return max_obs;}
@@ -80,13 +80,15 @@ private:
   std::shared_ptr<Model> model;
 
   /* ProxQP initialization */
-  isize qp_dim = 1;   // QP problem dimension (number of decision variables).
-  isize qp_eq = 0;    // QP equality constraints number.
-  isize qp_ineq = 0;  // QP inequality constraints number.
+  proxsuite::proxqp::isize qp_dim = 1;   // QP problem dimension (number of decision variables).
+  proxsuite::proxqp::isize qp_eq = 0;    // QP equality constraints number.
+  proxsuite::proxqp::isize qp_ineq = 0;  // QP inequality constraints number.
 
   // Sparse and dense solvers.
-  sparse::QP<double, isize> qp_sparse = sparse::QP<double, isize>(qp_dim, qp_eq, qp_ineq);
-  dense::QP<double> qp_dense = dense::QP<double>(qp_dim, qp_eq, qp_ineq);
+  proxsuite::proxqp::sparse::QP<double, proxsuite::proxqp::isize> qp_sparse =
+    proxsuite::proxqp::sparse::QP<double, proxsuite::proxqp::isize>(qp_dim, qp_eq, qp_ineq);
+  proxsuite::proxqp::dense::QP<double> qp_dense =
+    proxsuite::proxqp::dense::QP<double>(qp_dim, qp_eq, qp_ineq);
 
   /* Problem configuration */
   MatrixXd H;   // Dense Hessian matrix.
@@ -103,12 +105,12 @@ private:
   VectorXd low;  // Inequality constraints lower bounds vector.
 
   /* Constraints */
-  size_t n_eq;        // Number of equalities.
-  size_t n_ineq;      // Number of inequalities.
-  VectorXd eq_idx;    // Equalities indeces.
-  VectorXd ineq_idx;  // Inequalities indeces.
-  size_t eq_tot;      // Total number of equalities.
-  size_t ineq_tot;    // Total number of inequalities.
+  size_t n_eq;                   // Number of equalities.
+  size_t n_ineq;                 // Number of inequalities.
+  std::vector<size_t> eq_idx;    // Equalities indeces.
+  std::vector<size_t> ineq_idx;  // Inequalities indeces.
+  size_t eq_tot;                 // Total number of equalities.
+  size_t ineq_tot;               // Total number of inequalities.
 
   /* Problem dimensions */
   size_t n;   // State dimension.
@@ -136,12 +138,20 @@ private:
   proxsuite::proxqp::Info<double> qp_info;               // QP information.
 
   /* Obstacle avoidance: linearized signed-distance half-plane, K slots per node. */
-  size_t max_obs = 0;  // Capacity K of obstacle slots per predicted node (0 = disabled).
-  MatrixXd obs;        // Per (node, slot) obstacle triples (Np*K) x [o_x, o_y, d_safe].
+  size_t max_obs = 0;             // Capacity K of obstacle slots per predicted node (0 = disabled).
+  bool obstacle_active = false;   // Cached in init(): model declares avoidance and max_obs > 0.
+  MatrixXd obs;                   // Per (node, slot) obstacle triples (Np*K) x [o_x, o_y, d_safe].
 
-  // Signed distance h = ||p_k - o|| - d_safe per (node, slot), computed while
-  // filling the inequality matrix in setC() and reused for the bounds in setd().
+  // Discrete-time control-barrier-function rate (Zeng et al., ACC 2021):
+  // h(x_{k+1}) >= (1 - cbf_gamma) * h(x_k). cbf_gamma in (0, 1]; 1.0 reduces the
+  // coupling to the pointwise constraint h(x_{k+1}) >= 0 (the bundled default).
+  double cbf_gamma = 1.0;
+
+  // Signed distance h = ||p_k - o|| - d_safe per (node, slot). obs_h is taken at
+  // the constrained node (k+1) and obs_h_prev at the previous node (k); both are
+  // computed in setC() and reused for the bounds in setd().
   VectorXd obs_h;
+  VectorXd obs_h_prev;
 };
 
 }  // namespace prox_mpc

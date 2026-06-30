@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.10)
+cmake_minimum_required(VERSION 3.28)
 project(prox_mpc_core)
 
 # C++ version
@@ -26,8 +26,6 @@ find_package(geometry_msgs REQUIRED)
 find_package(nav_msgs REQUIRED)
 find_package(pluginlib REQUIRED)
 find_package(proxsuite REQUIRED)
-find_package(sensor_msgs REQUIRED)
-find_package(std_msgs REQUIRED)
 
 # Library
 # SHARED so the core can be linked into downstream shared plugin libraries (for
@@ -52,8 +50,6 @@ ament_target_dependencies(${PROJECT_NAME}
   nav_msgs
   pluginlib
   rclcpp
-  sensor_msgs
-  std_msgs
 )
 
 # Model plugins exported for pluginlib. These live in a dedicated library that
@@ -78,8 +74,6 @@ ament_target_dependencies(${PROJECT_NAME}_models
   nav_msgs
   pluginlib
   rclcpp
-  sensor_msgs
-  std_msgs
 )
 
 # Export prox_mpc::Model as a pluginlib base so models are selected outside the
@@ -114,7 +108,7 @@ install(
 # Export (so prox_mpc_controller and prox_mpc_demo can link the library)
 ament_export_targets(export_${PROJECT_NAME} HAS_LIBRARY_TARGET)
 ament_export_dependencies(
-  rclcpp Eigen3 proxsuite geometry_msgs nav_msgs pluginlib sensor_msgs std_msgs)
+  rclcpp Eigen3 proxsuite geometry_msgs nav_msgs pluginlib)
 
 # Tests
 if(BUILD_TESTING)
@@ -128,12 +122,14 @@ if(BUILD_TESTING)
 
   find_package(ament_cmake_gtest REQUIRED)
 
-  # (a) model interface, (b) regression baseline, (c) custom model, (d) obstacle K
+  # (a) model interface, (b) regression baseline, (c) custom model, (d) obstacle K,
+  # (e) ROS-facing utils helpers
   foreach(test_name
       test_model_interface
       test_mpc_regression
       test_custom_model
-      test_obstacle_k)
+      test_obstacle_k
+      test_utils)
     ament_add_gtest(${test_name} test/${test_name}.cpp)
     target_link_libraries(${test_name}
       ${PROJECT_NAME}
@@ -145,8 +141,6 @@ if(BUILD_TESTING)
       nav_msgs
       pluginlib
       rclcpp
-      sensor_msgs
-      std_msgs
     )
   endforeach()
 endif()
