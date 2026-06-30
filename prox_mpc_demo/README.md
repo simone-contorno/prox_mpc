@@ -1,62 +1,53 @@
 # prox_mpc_demo
 
-A self-contained, closed-loop simulation and benchmark for
-[prox_mpc_core](../prox_mpc_core) — no external simulator required.
+Runnable demonstrations of the ProxMPC stack, from a no-simulator benchmark of the
+[prox_mpc_core](../prox_mpc_core) engine to a full Nav2 + Gazebo bring-up of the
+[prox_mpc_controller](../prox_mpc_controller) plugin.
 
-It drives one of the bundled kinematic models toward a goal, publishes the first
-control and the predicted path, and advances the simulated state to the model's
-own prediction each cycle.
-Use it to run, visualize, and benchmark the controller without Nav2.
+## Two ways to run
 
-## Build and run
+- **Standalone simulation and benchmark** — a self-contained, closed-loop driver
+  for the engine with no external simulator: it drives a bundled kinematic model
+  toward a goal, publishes the command and predicted path, and logs the solve
+  time. Use it to run, visualize, and benchmark the controller without Nav2.
+  See [docs/simulation.md](docs/simulation.md).
 
-```bash
-colcon build --symlink-install --packages-select prox_mpc_core prox_mpc_demo
-source install/setup.bash
-ros2 launch prox_mpc_demo simulation.launch.py
-```
+  ```bash
+  colcon build --symlink-install --packages-select prox_mpc_core prox_mpc_demo
+  source install/setup.bash
+  ros2 launch prox_mpc_demo simulation.launch.py
+  ```
 
-Switch model and tune the run by editing
-[config/simulation.yaml](config/simulation.yaml) (the single source of truth for
-parameters), or override a parameter on the command line:
+- **Nav2 + Gazebo Harmonic simulation** — the real-behaviour gate for the
+  controller plugin: it runs the plugin inside a live `controller_server` driving
+  a TurtleBot3 waffle under a full Nav2 stack, with an opt-in predictive
+  obstacle-avoidance mode. See [docs/nav2-simulation.md](docs/nav2-simulation.md).
 
-```bash
-ros2 run prox_mpc_demo prox_mpc_simulation --ros-args -p model:=r2d2
-```
+  ```bash
+  colcon build --symlink-install \
+    --packages-select prox_mpc_core prox_mpc_controller prox_mpc_demo
+  source install/setup.bash
+  ros2 launch prox_mpc_demo nav2_simulation.launch.py            # baseline
+  ros2 launch prox_mpc_demo nav2_simulation.launch.py predictive:=True
+  ```
 
-| Parameter | Default | Meaning |
-| --- | --- | --- |
-| `model` | `bike` | `bike` (4 states) or `r2d2` (unicycle, 3 states) |
-| `np`, `nc` | `20` | prediction / control horizon nodes |
-| `dt` | `0.1` | step size [s] (also the control period) |
-| `q_pos`, `q_theta`, `s_factor`, `r_weight`, `w_weight` | — | cost weights |
-| `v_ref`, `goal_x`, `goal_y`, `goal_theta` | — | reference speed and goal pose |
-| `obstacle_enable`, `obs_x`, `obs_y` | `false` | optional obstacle |
-| `max_obstacles` | `1` | obstacle-slot capacity per node when avoidance is on |
-| `d_safe` | `1.0` | required clearance [m] for the obstacle |
-| `report_period` | `50` | log solve-time stats every N control steps |
-| `log_level` | `info` | this node's logger level only |
+## What is in the package
 
-Published topics:
+| Path | Contents |
+| --- | --- |
+| `src/simulation_node.cpp` | The standalone closed-loop simulation node (`prox_mpc_simulation`). |
+| `launch/simulation.launch.py` | Standalone simulation (optional RViz). |
+| `launch/nav2_simulation.launch.py` | Nav2 + Gazebo Harmonic bring-up (baseline / predictive). |
+| `config/` | `simulation.yaml`, and the Nav2 params (`nav2_prox_mpc.yaml`, `nav2_prox_mpc_predictive.yaml`). |
+| `worlds/`, `maps/`, `models/` | Gazebo worlds, occupancy maps, and the static-box / dynamic-actor models. |
+| `urdf/`, `rviz/` | Robot description and RViz configuration. |
 
-- `/robot/cmd_vel` (`geometry_msgs/Twist`) — the first control mapped to a body
-  twist by the model each cycle.
-- `/prox_mpc/path` (`nav_msgs/Path`) — the predicted optimal trajectory.
+The Nav2 bring-up depends on Nav2, `ros_gz`, and the canonical
+`nav2_minimal_tb3_sim` scenario; the standalone simulation needs only the core.
+Third-party assets are attributed in
+[THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md).
 
-Add `rviz:=true` to also launch RViz, `robot_state_publisher`, and
-`joint_state_publisher` and visualize the chosen robot.
+## License
 
-## Measure controller performance
-
-The node logs the **min / average / max** solve time in milliseconds with the
-SQP and QP iteration counts every `report_period` steps:
-
-```text
-solve over 50 steps [ms]  min=0.375  avg=0.542  max=1.677  (sqp_iter=1, qp_iter=9)  ~10.0 Hz budget
-```
-
-The `~Hz budget` is `1/dt`. Confirm the actual published rate with:
-
-```bash
-ros2 topic hz /robot/cmd_vel
-```
+[Apache-2.0](../LICENSE) for the package code; see
+[THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md) for bundled third-party assets.

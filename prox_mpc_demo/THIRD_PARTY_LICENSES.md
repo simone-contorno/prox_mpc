@@ -2,7 +2,26 @@
 
 This file records third-party material redistributed in this repository and the
 license under which it is used.
-The package's own code and assets are covered by the repository `LICENSE`.
+The package's own code and assets are covered by the repository `LICENSE`, and
+the build/link dependencies are inventoried in the repository
+[THIRD_PARTY_LICENSES.md](../THIRD_PARTY_LICENSES.md).
+
+## Gazebo world files
+
+- Files: `worlds/prox_mpc_world.sdf.xacro`, `worlds/prox_mpc_open.sdf.xacro`
+- Source: derived from
+  [`nav2_minimal_tb3_sim`](https://github.com/ros-navigation/navigation2)
+  `worlds/tb3_sandbox.sdf.xacro`
+- License: Apache-2.0 (same text as the repository `LICENSE`)
+- Modifications: `prox_mpc_world.sdf.xacro` mirrors `tb3_sandbox` (so the stock
+  `tb3_sandbox` map still aligns and AMCL localizes) and adds, behind the
+  `obstacles` xacro arg, two static boxes and one trajectory-animated dynamic
+  actor not present in the static map; `prox_mpc_open.sdf.xacro` reuses the same
+  upstream system-plugin / `sun` / `ground_plane` / scene / physics boilerplate
+  inside an original open 6x6 m room.
+- Runtime reference: `prox_mpc_world.sdf.xacro` references
+  `model://turtlebot3_world` by URI, a runtime dependency resolved from the
+  installed Gazebo model path; it is not redistributed in this repository.
 
 ## R2D2 URDF model
 
