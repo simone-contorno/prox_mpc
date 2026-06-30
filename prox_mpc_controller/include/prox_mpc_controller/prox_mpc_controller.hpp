@@ -5,9 +5,14 @@
 #ifndef PROX_MPC_CONTROLLER__PROX_MPC_CONTROLLER_HPP_
 #define PROX_MPC_CONTROLLER__PROX_MPC_CONTROLLER_HPP_
 
+#include <array>
+#include <chrono>
 #include <cstddef>
+#include <cstdint>
 #include <memory>
+#include <mutex>
 #include <string>
+#include <vector>
 
 #include <geometry_msgs/msg/pose_stamped.hpp>
 #include <geometry_msgs/msg/twist.hpp>
@@ -18,7 +23,12 @@
 #include <pluginlib/class_loader.hpp>
 #include <rclcpp/rclcpp.hpp>
 #include <rclcpp_lifecycle/lifecycle_node.hpp>
+#include <rclcpp_lifecycle/lifecycle_publisher.hpp>
 #include <tf2_ros/buffer.h>
+#include <visualization_msgs/msg/marker_array.hpp>
+
+#include <prox_mpc_msgs/msg/obstacle_array.hpp>
+#include <prox_mpc_msgs/msg/solver_diagnostics.hpp>
 
 #include <prox_mpc/mpc.hpp>
 #include <prox_mpc/model.hpp>
@@ -75,9 +85,44 @@ public:
   void reset() override;
 
 protected:
+  /// Fill the per-node (o_x, o_y, d_safe) obstacle matrix for one cycle. With
+  /// predict_obstacles_ off, or no fresh tracked-obstacle message, this reproduces
+  /// the costmap-only reduceCostmap() exactly. Otherwise it propagates each
+  /// dynamic track over the horizon (constant velocity), binds each to a fixed
+  /// slot across nodes, and fills the remaining slots from the costmap (hybrid).
+  /// `now` is the reference time predictions are aged to (the command stamp).
+  void fillObstacles(const MatrixXd & reference, MatrixXd & obs, const rclcpp::Time & now);
+
   /// Reduce the local costmap to at most max_obstacles_ (o_x, o_y, d_safe) triples
-  /// per predicted node, centered on the reference trajectory positions.
+  /// per predicted node, centered on the reference trajectory positions. This is
+  /// the static (costmap-only) fill and the predict_obstacles_-off fallback.
   void reduceCostmap(const MatrixXd & reference, MatrixXd & obs);
+
+  /// Windowed costmap scan that fills obstacle slots [slot_begin, max_obstacles_)
+  /// per node from the nearest occupied cells, skipping cells inside any per-node
+  /// exclusion disc (a dynamic track's footprint). Slots below slot_begin and the
+  /// far-sentinel default are left untouched. exclusions[node] = list of
+  /// (x, y, radius); an empty vector means no exclusions.
+  void fillStaticObstacles(
+    const MatrixXd & reference, MatrixXd & obs, std::size_t slot_begin,
+    const std::vector<std::vector<std::array<double, 3>>> & exclusions);
+
+  /// Cache the latest tracked-obstacle array (subscription callback; runs in the
+  /// controller-server executor alongside computeVelocityCommands).
+  void obstacleCallback(prox_mpc_msgs::msg::ObstacleArray::ConstSharedPtr msg);
+
+  /// Publish the predicted dynamic-obstacle trajectories as RViz markers when the
+  /// debug topic has a subscriber (no-op otherwise).
+  void publishPredictedObstacleMarkers(const rclcpp::Time & now);
+
+  /// Fill and publish one SolverDiagnostics for this control cycle, only when the
+  /// publisher exists and the diagnostics topic has a subscriber (zero cost
+  /// otherwise). `solve_ms` is the wall time measured around mpc_->solve();
+  /// `converged` is the cycle's solve result; `num_active_obstacles` is the count
+  /// of filled, non-sentinel obstacle slots at the current node.
+  void publishDiagnostics(
+    const rclcpp::Time & stamp, double solve_ms, bool converged,
+    std::uint16_t num_active_obstacles);
 
   rclcpp_lifecycle::LifecycleNode::WeakPtr node_;
   std::shared_ptr<tf2_ros::Buffer> tf_;
@@ -85,6 +130,36 @@ protected:
   std::string plugin_name_;
   rclcpp::Logger logger_{rclcpp::get_logger("ProxMpcController")};
   rclcpp::Clock::SharedPtr clock_;
+
+  /// Predicted NMPC trajectory, published each cycle for visualization.
+  std::shared_ptr<rclcpp_lifecycle::LifecyclePublisher<nav_msgs::msg::Path>> traj_pub_;
+
+  /// Optional RViz markers of the predicted dynamic-obstacle trajectories
+  /// (created only when predict_obstacles_ is set).
+  std::shared_ptr<rclcpp_lifecycle::LifecyclePublisher<visualization_msgs::msg::MarkerArray>>
+  marker_pub_;
+
+  /// Optional per-cycle solver telemetry (created only when publish_diagnostics_
+  /// is set); publishes only-when-subscribed so the production default is free.
+  std::shared_ptr<rclcpp_lifecycle::LifecyclePublisher<prox_mpc_msgs::msg::SolverDiagnostics>>
+  diag_pub_;
+
+  /// Tracked-obstacle input and its mutex-guarded latest message. The callback and
+  /// computeVelocityCommands run in the same controller-server executor; the mutex
+  /// guards the shared-pointer swap between them.
+  rclcpp::Subscription<prox_mpc_msgs::msg::ObstacleArray>::SharedPtr obstacle_sub_;
+  std::mutex obstacles_mutex_;
+  prox_mpc_msgs::msg::ObstacleArray::ConstSharedPtr latest_obstacles_;
+
+  /// One dynamic obstacle's predicted positions over the horizon (costmap global
+  /// frame), retained from the fill so the marker publisher need not recompute.
+  struct PredictedObstacle
+  {
+    std::uint32_t id{0};
+    double radius{0.0};
+    std::vector<std::array<double, 2>> positions;
+  };
+  std::vector<PredictedObstacle> predicted_obstacles_;
 
   nav_msgs::msg::Path global_plan_;
 
@@ -101,6 +176,13 @@ protected:
   double dt_{0.1};
   double desired_linear_vel_{1.0};
 
+  /// Model wheelbase L [m] (forwarded to the model via model_params.L); used to
+  /// pre-position the steering reference for models with a steering state.
+  double wheelbase_{1.6};
+
+  /// Cruise-speed reduction gain on path curvature; 0.0 disables the reduction.
+  double curvature_gain_{0.0};
+
   /// Control-law parameters.
   int max_solver_failures_{3};
   int max_obstacles_{1};
@@ -109,6 +191,25 @@ protected:
   double cbf_gamma_{1.0};
   int costmap_cost_threshold_{200};
   double obstacle_cluster_radius_{0.3};
+  /// Upper bound on the per-node costmap scan half-window [cells].
+  int max_obstacle_scan_cells_{50};
+
+  /// Predictive (dynamic) obstacle avoidance. predict_obstacles_ off reproduces
+  /// the costmap-only behavior; the rest size the predictive + hybrid fill.
+  bool predict_obstacles_{false};
+  std::string obstacle_topic_{"tracked_obstacles"};
+  double obstacle_timeout_{0.5};               // [s] staleness before costmap-only
+  double dynamic_speed_threshold_{0.1};        // [m/s] propagate tracks above this
+  double prediction_uncertainty_growth_{0.0};  // [m/s] extra clearance per second
+  int max_dynamic_obstacles_{2};               // slot budget for dynamic tracks
+  /// Reject tracks larger than this [m] from the predictive path (0 = no limit):
+  /// a guard against extended structure (walls) reported as a moving obstacle,
+  /// which would otherwise inflate d_safe and erase real costmap cells.
+  double max_dynamic_obstacle_radius_{0.0};
+
+  /// Opt-in per-cycle solver telemetry. Off by default so the production plugin
+  /// carries no extra interface; when on, publishes only-when-subscribed.
+  bool publish_diagnostics_{false};
 
   /// Speed bounds: v_max_ is the model's original upper bound on the speed
   /// channel; max_linear_vel_ is the currently applied limit.
@@ -125,11 +226,20 @@ protected:
 
   /// Runtime state, reset between tasks.
   int failure_count_{0};
+  /// Consecutive footprint-veto count; escalates to NoValidControl past the
+  /// max_solver_failures_ budget. Kept separate from failure_count_ so a single
+  /// veto does not consume the solver-failure budget (and vice versa).
+  int veto_count_{0};
   double steering_state_{0.0};
   double last_cmd_v_{0.0};
   double last_cmd_w_{0.0};
   bool cancelling_{false};
   std::size_t plan_index_{0};
+
+  /// Inter-cycle wall clock for the control_period_ms diagnostics field; reset
+  /// between tasks so the first cycle of a task reports NaN rather than a stale gap.
+  std::chrono::steady_clock::time_point last_cycle_wall_;
+  bool have_last_cycle_{false};
 };
 
 }  // namespace prox_mpc_controller

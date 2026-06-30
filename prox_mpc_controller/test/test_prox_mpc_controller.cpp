@@ -26,10 +26,12 @@
 // The wrapped SQP/QP solver lives in prox_mpc_core and is out of coverage scope;
 // these tests drive it only through the plugin's public surface.
 
+#include <chrono>
 #include <cmath>
 #include <limits>
 #include <memory>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include <gtest/gtest.h>
@@ -40,12 +42,15 @@
 #include <geometry_msgs/msg/twist.hpp>
 #include <nav_msgs/msg/path.hpp>
 #include <nav2_core/controller_exceptions.hpp>
+#include <nav2_core/goal_checker.hpp>
 #include <nav2_costmap_2d/cost_values.hpp>
 #include <nav2_costmap_2d/costmap_2d.hpp>
 #include <nav2_costmap_2d/costmap_2d_ros.hpp>
 #include <rclcpp/rclcpp.hpp>
 #include <rclcpp_lifecycle/lifecycle_node.hpp>
 #include <tf2_ros/buffer.h>
+
+#include <prox_mpc_msgs/msg/obstacle_array.hpp>
 
 #include "prox_mpc_controller/prox_mpc_controller.hpp"
 
@@ -65,6 +70,15 @@ class TestableProxMpcController : public prox_mpc_controller::ProxMpcController
 {
 public:
   using ProxMpcController::reduceCostmap;
+  using ProxMpcController::fillObstacles;
+
+  // Inject the latest tracked-obstacle message directly (white-box), bypassing
+  // the subscription so the predictive fill can be driven deterministically.
+  void injectObstacles(prox_mpc_msgs::msg::ObstacleArray::ConstSharedPtr msg)
+  {
+    std::lock_guard<std::mutex> lock(obstacles_mutex_);
+    latest_obstacles_ = msg;
+  }
 
   int & failureCount() {return failure_count_;}
   double & lastCmdV() {return last_cmd_v_;}
@@ -119,6 +133,72 @@ std::vector<geometry_msgs::msg::Point> makeSquareFootprint(double half)
   fp[3].x = -half; fp[3].y = half;
   return fp;
 }
+
+// A constant-curvature arc plan: a circle of radius R starting at the origin
+// tangent to +x and curving CCW, sampled every ds meters of arc length.
+nav_msgs::msg::Path makeArcPlan(std::size_t count, double ds, double radius)
+{
+  nav_msgs::msg::Path path;
+  path.header.frame_id = "map";
+  const double dphi = ds / radius;
+  for (std::size_t i = 0; i < count; ++i) {
+    const double phi = static_cast<double>(i) * dphi;
+    geometry_msgs::msg::PoseStamped p;
+    p.header.frame_id = "map";
+    p.pose.position.x = radius * std::sin(phi);
+    p.pose.position.y = radius * (1.0 - std::cos(phi));
+    p.pose.orientation.w = 1.0;
+    path.poses.push_back(p);
+  }
+  return path;
+}
+
+// An ObstacleArray with a single tracked obstacle expressed in the costmap
+// global frame ("map"), so the predictive fill needs no TF to place it.
+prox_mpc_msgs::msg::ObstacleArray::SharedPtr makeObstacleMsg(
+  const rclcpp::Time & stamp, double x, double y, double vx, double vy, double radius)
+{
+  auto msg = std::make_shared<prox_mpc_msgs::msg::ObstacleArray>();
+  msg->header.frame_id = "map";
+  msg->header.stamp = stamp;
+  prox_mpc_msgs::msg::Obstacle o;
+  o.id = 7;
+  o.position.x = x;
+  o.position.y = y;
+  o.velocity.x = vx;
+  o.velocity.y = vy;
+  o.radius = radius;
+  msg->obstacles.push_back(o);
+  return msg;
+}
+
+// Minimal GoalChecker stub returning a fixed xy tolerance. goal_checker is a raw
+// argument to computeVelocityCommands (not a pluginlib plugin), so the approach
+// easing can be driven by injecting this directly, no registration needed.
+class StubGoalChecker : public nav2_core::GoalChecker
+{
+public:
+  StubGoalChecker(double xy_tol, bool valid)
+  : xy_tol_(xy_tol), valid_(valid) {}
+  void initialize(
+    const rclcpp_lifecycle::LifecycleNode::WeakPtr &, const std::string &,
+    const std::shared_ptr<nav2_costmap_2d::Costmap2DROS>) override {}
+  void reset() override {}
+  bool isGoalReached(
+    const geometry_msgs::msg::Pose &, const geometry_msgs::msg::Pose &,
+    const geometry_msgs::msg::Twist &) override {return false;}
+  bool getTolerances(
+    geometry_msgs::msg::Pose & pose_tolerance, geometry_msgs::msg::Twist &) override
+  {
+    pose_tolerance.position.x = xy_tol_;
+    pose_tolerance.position.y = xy_tol_;
+    return valid_;
+  }
+
+private:
+  double xy_tol_;
+  bool valid_;
+};
 }  // namespace
 
 class ProxMpcControllerTest : public ::testing::Test
@@ -382,6 +462,181 @@ TEST_F(ProxMpcControllerTest, ComputeTransformsPlanWhenTransformAvailable)
   EXPECT_GT(cmd.twist.linear.x, 0.0);
 }
 
+// A plan whose heading sits across the +/-pi wrap from the robot's heading must
+// not drive the QP heading error the long way around: the controller keeps the
+// goal_x heading continuous, so the command tracks forward rather than spinning
+// in place. Without the fix the raw error is ~6 rad and the turn saturates.
+TEST_F(ProxMpcControllerTest, ComputeTracksAcrossHeadingWrap)
+{
+  // Heading-dominant weights so the wrap error drives the angular command.
+  auto c = makeConfigured(
+  {
+    rclcpp::Parameter("FollowPath.model_plugin", std::string("prox_mpc_core/Unicycle")),
+    rclcpp::Parameter("FollowPath.q_pos", 1.0),
+    rclcpp::Parameter("FollowPath.q_theta", 50.0),
+  });
+  c->activate();
+
+  // Straight plan heading -3.0 rad; robot heading +3.0 rad. The true heading
+  // error is ~0.28 rad, but the unwrapped difference is ~6.0 rad.
+  const double dir = -3.0;
+  nav_msgs::msg::Path path;
+  path.header.frame_id = "map";
+  for (std::size_t i = 0; i < 31; ++i) {
+    geometry_msgs::msg::PoseStamped ps;
+    ps.header.frame_id = "map";
+    ps.pose.position.x = static_cast<double>(i) * 0.2 * std::cos(dir);
+    ps.pose.position.y = static_cast<double>(i) * 0.2 * std::sin(dir);
+    ps.pose.orientation.w = 1.0;
+    path.poses.push_back(ps);
+  }
+  c->setPlan(path);
+
+  const auto cmd = c->computeVelocityCommands(
+    makePose(0.0, 0.0, 3.0), geometry_msgs::msg::Twist(), nullptr);
+
+  // The continuous goal heading is ~+3.28 rad, so the shortest correction from
+  // +3.0 rad is a small CCW (positive) turn. Without the fix the error is ~-6 rad
+  // and the QP turns the long way (strongly negative omega).
+  EXPECT_TRUE(std::isfinite(cmd.twist.linear.x));
+  EXPECT_TRUE(std::isfinite(cmd.twist.angular.z));
+  EXPECT_GT(cmd.twist.angular.z, 0.0);             // turns the short (CCW) way, not the long way
+}
+
+// On a curved plan the bicycle steering reference is pre-positioned to the path
+// curvature (delta_ref = atan(L*kappa) != 0); on a straight plan it stays zero.
+// Read back from the state reference the controller hands the MPC.
+TEST_F(ProxMpcControllerTest, CurvatureSetsBicycleSteeringReference)
+{
+  auto c = makeConfigured();   // default Bicycle (n = 4, L = 1.6)
+  c->activate();
+  ASSERT_EQ(c->nDim(), 4u);
+
+  c->setPlan(makeStraightPlan(31, 0.1));
+  c->computeVelocityCommands(makePose(0.0, 0.0, 0.0), geometry_msgs::msg::Twist(), nullptr);
+  const MatrixXd gx_straight = c->mpc()->getGoalX();
+  double max_delta_straight = 0.0;
+  for (Eigen::Index k = 0; k < gx_straight.rows(); ++k) {
+    max_delta_straight = std::max(max_delta_straight, std::abs(gx_straight(k, 3)));
+  }
+  EXPECT_LT(max_delta_straight, 1e-6);             // straight: wheel reference stays centered
+
+  c->setPlan(makeArcPlan(60, 0.1, 2.0));           // R = 2 m -> kappa = 0.5
+  c->computeVelocityCommands(makePose(0.0, 0.0, 0.0), geometry_msgs::msg::Twist(), nullptr);
+  const MatrixXd gx_arc = c->mpc()->getGoalX();
+  double max_delta_arc = 0.0;
+  for (Eigen::Index k = 0; k < gx_arc.rows(); ++k) {
+    max_delta_arc = std::max(max_delta_arc, std::abs(gx_arc(k, 3)));
+  }
+  EXPECT_GT(max_delta_arc, 0.2);                   // atan(L*kappa) ~ atan(0.8) = 0.675 rad
+}
+
+// The unicycle (no steering state, n = 3) keeps the go-straight default even on
+// a curved plan: the steering channel does not exist, so none is written.
+TEST_F(ProxMpcControllerTest, CurvatureLeavesUnicycleReferenceAtThreeState)
+{
+  auto c = makeConfigured(
+    {rclcpp::Parameter("FollowPath.model_plugin", std::string("prox_mpc_core/Unicycle"))});
+  c->activate();
+  ASSERT_EQ(c->nDim(), 3u);
+  c->setPlan(makeArcPlan(60, 0.1, 2.0));
+  c->computeVelocityCommands(makePose(0.0, 0.0, 0.0), geometry_msgs::msg::Twist(), nullptr);
+  EXPECT_EQ(c->mpc()->getGoalX().cols(), static_cast<Eigen::Index>(3));   // no steering channel
+}
+
+// curvature_gain > 0 tapers the cruise reference on a curved plan; the default
+// (0.0) leaves it at the arc-length cruise.
+TEST_F(ProxMpcControllerTest, CurvatureGainReducesCruiseOnCurvedPlan)
+{
+  auto c0 = makeConfigured();   // curvature_gain default 0.0
+  c0->activate();
+  c0->setPlan(makeArcPlan(60, 0.1, 2.0));
+  c0->computeVelocityCommands(makePose(0.0, 0.0, 0.0), geometry_msgs::msg::Twist(), nullptr);
+  const double vref_gain0 = c0->mpc()->getGoalU()(0, 0);
+
+  auto cg = makeConfigured({rclcpp::Parameter("FollowPath.curvature_gain", 2.0)});
+  cg->activate();
+  cg->setPlan(makeArcPlan(60, 0.1, 2.0));
+  cg->computeVelocityCommands(makePose(0.0, 0.0, 0.0), geometry_msgs::msg::Twist(), nullptr);
+  const double vref_gain = cg->mpc()->getGoalU()(0, 0);
+
+  EXPECT_GT(vref_gain0, 0.0);
+  EXPECT_LT(vref_gain, vref_gain0);                // curvature taper slows the cruise
+}
+
+// goal_checker xy tolerance eases the cruise reference once the robot is inside
+// the tolerance band; the lowest() sentinel and a false return leave it intact.
+TEST_F(ProxMpcControllerTest, GoalCheckerToleranceEasesApproach)
+{
+  auto c = makeConfigured();
+  c->activate();
+  c->setPlan(makeStraightPlan(6, 0.2));            // 1 m plan
+  const auto pose = makePose(0.8, 0.0, 0.0);       // 0.2 m remaining to the end
+
+  c->computeVelocityCommands(pose, geometry_msgs::msg::Twist(), nullptr);
+  const double vref_base = c->mpc()->getGoalU()(0, 0);
+  ASSERT_GT(vref_base, 0.0);
+
+  StubGoalChecker inside(0.25, true);              // remaining 0.2 m < xy_tol 0.25 m
+  c->computeVelocityCommands(pose, geometry_msgs::msg::Twist(), &inside);
+  EXPECT_LT(c->mpc()->getGoalU()(0, 0), vref_base);
+
+  StubGoalChecker sentinel(std::numeric_limits<double>::lowest(), true);
+  c->computeVelocityCommands(pose, geometry_msgs::msg::Twist(), &sentinel);
+  EXPECT_NEAR(c->mpc()->getGoalU()(0, 0), vref_base, kTol);   // sentinel ignored
+
+  StubGoalChecker invalid(0.25, false);            // getTolerances() returns false
+  c->computeVelocityCommands(pose, geometry_msgs::msg::Twist(), &invalid);
+  EXPECT_NEAR(c->mpc()->getGoalU()(0, 0), vref_base, kTol);   // no tolerances -> no easing
+}
+
+// Outside the tolerance band (remaining >> xy_tol) the approach easing clamps to
+// 1.0 and the cruise reference is unchanged.
+TEST_F(ProxMpcControllerTest, GoalCheckerToleranceInertOutsideBand)
+{
+  auto c = makeConfigured();
+  c->activate();
+  c->setPlan(makeStraightPlan(31, 0.2));           // 6 m plan, robot at the start
+  const auto pose = makePose(0.0, 0.0, 0.0);
+
+  c->computeVelocityCommands(pose, geometry_msgs::msg::Twist(), nullptr);
+  const double vref_base = c->mpc()->getGoalU()(0, 0);
+  StubGoalChecker checker(0.25, true);
+  c->computeVelocityCommands(pose, geometry_msgs::msg::Twist(), &checker);
+  EXPECT_NEAR(c->mpc()->getGoalU()(0, 0), vref_base, kTol);
+}
+
+// The predicted NMPC trajectory is published as a Path (Np+1 poses, costmap
+// global frame) for visualization, distinct from the Nav2 global plan.
+TEST_F(ProxMpcControllerTest, PublishesPredictedTrajectory)
+{
+  auto c = makeConfigured();
+  c->activate();
+  c->setPlan(makeStraightPlan(31, 0.2));
+
+  nav_msgs::msg::Path received;
+  bool got = false;
+  auto sub = node_->create_subscription<nav_msgs::msg::Path>(
+    "prox_mpc_local_plan", 1,
+    [&](nav_msgs::msg::Path::SharedPtr msg) {received = *msg; got = true;});
+
+  rclcpp::executors::SingleThreadedExecutor exec;
+  exec.add_node(node_->get_node_base_interface());
+
+  // The publish is skipped until a subscriber connects, so re-drive the controller
+  // while spinning until the message is delivered.
+  for (int i = 0; i < 100 && !got; ++i) {
+    c->computeVelocityCommands(makePose(0.0, 0.0, 0.0), geometry_msgs::msg::Twist(), nullptr);
+    exec.spin_some();
+    std::this_thread::sleep_for(std::chrono::milliseconds(5));
+  }
+
+  ASSERT_TRUE(got);
+  EXPECT_EQ(received.header.frame_id, "map");
+  EXPECT_EQ(received.poses.size(), 21u);          // Np + 1
+  EXPECT_TRUE(std::isfinite(received.poses.front().pose.position.x));
+}
+
 // --- computeVelocityCommands(): fail-safe branches -------------------------
 
 // An empty/unset plan is a structural fault: throw InvalidPath immediately.
@@ -461,22 +716,60 @@ TEST_F(ProxMpcControllerTest, ComputeSolverFailureRampsThenEscalates)
   c->activate();
   c->setPlan(makeStraightPlan(31, 0.2));
 
-  // Seed a non-zero last command so the deceleration ramp is observable; the
-  // angular channel is negative to exercise the opposite-sign brake step.
-  c->lastCmdV() = 0.30;
-  c->lastCmdW() = -0.30;
+  // The brake ramps from the server-measured velocity, so supply a non-zero
+  // measured twist (angular negative to exercise the opposite-sign brake step).
+  geometry_msgs::msg::Twist measured;
+  measured.linear.x = 0.30;
+  measured.angular.z = -0.30;
 
-  const auto cmd = c->computeVelocityCommands(
-    makePose(0.0, 0.0, 0.0), geometry_msgs::msg::Twist(), nullptr);
+  const auto cmd = c->computeVelocityCommands(makePose(0.0, 0.0, 0.0), measured, nullptr);
 
-  // v_cmd = max(0, v_prev - a_dec * dt); a_dec = 0.5, dt = 0.1 -> step 0.05.
+  // Arrange-phase guard: confirm the one-iteration caps actually prevented
+  // convergence, so this exercises the failure path instead of silently inverting
+  // if the QP ever converged in a single iteration.
+  ASSERT_NE(c->mpc()->qp_info.status, proxsuite::proxqp::QPSolverOutput::PROXQP_SOLVED);
+
+  // v_cmd = max(0, v_meas - a_dec * dt); a_dec = 0.5, dt = 0.1 -> step 0.05.
   EXPECT_NEAR(cmd.twist.linear.x, 0.30 - kModelDecel * 0.1, 1e-6);
   EXPECT_NEAR(cmd.twist.angular.z, -0.30 + kModelDecel * 0.1, 1e-6);
   EXPECT_EQ(c->failureCount(), 1);
 
   // Second consecutive failure exceeds max_solver_failures = 1 -> escalate.
   EXPECT_THROW(
-    c->computeVelocityCommands(makePose(0.0, 0.0, 0.0), geometry_msgs::msg::Twist(), nullptr),
+    c->computeVelocityCommands(makePose(0.0, 0.0, 0.0), measured, nullptr),
+    nav2_core::NoValidControl);
+}
+
+// A model with finite dynamics (the QP converges) but a non-finite toTwist drives
+// the non-finite-command fail-safe: brake within the budget, then escalate. The
+// fault-injection model is loaded through the same pluginlib path as production
+// models (prox_mpc_test_models fixture).
+TEST_F(ProxMpcControllerTest, NonFiniteCommandRampsThenEscalates)
+{
+  auto c = makeConfigured(
+  {
+    rclcpp::Parameter(
+      "FollowPath.model_plugin", std::string("prox_mpc_test_models/NonFiniteTwist")),
+    rclcpp::Parameter("FollowPath.max_solver_failures", 1),
+  });
+  c->activate();
+  c->setPlan(makeStraightPlan(31, 0.2));
+
+  // The brake ramps from the server-measured velocity, so supply a non-zero one.
+  geometry_msgs::msg::Twist measured;
+  measured.linear.x = 0.30;
+  measured.angular.z = -0.30;
+
+  // First cycle: the QP converges but the command maps to a non-finite twist, so
+  // the controller brakes at the model deceleration limit without escalating yet.
+  const auto cmd = c->computeVelocityCommands(makePose(0.0, 0.0, 0.0), measured, nullptr);
+  EXPECT_NEAR(cmd.twist.linear.x, 0.30 - kModelDecel * 0.1, 1e-6);
+  EXPECT_NEAR(cmd.twist.angular.z, -0.30 + kModelDecel * 0.1, 1e-6);
+  EXPECT_EQ(c->failureCount(), 1);
+
+  // Second consecutive failure exceeds max_solver_failures = 1 -> escalate.
+  EXPECT_THROW(
+    c->computeVelocityCommands(makePose(0.0, 0.0, 0.0), measured, nullptr),
     nav2_core::NoValidControl);
 }
 
@@ -508,6 +801,32 @@ TEST_F(ProxMpcControllerTest, ComputeSkipsVetoWithoutFootprint)
   const auto cmd = c->computeVelocityCommands(
     makePose(0.0, 0.0, 0.0), geometry_msgs::msg::Twist(), nullptr);
   EXPECT_GT(cmd.twist.linear.x, 0.0);            // no veto: command passes through
+}
+
+// A footprint veto that persists past the budget escalates to NoValidControl so
+// the behavior-tree recovery is triggered (a stuck robot does not brake forever),
+// while the first vetoes brake without consuming the solver-failure budget.
+TEST_F(ProxMpcControllerTest, PersistentFootprintVetoEscalates)
+{
+  auto c = makeConfigured(
+  {
+    rclcpp::Parameter("FollowPath.max_obstacles", 0),
+    rclcpp::Parameter("FollowPath.max_solver_failures", 3),
+  });
+  c->activate();
+  c->setPlan(makeStraightPlan(31, 0.2));
+  fillCost(-0.6, -0.6, 0.6, 0.6, nav2_costmap_2d::LETHAL_OBSTACLE);
+
+  // Budget 3: the first three vetoes brake (no throw); the fourth escalates.
+  for (int i = 0; i < 3; ++i) {
+    const auto cmd = c->computeVelocityCommands(
+      makePose(0.0, 0.0, 0.0), geometry_msgs::msg::Twist(), nullptr);
+    EXPECT_NEAR(cmd.twist.linear.x, 0.0, kTol);
+    EXPECT_EQ(c->failureCount(), 0);             // veto does not consume the solver budget
+  }
+  EXPECT_THROW(
+    c->computeVelocityCommands(makePose(0.0, 0.0, 0.0), geometry_msgs::msg::Twist(), nullptr),
+    nav2_core::NoValidControl);
 }
 
 // --- setSpeedLimit() -------------------------------------------------------
@@ -648,6 +967,278 @@ TEST_F(ProxMpcControllerTest, ReduceCostmapClustersAndSentinels)
   // Node 1: out of grid, both slots stay at the far sentinel.
   EXPECT_NEAR(obs(2, 0), prox_mpc::MPC::kObsFarSentinel, kTol);
   EXPECT_NEAR(obs(3, 0), prox_mpc::MPC::kObsFarSentinel, kTol);
+}
+
+// --- fillObstacles(): predictive + hybrid fill (white-box) -----------------
+
+// The predictive fill propagates a tracked obstacle by position + velocity*dt_k
+// per node and binds it to one slot across the whole horizon (identity).
+TEST_F(ProxMpcControllerTest, PredictiveFillPropagatesObstacleAndKeepsIdentity)
+{
+  auto c = makeConfigured(
+  {
+    rclcpp::Parameter("FollowPath.np", 5),
+    rclcpp::Parameter("FollowPath.nc", 5),
+    rclcpp::Parameter("FollowPath.max_obstacles", 1),
+    rclcpp::Parameter("FollowPath.predict_obstacles", true),
+    rclcpp::Parameter("FollowPath.dynamic_speed_threshold", 0.05),
+    rclcpp::Parameter("FollowPath.robot_radius", 0.5),
+    rclcpp::Parameter("FollowPath.safety_margin", 0.1),
+  });
+  const std::size_t np = 5;
+  const std::size_t k = 1;
+  const double dt = 0.1;
+  const double vx = 1.0;
+  const rclcpp::Time now(1000, 0, RCL_ROS_TIME);
+
+  // Obstacle at (2,0) moving +x at 1 m/s, radius 0.2; stamp == now so age = 0.
+  c->injectObstacles(makeObstacleMsg(now, 2.0, 0.0, vx, 0.0, 0.2));
+
+  MatrixXd reference = MatrixXd::Zero(static_cast<Eigen::Index>(np + 1), c->nDim());
+  for (std::size_t i = 0; i <= np; ++i) {
+    reference(static_cast<Eigen::Index>(i), 0) = static_cast<double>(i) * 0.2;  // along +x
+  }
+  MatrixXd obs(static_cast<Eigen::Index>(np * k), 3);
+  c->fillObstacles(reference, obs, now);
+
+  double prev_x = -1.0;
+  for (std::size_t node = 0; node < np; ++node) {
+    const double dt_k = static_cast<double>(node + 1) * dt;
+    const Eigen::Index row = static_cast<Eigen::Index>(node * k);
+    EXPECT_NEAR(obs(row, 0), 2.0 + vx * dt_k, 1e-9);    // position + velocity*dt_k
+    EXPECT_NEAR(obs(row, 1), 0.0, 1e-9);
+    EXPECT_NEAR(obs(row, 2), 0.5 + 0.2 + 0.1, 1e-9);    // robot + obstacle radius + margin
+    EXPECT_GT(obs(row, 0), prev_x);                     // identity: one object advancing +x
+    prev_x = obs(row, 0);
+  }
+}
+
+// The hybrid fill keeps a static costmap obstacle in a remaining slot while a
+// dynamic track occupies the reserved slot.
+TEST_F(ProxMpcControllerTest, HybridFillKeepsStaticObstacle)
+{
+  auto c = makeConfigured(
+  {
+    rclcpp::Parameter("FollowPath.np", 2),
+    rclcpp::Parameter("FollowPath.nc", 2),
+    rclcpp::Parameter("FollowPath.max_obstacles", 2),
+    rclcpp::Parameter("FollowPath.max_dynamic_obstacles", 1),
+    rclcpp::Parameter("FollowPath.predict_obstacles", true),
+    rclcpp::Parameter("FollowPath.dynamic_speed_threshold", 0.05),
+    rclcpp::Parameter("FollowPath.robot_radius", 0.5),
+    rclcpp::Parameter("FollowPath.safety_margin", 0.1),
+    rclcpp::Parameter("FollowPath.obstacle_cluster_radius", 0.3),
+  });
+  const std::size_t k = 2;
+  const rclcpp::Time now(1000, 0, RCL_ROS_TIME);
+
+  // A static lethal block near node 0's reference position.
+  fillCost(1.0, 0.8, 1.3, 1.2, nav2_costmap_2d::LETHAL_OBSTACLE);
+  // A dynamic obstacle far away, so its exclusion disc does not cover the block.
+  c->injectObstacles(makeObstacleMsg(now, 5.0, 5.0, 1.0, 0.0, 0.2));
+
+  MatrixXd reference = MatrixXd::Zero(3, c->nDim());
+  reference(1, 0) = 1.15; reference(1, 1) = 1.0;     // node 0 near the static block
+  reference(2, 0) = 1.15; reference(2, 1) = 1.0;
+
+  MatrixXd obs(static_cast<Eigen::Index>(2 * k), 3);
+  c->fillObstacles(reference, obs, now);
+
+  // Slot 0 (node 0) is the propagated dynamic obstacle (far, x > 5).
+  EXPECT_GT(obs(0, 0), 5.0);
+  // Slot 1 (node 0) is the static block from the costmap.
+  EXPECT_LT(obs(1, 0), prox_mpc::MPC::kObsFarSentinel);
+  EXPECT_NEAR(obs(1, 0), 1.15, 0.25);
+  EXPECT_NEAR(obs(1, 1), 1.0, 0.25);
+  EXPECT_NEAR(obs(1, 2), 0.5 + 0.1, kTol);           // static d_safe = robot_radius + margin
+}
+
+// A tracked-obstacle message older than obstacle_timeout falls back to the
+// costmap-only fill, byte-for-byte equal to reduceCostmap().
+TEST_F(ProxMpcControllerTest, StalenessFallbackRestoresCostmapOnly)
+{
+  auto c = makeConfigured(
+  {
+    rclcpp::Parameter("FollowPath.np", 2),
+    rclcpp::Parameter("FollowPath.nc", 2),
+    rclcpp::Parameter("FollowPath.max_obstacles", 2),
+    rclcpp::Parameter("FollowPath.predict_obstacles", true),
+    rclcpp::Parameter("FollowPath.obstacle_timeout", 0.5),
+    rclcpp::Parameter("FollowPath.dynamic_speed_threshold", 0.05),
+    rclcpp::Parameter("FollowPath.robot_radius", 3.0),
+    rclcpp::Parameter("FollowPath.safety_margin", 0.1),
+    rclcpp::Parameter("FollowPath.obstacle_cluster_radius", 0.3),
+  });
+  const std::size_t k = 2;
+  const rclcpp::Time now(1000, 0, RCL_ROS_TIME);
+  const rclcpp::Time stale = now - rclcpp::Duration::from_seconds(1.0);  // > timeout
+
+  fillCost(1.0, 0.0, 1.3, 0.3, nav2_costmap_2d::LETHAL_OBSTACLE);
+  // Fresh-looking content but a stale stamp; if used it would dominate slot 0.
+  c->injectObstacles(makeObstacleMsg(stale, 1.15, 0.15, 1.0, 0.0, 0.2));
+
+  MatrixXd reference = MatrixXd::Zero(3, c->nDim());
+  reference(1, 0) = 1.15; reference(1, 1) = 0.15;
+  reference(2, 0) = 100.0; reference(2, 1) = 100.0;    // out of grid
+
+  MatrixXd obs_fill(static_cast<Eigen::Index>(2 * k), 3);
+  c->fillObstacles(reference, obs_fill, now);
+  MatrixXd obs_reduce(static_cast<Eigen::Index>(2 * k), 3);
+  c->reduceCostmap(reference, obs_reduce);
+
+  for (Eigen::Index r = 0; r < obs_fill.rows(); ++r) {
+    EXPECT_NEAR(obs_fill(r, 0), obs_reduce(r, 0), kTol);
+    EXPECT_NEAR(obs_fill(r, 1), obs_reduce(r, 1), kTol);
+    EXPECT_NEAR(obs_fill(r, 2), obs_reduce(r, 2), kTol);
+  }
+}
+
+// With predict_obstacles off, the fill ignores even a fresh tracked-obstacle
+// message and reproduces the costmap-only result.
+TEST_F(ProxMpcControllerTest, PredictDisabledIgnoresTrackedObstacles)
+{
+  auto c = makeConfigured(
+  {
+    rclcpp::Parameter("FollowPath.np", 2),
+    rclcpp::Parameter("FollowPath.nc", 2),
+    rclcpp::Parameter("FollowPath.max_obstacles", 2),
+    rclcpp::Parameter("FollowPath.predict_obstacles", false),
+    rclcpp::Parameter("FollowPath.robot_radius", 3.0),
+  });
+  const std::size_t k = 2;
+  const rclcpp::Time now(1000, 0, RCL_ROS_TIME);
+
+  fillCost(1.0, 0.0, 1.3, 0.3, nav2_costmap_2d::LETHAL_OBSTACLE);
+  c->injectObstacles(makeObstacleMsg(now, 1.15, 0.15, 1.0, 0.0, 0.2));   // fresh, would dominate
+
+  MatrixXd reference = MatrixXd::Zero(3, c->nDim());
+  reference(1, 0) = 1.15; reference(1, 1) = 0.15;
+  reference(2, 0) = 100.0; reference(2, 1) = 100.0;
+
+  MatrixXd obs_fill(static_cast<Eigen::Index>(2 * k), 3);
+  c->fillObstacles(reference, obs_fill, now);
+  MatrixXd obs_reduce(static_cast<Eigen::Index>(2 * k), 3);
+  c->reduceCostmap(reference, obs_reduce);
+
+  for (Eigen::Index r = 0; r < obs_fill.rows(); ++r) {
+    EXPECT_NEAR(obs_fill(r, 0), obs_reduce(r, 0), kTol);
+    EXPECT_NEAR(obs_fill(r, 1), obs_reduce(r, 1), kTol);
+    EXPECT_NEAR(obs_fill(r, 2), obs_reduce(r, 2), kTol);
+  }
+}
+
+// The brake ramp seeds from the server-measured velocity, not the last command:
+// a cycle-1 solver failure while the robot is moving (last command still zero)
+// still ramps down from the measured speed instead of commanding an abrupt zero.
+TEST_F(ProxMpcControllerTest, SolverFailureBrakesFromMeasuredVelocity)
+{
+  auto c = makeConfigured(
+  {
+    rclcpp::Parameter("FollowPath.max_int_iter_qp", 1),
+    rclcpp::Parameter("FollowPath.max_ext_iter_qp", 1),
+    rclcpp::Parameter("FollowPath.max_iter_sqp", 1),
+    rclcpp::Parameter("FollowPath.max_solver_failures", 3),
+  });
+  c->activate();
+  c->setPlan(makeStraightPlan(31, 0.2));
+  ASSERT_NEAR(c->lastCmdV(), 0.0, kTol);   // last command is zero right after activate
+
+  geometry_msgs::msg::Twist measured;
+  measured.linear.x = 0.40;                // the robot is actually moving
+  const auto cmd = c->computeVelocityCommands(makePose(0.0, 0.0, 0.0), measured, nullptr);
+
+  ASSERT_NE(c->mpc()->qp_info.status, proxsuite::proxqp::QPSolverOutput::PROXQP_SOLVED);
+  // Ramp from the measured 0.40, not an abrupt 0 off the stale last command.
+  EXPECT_NEAR(cmd.twist.linear.x, 0.40 - kModelDecel * 0.1, 1e-6);
+}
+
+// Structurally invalid horizon sizing (np or nc < 1, or dt <= 0) fails configure
+// with a ControllerException rather than wrapping into an astronomical size_t
+// allocation or dividing by zero.
+TEST_F(ProxMpcControllerTest, ConfigureThrowsOnInvalidSizing)
+{
+  {
+    auto c = makeUnconfigured({rclcpp::Parameter("FollowPath.np", 0)});
+    EXPECT_THROW(
+      c->configure(node_, "FollowPath", tf_, costmap_ros_), nav2_core::ControllerException);
+  }
+  {
+    auto c = makeUnconfigured({rclcpp::Parameter("FollowPath.nc", -1)});
+    EXPECT_THROW(
+      c->configure(node_, "FollowPath", tf_, costmap_ros_), nav2_core::ControllerException);
+  }
+  {
+    auto c = makeUnconfigured({rclcpp::Parameter("FollowPath.dt", 0.0)});
+    EXPECT_THROW(
+      c->configure(node_, "FollowPath", tf_, costmap_ros_), nav2_core::ControllerException);
+  }
+}
+
+// Out-of-range tuning parameters are clamped (not fatal): the controller still
+// configures, and an observable clamp (max_obstacles < 0 -> 0) is applied.
+TEST_F(ProxMpcControllerTest, ConfigureClampsOutOfRangeTuning)
+{
+  std::shared_ptr<TestableProxMpcController> c;
+  ASSERT_NO_THROW(
+    c = makeConfigured(
+  {
+    rclcpp::Parameter("FollowPath.q_pos", -1.0),                    // negative weight -> floored
+    rclcpp::Parameter("FollowPath.w_weight", -5.0),
+    rclcpp::Parameter("FollowPath.cbf_gamma", 2.0),                 // > 1 -> clamped into (0, 1]
+    rclcpp::Parameter("FollowPath.costmap_cost_threshold", 999),    // > 254 -> clamped
+    rclcpp::Parameter("FollowPath.safety_margin", -0.2),            // < 0 -> floored
+    rclcpp::Parameter("FollowPath.robot_radius", -0.5),
+    rclcpp::Parameter("FollowPath.obstacle_cluster_radius", -0.3),
+    rclcpp::Parameter("FollowPath.max_solve_time", -1.0),           // < 0 -> 0 (disabled)
+    rclcpp::Parameter("FollowPath.max_obstacles", -3),              // < 0 -> 0 (observable)
+    }));
+  ASSERT_NE(c, nullptr);
+  EXPECT_EQ(c->mpc()->getMaxObs(), 0u);   // max_obstacles clamped to 0
+}
+
+// Tracked obstacles with a non-finite field or a negative radius (untrusted input)
+// are dropped before they reach the QP rows; the slots fall back to the
+// costmap-only fill (here an empty costmap, so every slot stays at the sentinel).
+TEST_F(ProxMpcControllerTest, NonFiniteObstacleIsDropped)
+{
+  auto c = makeConfigured(
+  {
+    rclcpp::Parameter("FollowPath.np", 2),
+    rclcpp::Parameter("FollowPath.nc", 2),
+    rclcpp::Parameter("FollowPath.max_obstacles", 1),
+    rclcpp::Parameter("FollowPath.predict_obstacles", true),
+    rclcpp::Parameter("FollowPath.dynamic_speed_threshold", 0.05),
+  });
+  const std::size_t k = 1;
+  const rclcpp::Time now(1000, 0, RCL_ROS_TIME);
+
+  auto msg = std::make_shared<prox_mpc_msgs::msg::ObstacleArray>();
+  msg->header.frame_id = "map";
+  msg->header.stamp = now;
+  prox_mpc_msgs::msg::Obstacle bad_pos;        // NaN position: dropped
+  bad_pos.id = 1;
+  bad_pos.position.x = std::numeric_limits<double>::quiet_NaN();
+  bad_pos.velocity.x = 1.0;
+  bad_pos.radius = 0.2;
+  prox_mpc_msgs::msg::Obstacle bad_radius;      // negative radius: dropped
+  bad_radius.id = 2;
+  bad_radius.position.x = 0.3;
+  bad_radius.velocity.x = 1.0;
+  bad_radius.radius = -1.0;
+  msg->obstacles.push_back(bad_pos);
+  msg->obstacles.push_back(bad_radius);
+  c->injectObstacles(msg);
+
+  MatrixXd reference = MatrixXd::Zero(3, c->nDim());
+  reference(1, 0) = 0.2;
+  reference(2, 0) = 0.4;
+
+  MatrixXd obs(static_cast<Eigen::Index>(2 * k), 3);
+  c->fillObstacles(reference, obs, now);
+
+  for (Eigen::Index r = 0; r < obs.rows(); ++r) {
+    EXPECT_NEAR(obs(r, 0), prox_mpc::MPC::kObsFarSentinel, kTol);
+  }
 }
 
 int main(int argc, char ** argv)

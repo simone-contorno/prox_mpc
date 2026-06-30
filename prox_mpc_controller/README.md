@@ -1,65 +1,87 @@
 # prox_mpc_controller
 
-A [Nav2](https://docs.nav2.org/) controller plugin built on
-[prox_mpc_core](../prox_mpc_core).
+A [Nav2](https://docs.nav2.org/) `nav2_core::Controller` plugin that drives a
+robot along the global plan by solving a nonlinear Model Predictive Control
+problem each control step, built on the [prox_mpc_core](../prox_mpc_core) SQP/QP
+engine.
 
-See [docs/architecture.md](docs/architecture.md) for the Nav2 integration design
-and [docs/control-law.md](docs/control-law.md) for the controller-side math
-(reference construction, costmap reduction, and the failure fallback).
+The plugin owns the ROS integration: it loads a `prox_mpc::Model` by name, builds
+the state and control reference from the global plan, reduces the local costmap
+(and, optionally, tracked dynamic obstacles) to the engine's obstacle triples,
+solves one SQP cycle, maps the first optimal control to a body `Twist`, and
+decelerates within the robot's limits when a solve fails.
+The engine math is unchanged and lives in the core.
 
-> **Status: skeleton.** This package satisfies the `nav2_core::Controller`
-> interface, registers as a plugin, and constructs a `prox_mpc::MPC` instance,
-> but `computeVelocityCommands()` is **not implemented yet** — it logs a warning
-> and commands zero velocity. This is the development surface for the MPC control
-> law (reference from the global plan, costmap-to-constraints mapping, solve,
-> publish the first control).
+This plugin is verified in simulation: it runs inside a live `controller_server`
+driving a TurtleBot3 waffle under a full Nav2 stack in Gazebo Harmonic (see
+[prox_mpc_demo/docs/nav2-simulation.md](../prox_mpc_demo/docs/nav2-simulation.md)).
+
+## Documentation
+
+- [docs/architecture.md](docs/architecture.md) — the Nav2 integration design:
+  responsibility split, the controller lifecycle, the per-cycle data flow, the
+  interfaces and QoS, the full parameter reference, and the two safety layers.
+- [docs/control-law.md](docs/control-law.md) — the controller-side math:
+  reference construction, costmap reduction, predictive obstacle propagation,
+  the deceleration fallback, speed limits, and the discrete-time CBF coupling.
+- Engine math is in the core: [NMPC/SQP/QP](../prox_mpc_core/docs/nmpc.md) and
+  [obstacle avoidance](../prox_mpc_core/docs/obstacle-avoidance.md).
+
+## Key Features
+
+- **NMPC behind `nav2_core::Controller`:** one SQP cycle per control step over the
+  ProxQP solver; linear models converge in a single QP solve.
+- **Model selected by configuration:** the vehicle model is loaded with
+  `pluginlib` (`model_plugin`, e.g. `prox_mpc_core/Bicycle` or
+  `prox_mpc_core/Unicycle`), so switching the robot model needs no code change.
+- **Plan-following reference:** arc-length sampling of the global plan with a
+  continuous (unwrapped) heading, a curvature-aware steering reference for the
+  bicycle, optional curvature-based cruise reduction, and goal-checker approach
+  easing.
+- **Two-layer obstacle avoidance:** a fast in-loop disc constraint built from the
+  local costmap (clustered, windowed scan) shapes the trajectory, and an exact
+  polygon-footprint check vetoes any command that would collide.
+- **Predictive (dynamic) obstacle avoidance (opt-in):** consumes tracked
+  obstacles, propagates each over the horizon at constant velocity, binds it to a
+  fixed constraint slot, and fills the remaining slots from the costmap (hybrid);
+  off by default, reproducing the costmap-only behavior bit-for-bit.
+- **Safe failure handling:** a non-converged or non-finite solve decelerates the
+  last command at the robot's limit and escalates to a Nav2 recovery after
+  `max_solver_failures` consecutive failures; `cancel()` ramps to a stop and
+  `setSpeedLimit()` applies a runtime bound.
+
+## Prerequisites
+
+- ROS 2 Jazzy.
+- [prox_mpc_core](../prox_mpc_core) and [prox_mpc_msgs](../prox_mpc_msgs)
+  (workspace packages).
+- Nav2: `nav2_core`, `nav2_costmap_2d`.
+- Eigen 3 and ProxQP / proxsuite (transitively, through the core).
 
 ## Build
 
-This package requires Nav2 (`nav2_core`, `nav2_costmap_2d`) and is therefore not
-built by the bundled overlay unless Nav2 is installed:
+This package requires Nav2, so it is not built by the core-only overlay unless
+Nav2 is installed:
 
 ```bash
 sudo apt install ros-$ROS_DISTRO-nav2-core ros-$ROS_DISTRO-nav2-costmap-2d
 
-colcon build --symlink-install --packages-select prox_mpc_core prox_mpc_controller
+colcon build --symlink-install --packages-select \
+  prox_mpc_msgs prox_mpc_core prox_mpc_controller
 source install/setup.bash
 ```
 
-## Configuration
+Confirm the plugin is discoverable:
 
-[config/prox_mpc_controller.yaml](config/prox_mpc_controller.yaml) is the single
-source of truth for the controller's parameters: the model plugin and its
-constants, the horizons and cost weights, the solver limits, and the
-obstacle-avoidance settings. The model is loaded by name through `pluginlib`
-(`model_plugin`, e.g. `prox_mpc_core/Bicycle`) and configured from `model_params`,
-so a different model can be selected without code changes.
-
-## Solver-failure handling
-
-The MPC core never commands a stop on its own: `MPC::solve` reports convergence
-through `qp_info.status` (equal to `PROXQP_SOLVED` only on success) and otherwise
-returns the last non-converged iterate unchanged.
-Detecting a failure and reacting safely is therefore the controller's job, so the
-deceleration policy stays decoupled from the SQP core.
-
-The planned policy is:
-
-1. Check `qp_info.status` after every `solve()`.
-2. On success, command the first control mapped through `Model::toTwist`.
-3. On failure, do **not** command a hard zero — that is an instantaneous,
-   dynamically infeasible stop. Instead ramp the last command toward zero at the
-   robot's deceleration limit (the model's velocity-rate bound), so the stop
-   respects the robot's limits. This is self-contained and does not assume a
-   downstream velocity smoother.
-4. Count consecutive failures; once `max_solver_failures` is exceeded, raise a
-   controller exception so the Nav2 behavior tree triggers a recovery (stop and
-   replan) rather than crawling on a decaying command.
+```bash
+ros2 plugin list nav2_core::Controller   # lists prox_mpc_controller::ProxMpcController
+```
 
 ## Use in a Nav2 stack
 
-Once the control law is implemented, select the plugin in your controller-server
-parameters:
+Select the plugin in the `controller_server` parameters and load its settings
+from [config/prox_mpc_controller.yaml](config/prox_mpc_controller.yaml), the
+single source of truth for the controller's parameters:
 
 ```yaml
 controller_server:
@@ -67,7 +89,53 @@ controller_server:
     controller_plugins: ["FollowPath"]
     FollowPath:
       plugin: "prox_mpc_controller::ProxMpcController"
+      # model, horizons, weights, solver limits, and obstacle settings:
+      # see config/prox_mpc_controller.yaml and docs/architecture.md.
 ```
 
-The plugin class is exported to `nav2_core` via
+The plugin class is exported to `nav2_core` through
 [prox_mpc_controller_plugin.xml](prox_mpc_controller_plugin.xml).
+The full parameter and interface reference is in
+[docs/architecture.md](docs/architecture.md).
+
+For an end-to-end, runnable Gazebo + Nav2 bring-up (baseline and predictive),
+see [prox_mpc_demo](../prox_mpc_demo) and its
+[Nav2 simulation guide](../prox_mpc_demo/docs/nav2-simulation.md).
+
+## Testing
+
+The package ships a GoogleTest suite that brings up a `LifecycleNode`, a `tf2`
+buffer, and a `Costmap2DROS`, then drives every `nav2_core::Controller` method and
+every fail-safe branch (empty plan, missing transform, solver failure, non-finite
+pose/command, footprint veto, cancel ramp) through the plugin's public surface:
+
+```bash
+colcon test --packages-select prox_mpc_controller
+colcon test-result --all --verbose
+```
+
+The non-finite-command branch is exercised with a fault-injection model from
+[prox_mpc_test_models](../prox_mpc_test_models), loaded through the same
+`pluginlib` path as the production models.
+`uncrustify` is the enforced C++ formatter; `cpplint` and `ament_copyright` are
+disabled (single formatter, and a short SPDX header per file with the full text in
+[LICENSE](../LICENSE)).
+
+## Troubleshooting
+
+- **Plugin not listed by `ros2 plugin list nav2_core::Controller`:** the overlay
+  is not sourced, or the package failed to build against Nav2.
+- **`controller_server` aborts at configure with a model-load error:** the
+  `model_plugin` name is wrong or its package is not on the overlay; the valid
+  bundled names are `prox_mpc_core/Bicycle` and `prox_mpc_core/Unicycle`.
+- **Robot rotates in place instead of translating:** the cruise speed samples the
+  reference too close to the robot; raise `desired_linear_vel` toward the model's
+  speed bound (see the config notes in the
+  [Nav2 simulation guide](../prox_mpc_demo/docs/nav2-simulation.md)).
+- **`NoValidControl` recoveries:** the QP is not converging within the configured
+  iteration caps for the horizon and weights; review `docs/control-law.md`.
+
+## License
+
+[Apache-2.0](../LICENSE).
+Each source file carries a short `SPDX-License-Identifier: Apache-2.0` header.

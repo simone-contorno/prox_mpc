@@ -3,9 +3,11 @@
 <package format="3">
   <name>prox_mpc_controller</name>
   <version>0.1.0</version>
-  <description>Nav2 controller plugin built on the ProxMPC core. Skeleton: the
-  plugin satisfies the nav2_core::Controller interface and wires up the solver,
-  while the MPC control law is under development.</description>
+  <description>Nav2 nav2_core::Controller plugin built on the ProxMPC core: it
+  builds the reference from the global plan, reduces the local costmap (and,
+  optionally, tracked dynamic obstacles) to the solver's constraints, solves one
+  SQP cycle per control step, and decelerates safely on a failed solve. Verified
+  in simulation under a full Nav2 stack.</description>
   <maintainer email="simone.contorno@outlook.it">Simone Contorno</maintainer>
   <license>Apache-2.0</license>
 
@@ -18,15 +20,18 @@
   <depend>nav_msgs</depend>
   <depend>pluginlib</depend>
   <depend>prox_mpc_core</depend>
-  <depend>proxsuite</depend>
+  <depend>prox_mpc_msgs</depend>
+  <depend version_gte="0.6.5">proxsuite</depend>
   <depend>rclcpp</depend>
   <depend>rclcpp_lifecycle</depend>
   <depend>tf2</depend>
   <depend>tf2_ros</depend>
+  <depend>visualization_msgs</depend>
 
   <test_depend>ament_cmake_gtest</test_depend>
   <test_depend>ament_lint_auto</test_depend>
   <test_depend>ament_lint_common</test_depend>
+  <test_depend>prox_mpc_test_models</test_depend>
 
   <export>
     <build_type>ament_cmake</build_type>

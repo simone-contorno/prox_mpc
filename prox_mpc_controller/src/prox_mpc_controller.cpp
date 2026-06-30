@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstdint>
 #include <limits>
 #include <map>
 #include <mutex>
@@ -14,6 +15,7 @@
 #include <tuple>
 #include <vector>
 
+#include <geometry_msgs/msg/point.hpp>
 #include <geometry_msgs/msg/transform_stamped.hpp>
 #include <nav2_core/controller_exceptions.hpp>
 #include <nav2_costmap_2d/cost_values.hpp>
@@ -31,6 +33,14 @@ constexpr double kCancelStopEpsilon = 0.01;
 /// Upper bound on the costmap scan half-window [cells] to keep the per-cycle cost
 /// bounded on constrained hardware.
 constexpr int kMaxScanHalfWidth = 50;
+/// Minimum strictly-positive cost weight, keeping the QP Hessian positive definite
+/// (a negative weight would make the sub-problem non-convex).
+constexpr double kMinCostWeight = 1e-9;
+/// Discrete-time CBF rate floor; the rate must lie in (0, 1] (1.0 = pointwise term).
+constexpr double kMinCbfGamma = 1e-3;
+/// Largest costmap cost still treated as an obstacle threshold (255 = NO_INFORMATION,
+/// handled separately; a higher threshold would silently disable avoidance).
+constexpr int kMaxCostThreshold = 254;
 
 /// Planar yaw from a quaternion.
 double quat_yaw(const geometry_msgs::msg::Quaternion & q)
@@ -84,32 +94,122 @@ void ProxMpcController::configure(
   auto node = parent.lock();
   clock_ = node->get_clock();
 
+  /* Parameter-validation helpers: out-of-range tuning values are clamped and
+   * warned (non-fatal, to keep the controller available), matching the predictive
+   * clamps; structurally invalid horizon sizing is fatal and throws below. */
+  auto clamp_low = [this](const char * name, double & v, double lo) {
+      if (v < lo) {
+        RCLCPP_WARN(logger_, "%s %.3f below %.3f; clamping.", name, v, lo);
+        v = lo;
+      }
+    };
+  auto clamp_range = [this](const char * name, double & v, double lo, double hi) {
+      if (v < lo || v > hi) {
+        const double c = std::clamp(v, lo, hi);
+        RCLCPP_WARN(
+          logger_, "%s %.3f outside [%.3f, %.3f]; clamping to %.3f.", name, v, lo, hi, c);
+        v = c;
+      }
+    };
+
   /* Parameters (declared under the plugin instance namespace, e.g. FollowPath.*). */
   const std::string p = plugin_name_ + ".";
   const std::string model_plugin =
     node->declare_parameter<std::string>(p + "model_plugin", "prox_mpc_core/Bicycle");
   const double model_l = node->declare_parameter<double>(p + "model_params.L", 1.6);
-  np_ = static_cast<std::size_t>(node->declare_parameter<int>(p + "np", 20));
-  nc_ = static_cast<std::size_t>(node->declare_parameter<int>(p + "nc", 20));
+
+  /* Horizon sizing and step are structural: np/nc below 1 wrap to an astronomical
+   * size_t allocation and dt <= 0 divides by zero, so fail configure outright. */
+  const int np_param = node->declare_parameter<int>(p + "np", 20);
+  const int nc_param = node->declare_parameter<int>(p + "nc", 20);
   dt_ = node->declare_parameter<double>(p + "dt", 0.1);
+  if (np_param < 1 || nc_param < 1 || dt_ <= 0.0) {
+    throw nav2_core::ControllerException(
+            "ProxMpcController: np >= 1, nc >= 1, dt > 0 required (got np=" +
+            std::to_string(np_param) + ", nc=" + std::to_string(nc_param) + ", dt=" +
+            std::to_string(dt_) + ")");
+  }
+  np_ = static_cast<std::size_t>(np_param);
+  nc_ = static_cast<std::size_t>(nc_param);
+
   desired_linear_vel_ = node->declare_parameter<double>(p + "desired_linear_vel", 1.0);
-  const double q_pos = node->declare_parameter<double>(p + "q_pos", 10.0);
-  const double q_theta = node->declare_parameter<double>(p + "q_theta", 1.0);
-  const double s_factor = node->declare_parameter<double>(p + "s_factor", 2.0);
-  const double r_weight = node->declare_parameter<double>(p + "r_weight", 0.1);
-  const double w_weight = node->declare_parameter<double>(p + "w_weight", 100.0);
+  curvature_gain_ = node->declare_parameter<double>(p + "curvature_gain", 0.0);
+
+  /* Cost weights must be non-negative: a negative weight makes the QP Hessian
+   * indefinite (non-convex sub-problem). Floor them at a small positive value. */
+  double q_pos = node->declare_parameter<double>(p + "q_pos", 10.0);
+  double q_theta = node->declare_parameter<double>(p + "q_theta", 1.0);
+  double s_factor = node->declare_parameter<double>(p + "s_factor", 2.0);
+  double r_weight = node->declare_parameter<double>(p + "r_weight", 0.1);
+  double w_weight = node->declare_parameter<double>(p + "w_weight", 100.0);
+  clamp_low("q_pos", q_pos, kMinCostWeight);
+  clamp_low("q_theta", q_theta, kMinCostWeight);
+  clamp_low("s_factor", s_factor, kMinCostWeight);
+  clamp_low("r_weight", r_weight, kMinCostWeight);
+  clamp_low("w_weight", w_weight, kMinCostWeight);
+
   const int max_int_iter_qp = node->declare_parameter<int>(p + "max_int_iter_qp", 1500);
   const int max_ext_iter_qp = node->declare_parameter<int>(p + "max_ext_iter_qp", 10000);
   const int max_iter_sqp = node->declare_parameter<int>(p + "max_iter_sqp", 100);
+  /* Optional wall-clock budget [s] for the whole SQP loop (0 = disabled, iteration
+   * caps only). On timeout the solve reports non-convergence and this cycle brakes. */
+  double max_solve_time = node->declare_parameter<double>(p + "max_solve_time", 0.0);
+  clamp_low("max_solve_time", max_solve_time, 0.0);
   const bool qp_type = node->declare_parameter<bool>(p + "qp_type", false);
   const bool guess = node->declare_parameter<bool>(p + "guess", true);
   max_solver_failures_ = node->declare_parameter<int>(p + "max_solver_failures", 3);
   max_obstacles_ = node->declare_parameter<int>(p + "max_obstacles", 1);
+  if (max_obstacles_ < 0) {
+    RCLCPP_WARN(logger_, "max_obstacles %d < 0; clamping to 0.", max_obstacles_);
+    max_obstacles_ = 0;
+  }
   safety_margin_ = node->declare_parameter<double>(p + "safety_margin", 0.1);
   robot_radius_ = node->declare_parameter<double>(p + "robot_radius", 0.5);
+  clamp_low("safety_margin", safety_margin_, 0.0);
+  clamp_low("robot_radius", robot_radius_, 0.0);
   cbf_gamma_ = node->declare_parameter<double>(p + "cbf_gamma", 1.0);
+  clamp_range("cbf_gamma", cbf_gamma_, kMinCbfGamma, 1.0);
   costmap_cost_threshold_ = node->declare_parameter<int>(p + "costmap_cost_threshold", 200);
+  if (costmap_cost_threshold_ < 0 || costmap_cost_threshold_ > kMaxCostThreshold) {
+    const int c = std::clamp(costmap_cost_threshold_, 0, kMaxCostThreshold);
+    RCLCPP_WARN(
+      logger_, "costmap_cost_threshold %d outside [0, %d]; clamping to %d.",
+      costmap_cost_threshold_, kMaxCostThreshold, c);
+    costmap_cost_threshold_ = c;
+  }
   obstacle_cluster_radius_ = node->declare_parameter<double>(p + "obstacle_cluster_radius", 0.3);
+  clamp_low("obstacle_cluster_radius", obstacle_cluster_radius_, 0.0);
+  max_obstacle_scan_cells_ =
+    node->declare_parameter<int>(p + "max_obstacle_scan_cells", kMaxScanHalfWidth);
+
+  /* Predictive (dynamic) obstacle avoidance. predict_obstacles off reproduces the
+   * costmap-only behavior bit-for-bit; the rest size the predictive + hybrid fill. */
+  predict_obstacles_ = node->declare_parameter<bool>(p + "predict_obstacles", false);
+  obstacle_topic_ =
+    node->declare_parameter<std::string>(p + "obstacle_topic", "tracked_obstacles");
+  obstacle_timeout_ = node->declare_parameter<double>(p + "obstacle_timeout", 0.5);
+  dynamic_speed_threshold_ =
+    node->declare_parameter<double>(p + "dynamic_speed_threshold", 0.1);
+  prediction_uncertainty_growth_ =
+    node->declare_parameter<double>(p + "prediction_uncertainty_growth", 0.0);
+  max_dynamic_obstacles_ = node->declare_parameter<int>(p + "max_dynamic_obstacles", 2);
+  max_dynamic_obstacle_radius_ =
+    node->declare_parameter<double>(p + "max_dynamic_obstacle_radius", 0.0);
+
+  /* Opt-in solver telemetry (off by default); publishes only-when-subscribed. */
+  publish_diagnostics_ = node->declare_parameter<bool>(p + "publish_diagnostics", false);
+
+  /* Validate the predictive parameters; clamp out-of-range values (non-fatal, to
+   * keep the controller available) and warn, matching the cruise-speed clamp. */
+  clamp_low("obstacle_timeout", obstacle_timeout_, 0.0);
+  clamp_low("dynamic_speed_threshold", dynamic_speed_threshold_, 0.0);
+  clamp_low("prediction_uncertainty_growth", prediction_uncertainty_growth_, 0.0);
+  clamp_low("max_dynamic_obstacle_radius", max_dynamic_obstacle_radius_, 0.0);
+  if (max_dynamic_obstacles_ < 0) {
+    RCLCPP_WARN(logger_, "max_dynamic_obstacles %d < 0; clamping to 0.", max_dynamic_obstacles_);
+    max_dynamic_obstacles_ = 0;
+  }
+
   const std::string log_level = node->declare_parameter<std::string>(p + "log_level", "info");
 
   /* Keep the plugin's own ProxMpcController logger (do not adopt the server's),
@@ -129,6 +229,7 @@ void ProxMpcController::configure(
   }
   const std::map<std::string, double> model_params{{"L", model_l}};
   model_->configure(model_params);
+  wheelbase_ = model_l;
   n_ = model_->getN();
   m_ = model_->getM();
 
@@ -178,10 +279,34 @@ void ProxMpcController::configure(
   mpc_->setMaxIntIterQP(static_cast<std::size_t>(max_int_iter_qp));
   mpc_->setMaxExtIterQP(static_cast<std::size_t>(max_ext_iter_qp));
   mpc_->setMaxIterSQP(static_cast<std::size_t>(max_iter_sqp));
+  mpc_->setMaxSolveTime(max_solve_time);
   mpc_->setGuess(guess);
   mpc_->setQPtype(qp_type);
+  mpc_->setCbfGamma(cbf_gamma_);
   mpc_->setMaxObs(k_obs);
   mpc_->init(model_);
+
+  /* Predicted-trajectory publisher (visualization): the NMPC horizon as a Path in
+   * the costmap global frame, distinct from the Nav2 global plan. */
+  traj_pub_ = node->create_publisher<nav_msgs::msg::Path>("prox_mpc_local_plan", 1);
+
+  /* Predictive obstacle avoidance: subscribe to the tracked-obstacle array
+   * (reliable, depth 5) and create the optional RViz marker publisher. Created
+   * only when enabled so the costmap-only default carries no extra interfaces. */
+  if (predict_obstacles_) {
+    obstacle_sub_ = node->create_subscription<prox_mpc_msgs::msg::ObstacleArray>(
+      obstacle_topic_, rclcpp::QoS(rclcpp::KeepLast(5)).reliable(),
+      std::bind(&ProxMpcController::obstacleCallback, this, std::placeholders::_1));
+    marker_pub_ = node->create_publisher<visualization_msgs::msg::MarkerArray>(
+      "prox_mpc_predicted_obstacles", 1);
+  }
+
+  /* Opt-in per-cycle solver telemetry, namespaced under the plugin so it reads as
+   * <plugin>/diagnostics (e.g. FollowPath/diagnostics). Reliable, depth 10. */
+  if (publish_diagnostics_) {
+    diag_pub_ = node->create_publisher<prox_mpc_msgs::msg::SolverDiagnostics>(
+      plugin_name_ + "/diagnostics", rclcpp::QoS(10).reliable());
+  }
 
   /* Re-apply a speed limit received before the model was available. */
   if (speed_limit_ != 0.0) {setSpeedLimit(speed_limit_, speed_limit_is_percentage_);}
@@ -197,6 +322,15 @@ void ProxMpcController::cleanup()
   mpc_.reset();
   model_.reset();
   model_loader_.reset();
+  traj_pub_.reset();
+  marker_pub_.reset();
+  diag_pub_.reset();
+  obstacle_sub_.reset();
+  {
+    std::lock_guard<std::mutex> lock(obstacles_mutex_);
+    latest_obstacles_.reset();
+  }
+  predicted_obstacles_.clear();
   costmap_ros_.reset();
   tf_.reset();
 }
@@ -204,15 +338,31 @@ void ProxMpcController::cleanup()
 void ProxMpcController::activate()
 {
   failure_count_ = 0;
+  veto_count_ = 0;
   steering_state_ = 0.0;
   last_cmd_v_ = 0.0;
   last_cmd_w_ = 0.0;
   cancelling_ = false;
+  have_last_cycle_ = false;
+  if (traj_pub_) {traj_pub_->on_activate();}
+  if (marker_pub_) {marker_pub_->on_activate();}
+  if (diag_pub_) {diag_pub_->on_activate();}
   RCLCPP_INFO(logger_, "Activating ProxMpcController '%s'.", plugin_name_.c_str());
 }
 
 void ProxMpcController::deactivate()
 {
+  if (traj_pub_) {traj_pub_->on_deactivate();}
+  if (marker_pub_) {marker_pub_->on_deactivate();}
+  if (diag_pub_) {diag_pub_->on_deactivate();}
+  /* Drop cached perception so a re-activated controller does not act on a tracked
+   * obstacle observed before deactivation; it resumes costmap-only until a fresh
+   * message arrives (the staleness timeout would also catch this). */
+  {
+    std::lock_guard<std::mutex> lock(obstacles_mutex_);
+    latest_obstacles_.reset();
+  }
+  predicted_obstacles_.clear();
   RCLCPP_INFO(logger_, "Deactivating ProxMpcController '%s'.", plugin_name_.c_str());
 }
 
@@ -227,17 +377,18 @@ geometry_msgs::msg::TwistStamped ProxMpcController::computeVelocityCommands(
   const geometry_msgs::msg::Twist & velocity,
   nav2_core::GoalChecker * goal_checker)
 {
-  (void)velocity;
-  (void)goal_checker;
-
   geometry_msgs::msg::TwistStamped cmd;
   cmd.header.frame_id = costmap_ros_->getBaseFrameID();
   cmd.header.stamp = clock_->now();
 
-  /* Deceleration ramp shared by the cancel, solver-failure, and veto paths. */
+  /* Deceleration ramp shared by the cancel, solver-failure, and veto paths. It
+   * ramps down from the server-measured velocity (RPP/MPPI style) so the brake
+   * tracks the robot's actual speed rather than the last command, which may be
+   * stale (for example a cycle-1 failure while already moving). A non-finite
+   * measured velocity yields a safe zero through brake_toward. */
   auto make_brake = [&]() -> geometry_msgs::msg::TwistStamped {
-      last_cmd_v_ = brake_toward(last_cmd_v_, a_dec_lin_, dt_);
-      last_cmd_w_ = brake_toward(last_cmd_w_, a_dec_ang_, dt_);
+      last_cmd_v_ = brake_toward(velocity.linear.x, a_dec_lin_, dt_);
+      last_cmd_w_ = brake_toward(velocity.angular.z, a_dec_ang_, dt_);
       cmd.twist.linear.x = last_cmd_v_;
       cmd.twist.angular.z = last_cmd_w_;
       return cmd;
@@ -350,18 +501,74 @@ geometry_msgs::msg::TwistStamped ProxMpcController::computeVelocityCommands(
       th = std::atan2(gy[i + 1] - gy[i], gx[i + 1] - gx[i]);
     };
 
-  /* Build the state and control references. The steering channel of goal_x is
-   * left at zero (go-straight preference), matching the core reference setup. */
+  /* Ease the cruise speed inside the goal-checker xy tolerance so the robot
+   * settles into the goal region. Unmeasured tolerance fields come back as
+   * std::numeric_limits<double>::lowest() (negative), so accept only finite,
+   * positive values. The pointer is read but never retained. */
+  if (goal_checker != nullptr) {
+    geometry_msgs::msg::Pose pose_tol;
+    geometry_msgs::msg::Twist vel_tol;
+    if (goal_checker->getTolerances(pose_tol, vel_tol)) {
+      const double xy_tol = std::hypot(pose_tol.position.x, pose_tol.position.y);
+      if (std::isfinite(xy_tol) && pose_tol.position.x > 0.0 && pose_tol.position.y > 0.0) {
+        v_ref *= std::clamp(remaining / xy_tol, 0.0, 1.0);
+      }
+    }
+  }
+
+  /* Curvature-aware cruise reduction (inert when curvature_gain_ == 0): estimate
+   * the peak path curvature over the horizon from heading samples at the current
+   * cruise, then taper v_ref so high-curvature segments are sampled more slowly. */
+  if (curvature_gain_ > 0.0 && v_ref > 0.0) {
+    const double ds = v_ref * dt_;
+    double prev_th = ctheta;
+    double max_kappa = 0.0;
+    for (std::size_t k = 0; k <= np_; ++k) {
+      double sx = 0.0;
+      double sy = 0.0;
+      double sth = 0.0;
+      sample(s0 + v_ref * static_cast<double>(k) * dt_, sx, sy, sth);
+      const double dth = std::remainder(sth - prev_th, 2.0 * M_PI);
+      if (ds > 1e-9) {max_kappa = std::max(max_kappa, std::abs(dth) / ds);}
+      prev_th += dth;
+    }
+    v_ref /= 1.0 + curvature_gain_ * max_kappa;
+  }
+
+  /* Build the state and control references. Heading is kept continuous (unwrapped
+   * relative to the robot heading, then node to node) so the QP tracking error
+   * never wraps near +/-pi. */
   MatrixXd goal_x = MatrixXd::Zero(np_ + 1, n_);
+  std::vector<double> th_cont(np_ + 1, 0.0);
+  double prev_th = ctheta;
   for (std::size_t k = 0; k <= np_; ++k) {
     double x = 0.0;
     double y = 0.0;
     double th = 0.0;
     sample(s0 + v_ref * static_cast<double>(k) * dt_, x, y, th);
+    th = prev_th + std::remainder(th - prev_th, 2.0 * M_PI);
+    prev_th = th;
+    th_cont[k] = th;
     goal_x(k, 0) = x;
     goal_x(k, 1) = y;
     goal_x(k, 2) = th;
   }
+
+  /* Bicycle steering reference: pre-position the wheel to the per-node path
+   * curvature kappa = dtheta/ds, delta_ref = atan(L * kappa). Models without a
+   * steering state (n_ == 3) keep the go-straight default (channel left at zero). */
+  if (n_ > 3) {
+    const double ds = v_ref * dt_;
+    for (std::size_t k = 0; k <= np_; ++k) {
+      double kappa = 0.0;
+      if (ds > 1e-9) {
+        kappa = (k < np_) ? (th_cont[k + 1] - th_cont[k]) / ds :
+          (th_cont[k] - th_cont[k - 1]) / ds;
+      }
+      goal_x(k, 3) = std::atan(wheelbase_ * kappa);
+    }
+  }
+
   MatrixXd goal_u = MatrixXd::Zero(nc_, m_);
   for (std::size_t k = 0; k < nc_; ++k) {
     goal_u(k, 0) = v_ref;
@@ -374,24 +581,47 @@ geometry_msgs::msg::TwistStamped ProxMpcController::computeVelocityCommands(
   state(2) = ctheta;
   if (n_ > 3) {state(3) = steering_state_;}
 
-  /* Reduce the local costmap to obstacle triples for this cycle. */
+  /* Fill the per-node obstacle triples for this cycle: predictive + hybrid when
+   * enabled and fresh tracking data is available, else costmap-only. */
   const std::size_t k_obs = mpc_->getMaxObs();
+  std::uint16_t num_active_obs = 0;
   if (k_obs > 0) {
     MatrixXd obs(static_cast<Eigen::Index>(np_ * k_obs), 3);
-    reduceCostmap(goal_x, obs);
+    fillObstacles(goal_x, obs, cmd.header.stamp);
     mpc_->setObs(obs);
+    /* Count filled (non-sentinel) slots at the current node (rows 0..k_obs-1). */
+    for (std::size_t s = 0; s < k_obs; ++s) {
+      if (obs(static_cast<Eigen::Index>(s), 0) < 0.5 * prox_mpc::MPC::kObsFarSentinel) {
+        ++num_active_obs;
+      }
+    }
   }
 
-  /* Solve one SQP cycle. */
+  /* Solve one SQP cycle, timing it with a steady clock for the real-time metric. */
   mpc_->setGoalX(goal_x);
   mpc_->setGoalU(goal_u);
   mpc_->setPose(state);
+  const auto t_solve0 = std::chrono::steady_clock::now();
   auto [x_sol, u_sol] = mpc_->solve();
+  const auto t_solve1 = std::chrono::steady_clock::now();
+  const double solve_ms =
+    std::chrono::duration<double, std::milli>(t_solve1 - t_solve0).count();
 
   const bool solved =
     (mpc_->qp_info.status == proxsuite::proxqp::QPSolverOutput::PROXQP_SOLVED);
+
+  /* Publish per-cycle telemetry before the gate's early returns, so every solve
+   * (including non-converged ones) is observable when diagnostics are enabled. */
+  publishDiagnostics(cmd.header.stamp, solve_ms, solved, num_active_obs);
+
   if (!solved) {return fail("solver did not converge");}
 
+  /* Defense-in-depth finiteness guard. In this architecture a PROXQP_SOLVED status
+   * normally implies a finite iterate (x_sol/u_sol are accumulated QP increments,
+   * not a divergent model rollout), but the check is kept so a non-finite state can
+   * never reach the footprint veto, poison steering_state_, or be published as the
+   * predicted trajectory. The command finiteness is still checked separately below
+   * because the model's toTwist mapping can be non-finite even for finite u0. */
   const VectorXd u0 = u_sol.row(0);
   if (!u0.allFinite() || !x_sol.row(1).allFinite()) {
     return fail("non-finite solver output");
@@ -407,11 +637,26 @@ geometry_msgs::msg::TwistStamped ProxMpcController::computeVelocityCommands(
       const double fcost = checker.footprintCostAtPose(
         x_sol(1, 0), x_sol(1, 1), x_sol(1, 2), footprint);
       if (fcost >= static_cast<double>(nav2_costmap_2d::INSCRIBED_INFLATED_OBSTACLE)) {
+        /* Escalate a persistent veto so a robot stuck behind a static obstacle one
+         * step ahead triggers the behavior-tree recovery instead of braking
+         * forever. The veto counter is kept separate from the solver-failure
+         * budget, so a single veto still does not trip recovery. */
+        veto_count_++;
+        if (veto_count_ > max_solver_failures_) {
+          throw nav2_core::NoValidControl(
+                  "ProxMpcController: footprint veto persisted beyond the budget");
+        }
         RCLCPP_WARN_THROTTLE(
           logger_, *clock_, 2000,
-          "ProxMpcController: footprint check vetoed the command; decelerating.");
+          "ProxMpcController: footprint check vetoed the command; decelerating "
+          "(veto %d/%d).", veto_count_, max_solver_failures_);
         return make_brake();
       }
+    } else {
+      RCLCPP_WARN_THROTTLE(
+        logger_, *clock_, 2000,
+        "ProxMpcController: footprint has %zu points (<3); polygon veto skipped this "
+        "cycle (the in-loop QP half-planes still apply).", footprint.size());
     }
   }
 
@@ -423,9 +668,35 @@ geometry_msgs::msg::TwistStamped ProxMpcController::computeVelocityCommands(
   }
 
   failure_count_ = 0;
+  veto_count_ = 0;
   if (n_ > 3) {steering_state_ = x_sol(1, 3);}
   last_cmd_v_ = twist.linear.x;
   last_cmd_w_ = twist.angular.z;
+
+  /* Publish the predicted NMPC trajectory (costmap global frame) for
+   * visualization, distinct from the Nav2 global plan. Skipped when unsubscribed. */
+  if (traj_pub_ && traj_pub_->get_subscription_count() > 0) {
+    nav_msgs::msg::Path traj;
+    traj.header.frame_id = global_frame;
+    traj.header.stamp = cmd.header.stamp;
+    traj.poses.reserve(static_cast<std::size_t>(x_sol.rows()));
+    for (Eigen::Index k = 0; k < x_sol.rows(); ++k) {
+      geometry_msgs::msg::PoseStamped ps;
+      ps.header = traj.header;
+      ps.pose.position.x = x_sol(k, 0);
+      ps.pose.position.y = x_sol(k, 1);
+      const double th = x_sol(k, 2);
+      ps.pose.orientation.z = std::sin(th / 2.0);
+      ps.pose.orientation.w = std::cos(th / 2.0);
+      traj.poses.push_back(ps);
+    }
+    traj_pub_->publish(traj);
+  }
+
+  /* Publish the predicted dynamic-obstacle trajectories for RViz (no-op unless
+   * the predictive fill ran and the debug topic has a subscriber). */
+  publishPredictedObstacleMarkers(cmd.header.stamp);
+
   cmd.twist = twist;
   return cmd;
 }
@@ -462,6 +733,7 @@ bool ProxMpcController::cancel()
 void ProxMpcController::reset()
 {
   failure_count_ = 0;
+  veto_count_ = 0;
   steering_state_ = 0.0;
   last_cmd_v_ = 0.0;
   last_cmd_w_ = 0.0;
@@ -469,10 +741,17 @@ void ProxMpcController::reset()
   plan_index_ = 0;
 }
 
-void ProxMpcController::reduceCostmap(const MatrixXd & reference, MatrixXd & obs)
+void ProxMpcController::obstacleCallback(prox_mpc_msgs::msg::ObstacleArray::ConstSharedPtr msg)
 {
+  std::lock_guard<std::mutex> lock(obstacles_mutex_);
+  latest_obstacles_ = msg;
+}
+
+void ProxMpcController::fillObstacles(
+  const MatrixXd & reference, MatrixXd & obs, const rclcpp::Time & now)
+{
+  predicted_obstacles_.clear();
   const std::size_t k_obs = static_cast<std::size_t>(max_obstacles_);
-  const double d_safe = robot_radius_ + safety_margin_;
 
   /* Default every slot to the far sentinel so unfilled ones stay non-binding. */
   for (Eigen::Index r = 0; r < obs.rows(); ++r) {
@@ -481,14 +760,185 @@ void ProxMpcController::reduceCostmap(const MatrixXd & reference, MatrixXd & obs
     obs(r, 2) = 0.0;
   }
 
+  /* Snapshot the latest tracked obstacles under the mutex. */
+  prox_mpc_msgs::msg::ObstacleArray::ConstSharedPtr msg;
+  if (predict_obstacles_) {
+    std::lock_guard<std::mutex> lock(obstacles_mutex_);
+    msg = latest_obstacles_;
+  }
+
+  /* Staleness fallback: with predictions off, no message, or a stale one, fill
+   * every slot from the costmap exactly as the costmap-only path does. */
+  double age = 0.0;
+  bool predictive = false;
+  if (predict_obstacles_ && msg) {
+    const rclcpp::Time stamp(msg->header.stamp, now.get_clock_type());
+    age = (now - stamp).seconds();
+    predictive = std::isfinite(age) && age >= 0.0 && age <= obstacle_timeout_;
+  }
+  if (!predictive) {
+    fillStaticObstacles(reference, obs, 0, {});
+    return;
+  }
+
+  /* Express obstacles in the costmap global frame the core solves in. A TF gap is
+   * not a control fault: degrade to costmap-only for this cycle. */
+  const std::string global_frame = costmap_ros_->getGlobalFrameID();
+  const std::string obs_frame = msg->header.frame_id;
+  double tx = 0.0;
+  double ty = 0.0;
+  double tyaw = 0.0;
+  if (!obs_frame.empty() && obs_frame != global_frame) {
+    try {
+      const geometry_msgs::msg::TransformStamped tfs =
+        tf_->lookupTransform(global_frame, obs_frame, tf2::TimePointZero);
+      tx = tfs.transform.translation.x;
+      ty = tfs.transform.translation.y;
+      tyaw = quat_yaw(tfs.transform.rotation);
+    } catch (const tf2::TransformException & ex) {
+      RCLCPP_WARN_THROTTLE(
+        logger_, *clock_, 2000,
+        "ProxMpcController: tracked-obstacle TF %s <- %s unavailable (%s); "
+        "costmap-only this cycle.", global_frame.c_str(), obs_frame.c_str(), ex.what());
+      fillStaticObstacles(reference, obs, 0, {});
+      return;
+    }
+  }
+  const double ct = std::cos(tyaw);
+  const double st = std::sin(tyaw);
+
+  /* Dynamic tracks (speed above the threshold) in the global frame, with a
+   * priority = closest approach to the reference trajectory over the horizon. */
+  struct DynObs
+  {
+    double x;
+    double y;
+    double vx;
+    double vy;
+    double radius;
+    std::uint32_t id;
+    double priority;
+  };
+  std::vector<DynObs> dyn;
+  dyn.reserve(msg->obstacles.size());
+  for (const auto & o : msg->obstacles) {
+    // Fail closed: the tracked-obstacle topic is untrusted input, so drop any
+    // ill-formed track (a non-finite field or a negative radius) before it is
+    // written into the QP rows, rather than relying only on the downstream
+    // solver guard.
+    if (!std::isfinite(o.position.x) || !std::isfinite(o.position.y) ||
+      !std::isfinite(o.velocity.x) || !std::isfinite(o.velocity.y) ||
+      !std::isfinite(o.radius) || o.radius < 0.0)
+    {
+      continue;
+    }
+    // Reject extended structure (walls) reported as a moving track: a large
+    // radius would inflate d_safe and erase real costmap cells. Leave it to the
+    // costmap fill. (0 = no limit.)
+    if (max_dynamic_obstacle_radius_ > 0.0 && o.radius > max_dynamic_obstacle_radius_) {continue;}
+    const double ox = tx + ct * o.position.x - st * o.position.y;
+    const double oy = ty + st * o.position.x + ct * o.position.y;
+    const double ovx = ct * o.velocity.x - st * o.velocity.y;
+    const double ovy = st * o.velocity.x + ct * o.velocity.y;
+    if (std::hypot(ovx, ovy) < dynamic_speed_threshold_) {continue;}  // costmap covers static
+    double best = std::numeric_limits<double>::max();
+    for (std::size_t node = 0; node < np_; ++node) {
+      const double dt_k = static_cast<double>(node + 1) * dt_ + age;
+      const double px = ox + ovx * dt_k;
+      const double py = oy + ovy * dt_k;
+      const double rx = reference(static_cast<Eigen::Index>(node + 1), 0);
+      const double ry = reference(static_cast<Eigen::Index>(node + 1), 1);
+      best = std::min(best, std::hypot(px - rx, py - ry));
+    }
+    dyn.push_back({ox, oy, ovx, ovy, o.radius, o.id, best});
+  }
+  std::sort(
+    dyn.begin(), dyn.end(), [](const DynObs & a, const DynObs & b) {
+      return a.priority < b.priority;
+      });
+
+  std::size_t n_dyn = std::min(dyn.size(), k_obs);
+  if (max_dynamic_obstacles_ >= 0) {
+    n_dyn = std::min(n_dyn, static_cast<std::size_t>(max_dynamic_obstacles_));
+  }
+
+  /* Propagate each selected obstacle over the horizon, binding slot j to obstacle
+   * j for every node so the half-planes track one object across the horizon. The
+   * clearance grows with prediction time as the constant-velocity assumption ages. */
+  std::vector<std::vector<std::array<double, 3>>> exclusions(np_);
+  predicted_obstacles_.resize(n_dyn);
+  for (std::size_t j = 0; j < n_dyn; ++j) {
+    predicted_obstacles_[j].id = dyn[j].id;
+    predicted_obstacles_[j].radius = dyn[j].radius;
+    predicted_obstacles_[j].positions.resize(np_);
+  }
+  for (std::size_t node = 0; node < np_; ++node) {
+    const double dt_k = static_cast<double>(node + 1) * dt_ + age;
+    for (std::size_t j = 0; j < n_dyn; ++j) {
+      const DynObs & d = dyn[j];
+      const double px = d.x + d.vx * dt_k;
+      const double py = d.y + d.vy * dt_k;
+      const double d_safe = robot_radius_ + d.radius + safety_margin_ +
+        prediction_uncertainty_growth_ * dt_k;
+      const Eigen::Index row = static_cast<Eigen::Index>(node * k_obs + j);
+      obs(row, 0) = px;
+      obs(row, 1) = py;
+      obs(row, 2) = d_safe;
+      /* Exclude the obstacle's CURRENT footprint from the static scan, not its
+       * predicted one: the local costmap is a now-snapshot, so the moving object's
+       * occupied cells sit at its current position. Excluding the current footprint
+       * at every node keeps the static fill from re-adding the same object the
+       * predictive half-plane already covers (the predicted cells are not in the
+       * snapshot, so excluding them would not de-duplicate anything). */
+      exclusions[node].push_back({d.x, d.y, d.radius + obstacle_cluster_radius_});
+      predicted_obstacles_[j].positions[node] = {px, py};
+    }
+  }
+
+  /* Hybrid: fill the remaining slots from the costmap (static clutter), excluding
+   * cells inside a dynamic footprint to avoid double-counting the moving object. */
+  if (n_dyn < k_obs) {
+    fillStaticObstacles(reference, obs, n_dyn, exclusions);
+  }
+}
+
+void ProxMpcController::reduceCostmap(const MatrixXd & reference, MatrixXd & obs)
+{
+  /* Default every slot to the far sentinel so unfilled ones stay non-binding. */
+  for (Eigen::Index r = 0; r < obs.rows(); ++r) {
+    obs(r, 0) = prox_mpc::MPC::kObsFarSentinel;
+    obs(r, 1) = prox_mpc::MPC::kObsFarSentinel;
+    obs(r, 2) = 0.0;
+  }
+  fillStaticObstacles(reference, obs, 0, {});
+}
+
+void ProxMpcController::fillStaticObstacles(
+  const MatrixXd & reference, MatrixXd & obs, std::size_t slot_begin,
+  const std::vector<std::vector<std::array<double, 3>>> & exclusions)
+{
+  const std::size_t k_obs = static_cast<std::size_t>(max_obstacles_);
+  if (slot_begin >= k_obs) {return;}
+  const std::size_t budget = k_obs - slot_begin;
+  const double d_safe = robot_radius_ + safety_margin_;
+
   auto * costmap = costmap_ros_->getCostmap();
   std::lock_guard<nav2_costmap_2d::Costmap2D::mutex_t> lock(*(costmap->getMutex()));
   const double res = costmap->getResolution();
   if (res <= 0.0) {return;}
 
   const double search_radius = d_safe + obstacle_cluster_radius_;
-  int win = static_cast<int>(std::ceil(search_radius / res));
-  if (win > kMaxScanHalfWidth) {win = kMaxScanHalfWidth;}
+  const int win_full = static_cast<int>(std::ceil(search_radius / res));
+  int win = win_full;
+  if (win > max_obstacle_scan_cells_) {
+    win = max_obstacle_scan_cells_;
+    RCLCPP_WARN_THROTTLE(
+      logger_, *clock_, 2000,
+      "ProxMpcController: obstacle scan window truncated to %d cells (search radius "
+      "needs %d); obstacles farther than %.2f m within d_safe are not passed to the "
+      "solver. Raise max_obstacle_scan_cells; the footprint veto remains the backstop.",
+      max_obstacle_scan_cells_, win_full, static_cast<double>(max_obstacle_scan_cells_) * res);
+  }
   const int size_x = static_cast<int>(costmap->getSizeInCellsX());
   const int size_y = static_cast<int>(costmap->getSizeInCellsY());
   const double sr2 = search_radius * search_radius;
@@ -516,7 +966,20 @@ void ProxMpcController::reduceCostmap(const MatrixXd & reference, MatrixXd & obs
         double wy = 0.0;
         costmap->mapToWorld(static_cast<unsigned int>(mx), static_cast<unsigned int>(my), wx, wy);
         const double dd = (wx - pcx) * (wx - pcx) + (wy - pcy) * (wy - pcy);
-        if (dd <= sr2) {candidates.push_back({dd, wx, wy});}
+        if (dd > sr2) {continue;}
+        /* Drop cells inside a dynamic footprint (already covered by its half-plane). */
+        bool excluded = false;
+        if (node < exclusions.size()) {
+          for (const auto & e : exclusions[node]) {
+            const double ex = wx - e[0];
+            const double ey = wy - e[1];
+            if (ex * ex + ey * ey < e[2] * e[2]) {
+              excluded = true;
+              break;
+            }
+          }
+        }
+        if (!excluded) {candidates.push_back({dd, wx, wy});}
       }
     }
     std::sort(
@@ -526,7 +989,7 @@ void ProxMpcController::reduceCostmap(const MatrixXd & reference, MatrixXd & obs
     /* Cluster: keep the nearest representatives at least cluster-radius apart. */
     std::vector<std::array<double, 2>> picked;
     for (const auto & cd : candidates) {
-      if (picked.size() >= k_obs) {break;}
+      if (picked.size() >= budget) {break;}
       bool near = false;
       for (const auto & pk : picked) {
         const double pd = (cd[1] - pk[0]) * (cd[1] - pk[0]) + (cd[2] - pk[1]) * (cd[2] - pk[1]);
@@ -538,12 +1001,88 @@ void ProxMpcController::reduceCostmap(const MatrixXd & reference, MatrixXd & obs
       if (!near) {picked.push_back({cd[1], cd[2]});}
     }
     for (std::size_t slot = 0; slot < picked.size(); ++slot) {
-      const Eigen::Index row = static_cast<Eigen::Index>(node * k_obs + slot);
+      const Eigen::Index row = static_cast<Eigen::Index>(node * k_obs + slot_begin + slot);
       obs(row, 0) = picked[slot][0];
       obs(row, 1) = picked[slot][1];
       obs(row, 2) = d_safe;
     }
   }
+}
+
+void ProxMpcController::publishPredictedObstacleMarkers(const rclcpp::Time & now)
+{
+  if (!marker_pub_ || marker_pub_->get_subscription_count() == 0) {return;}
+
+  visualization_msgs::msg::MarkerArray arr;
+  visualization_msgs::msg::Marker clear;
+  clear.ns = "predicted_obstacles";
+  clear.action = visualization_msgs::msg::Marker::DELETEALL;
+  arr.markers.push_back(clear);
+
+  const std::string global_frame = costmap_ros_->getGlobalFrameID();
+  int id = 0;
+  for (const auto & po : predicted_obstacles_) {
+    visualization_msgs::msg::Marker m;
+    m.header.frame_id = global_frame;
+    m.header.stamp = now;
+    m.ns = "predicted_obstacles";
+    m.id = id++;
+    m.type = visualization_msgs::msg::Marker::LINE_STRIP;
+    m.action = visualization_msgs::msg::Marker::ADD;
+    m.scale.x = 0.05;
+    m.color.r = 1.0f;
+    m.color.g = 0.4f;
+    m.color.a = 1.0f;
+    m.pose.orientation.w = 1.0;
+    for (const auto & p : po.positions) {
+      geometry_msgs::msg::Point pt;
+      pt.x = p[0];
+      pt.y = p[1];
+      m.points.push_back(pt);
+    }
+    arr.markers.push_back(m);
+  }
+  marker_pub_->publish(arr);
+}
+
+void ProxMpcController::publishDiagnostics(
+  const rclcpp::Time & stamp, double solve_ms, bool converged,
+  std::uint16_t num_active_obstacles)
+{
+  const auto t_now = std::chrono::steady_clock::now();
+  double period_ms = std::numeric_limits<double>::quiet_NaN();
+  if (have_last_cycle_) {
+    period_ms = std::chrono::duration<double, std::milli>(t_now - last_cycle_wall_).count();
+  }
+  last_cycle_wall_ = t_now;
+  have_last_cycle_ = true;
+
+  /* Only-when-subscribed: zero cost in the production default. */
+  if (!diag_pub_ || diag_pub_->get_subscription_count() == 0) {return;}
+
+  prox_mpc_msgs::msg::SolverDiagnostics d;
+  d.header.stamp = stamp;
+  d.header.frame_id = costmap_ros_ ? costmap_ros_->getBaseFrameID() : std::string("base_link");
+  d.solve_time_ms = solve_ms;
+  d.qp_solve_time_ms = mpc_->qp_info.run_time / 1000.0;  // proxsuite reports microseconds
+  d.status = static_cast<std::uint8_t>(mpc_->qp_info.status);
+  d.converged = converged;
+  d.sqp_iters = static_cast<std::uint32_t>(mpc_->sqp_iter);
+  d.qp_iters_ext = static_cast<std::uint32_t>(mpc_->qp_iter_ext);
+  d.primal_residual = mpc_->qp_info.pri_res;
+  d.dual_residual = mpc_->qp_info.dua_res;
+  d.objective = mpc_->qp_info.objValue;
+  d.max_obstacle_slack = mpc_->getMaxObstacleSlack();
+  d.control_period_ms = period_ms;
+  // A missed deadline = the solve did not fit in the control budget (1000*dt ms).
+  // The solve is the controller's compute cost and the budget is the period the
+  // server schedules it at, so this is the well-defined real-time signal. The
+  // measured control_period_ms is published as a separate field for analysis but
+  // is deliberately not folded into this flag: the nominal period equals the
+  // budget by construction, so any period threshold would need an arbitrary slack.
+  d.deadline_missed = solve_ms > 1000.0 * dt_;
+  d.num_active_obstacles = num_active_obstacles;
+  diag_pub_->publish(d);
 }
 
 }  // namespace prox_mpc_controller

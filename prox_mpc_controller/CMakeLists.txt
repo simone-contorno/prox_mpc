@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.10)
+cmake_minimum_required(VERSION 3.28)
 project(prox_mpc_controller)
 
 # C++ version
@@ -21,6 +21,7 @@ add_compile_definitions(EIGEN_NO_DEBUG)
 # Packages
 find_package(ament_cmake REQUIRED)
 find_package(prox_mpc_core REQUIRED)
+find_package(prox_mpc_msgs REQUIRED)
 find_package(Eigen3 REQUIRED)
 find_package(proxsuite REQUIRED)
 find_package(geometry_msgs REQUIRED)
@@ -32,6 +33,7 @@ find_package(rclcpp REQUIRED)
 find_package(rclcpp_lifecycle REQUIRED)
 find_package(tf2 REQUIRED)
 find_package(tf2_ros REQUIRED)
+find_package(visualization_msgs REQUIRED)
 
 # Plugin library
 add_library(${PROJECT_NAME} SHARED
@@ -47,6 +49,7 @@ target_link_libraries(${PROJECT_NAME}
 )
 ament_target_dependencies(${PROJECT_NAME}
   prox_mpc_core
+  prox_mpc_msgs
   geometry_msgs
   nav2_core
   nav2_costmap_2d
@@ -56,6 +59,7 @@ ament_target_dependencies(${PROJECT_NAME}
   rclcpp_lifecycle
   tf2
   tf2_ros
+  visualization_msgs
 )
 
 # Register the plugin with nav2_core
@@ -88,6 +92,7 @@ ament_export_libraries(${PROJECT_NAME})
 ament_export_targets(export_${PROJECT_NAME} HAS_LIBRARY_TARGET)
 ament_export_dependencies(
   prox_mpc_core
+  prox_mpc_msgs
   geometry_msgs
   nav2_core
   nav2_costmap_2d
@@ -97,6 +102,7 @@ ament_export_dependencies(
   rclcpp_lifecycle
   tf2
   tf2_ros
+  visualization_msgs
 )
 
 # Tests
@@ -128,10 +134,12 @@ if(BUILD_TESTING)
     nav_msgs
     pluginlib
     prox_mpc_core
+    prox_mpc_msgs
     rclcpp
     rclcpp_lifecycle
     tf2
     tf2_ros
+    visualization_msgs
   )
 endif()
 
