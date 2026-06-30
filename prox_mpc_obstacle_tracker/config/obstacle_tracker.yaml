@@ -1,0 +1,40 @@
+# prox_mpc_obstacle_tracker configuration (single source of truth for the
+# tracker's parameters). The detector clusters a 2D LaserScan, transforms the
+# centroids into a fixed tracking frame, and runs one constant-velocity Kalman
+# filter per track. All parameters are double / int / string per the project
+# type rules.
+prox_mpc_obstacle_tracker:
+  ros__parameters:
+    # Logging.
+    log_level: "info"                  # node-only verbosity: debug/info/warn/error/fatal
+
+    # Interfaces.
+    scan_topic: "scan"                 # input sensor_msgs/LaserScan (sensor-data QoS)
+    output_topic: "tracked_obstacles"  # output prox_mpc_msgs/ObstacleArray (reliable)
+    tracking_frame: "odom"             # non-rotating frame velocity is estimated in
+
+    # Detection / clustering.
+    cluster_gap: 0.3            # [m] Euclidean gap that closes a cluster
+    min_cluster_points: 3      # drop clusters with fewer member returns
+    max_clusters: 20           # cap clusters per scan (largest kept) to bound cost
+    # Reject extended structure (walls): their cluster centroid is not a stable
+    # physical point and drifts as the robot moves, so without this they would be
+    # tracked as phantom fast-moving obstacles. 0 disables the filter; a compact
+    # obstacle (person/box) is well under this, a wall well over it.
+    max_cluster_radius: 0.6    # [m] drop clusters whose enclosing radius exceeds this
+    min_detection_range: 0.0   # [m] lower range cutoff (0 -> use the scan range_min)
+    max_detection_range: 2.5   # [m] upper range cutoff (keep walls beyond the local area out)
+    transform_timeout: 0.1     # [s] TF lookup timeout for the scan -> tracking frame
+
+    # Association.
+    association_gate: 0.5       # [m] max track-to-cluster gating distance
+
+    # Constant-velocity Kalman filter.
+    process_noise: 1.0              # accel spectral density q [m^2/s^4]
+    measurement_noise: 0.01         # position measurement variance [m^2]
+    initial_velocity_variance: 1.0  # initial vx/vy variance [m^2/s^2]
+
+    # Track lifecycle.
+    confirm_count: 3   # consecutive hits before a track is published
+    drop_count: 3      # consecutive misses tolerated before a track is dropped
+    max_tracks: 10     # cap on simultaneously held tracks

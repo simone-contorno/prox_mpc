@@ -1,0 +1,176 @@
+# prox_mpc_obstacle_tracker — Architecture
+
+This document describes the design of `prox_mpc_obstacle_tracker`: the per-scan
+pipeline, the clustering and tracking algorithms, the ROS interfaces and QoS, the
+lifecycle behavior, and the full parameter reference.
+The package produces the [prox_mpc_msgs/ObstacleArray](../../prox_mpc_msgs) feed
+that [prox_mpc_controller](../../prox_mpc_controller) consumes for predictive
+obstacle avoidance.
+
+## Layering
+
+The package is split into a ROS-free core and a thin ROS node, so the algorithms
+are unit-testable without a running graph.
+
+- `prox_mpc_obstacle_tracker_core` — an Eigen-only library: `clustering`
+  (scan → points → clusters) and `Tracker` (the constant-velocity multi-object
+  filter). No ROS dependency.
+- `obstacle_tracker` — the `ObstacleTrackerNode` lifecycle node plus a
+  standalone driver (`main`) that brings the node up, spins, and tears it down on
+  a signal.
+
+## Per-scan pipeline
+
+```mermaid
+flowchart LR
+  scan["/scan<br/>sensor_msgs/LaserScan"] --> pts[scan_to_points]
+  pts --> clus[cluster_points]
+  clus --> tf["transform centroids<br/>scan frame -> tracking frame"]
+  tf --> trk["Tracker.update<br/>constant-velocity Kalman"]
+  trk --> pub["/tracked_obstacles<br/>prox_mpc_msgs/ObstacleArray"]
+```
+
+Each scan callback:
+
+1. Applies the range cutoffs (`min_detection_range`, `max_detection_range`, both
+   intersected with the scan's own `range_min`/`range_max`) and converts the
+   beams to planar points, dropping non-finite and out-of-range returns.
+2. Segments the scan-ordered points into clusters.
+3. Looks up one rigid transform `tracking_frame ← scan_frame` at the scan stamp
+   (with `transform_timeout`) and transforms every cluster centroid. A TF gap
+   skips the scan (the controller's staleness fallback covers the gap).
+4. Updates the tracker with the transformed centroids and the scan stamp.
+5. Publishes the confirmed tracks as an `ObstacleArray` stamped with the scan
+   time and the tracking frame.
+
+## Clustering
+
+`scan_to_points` converts one LaserScan ring to planar points in bearing order,
+rejecting non-finite returns and those outside `[range_min, range_max)` (so
+maximum-range and invalid beams are dropped).
+
+`cluster_points` segments the scan-ordered points by Euclidean adjacency: a gap
+larger than `cluster_gap` between consecutive points closes the current cluster.
+Each cluster carries its centroid, an enclosing radius (max member distance from
+the centroid), and a member count.
+Three filters apply:
+
+- clusters with fewer than `min_cluster_points` members are dropped;
+- clusters whose enclosing radius exceeds `max_cluster_radius` are dropped
+  (the **wall-rejection** guard; `max_cluster_radius <= 0` disables it);
+- the result is capped to the `max_clusters` largest clusters (by member count)
+  to bound downstream cost.
+
+The scan seam (last-to-first wrap) is not merged, so an obstacle straddling it
+splits into two clusters — conservative for avoidance.
+
+## Tracking
+
+`Tracker` is a constant-velocity multi-object Kalman filter over the state
+$[x, y, v_x, v_y]$ in the tracking frame, with one filter per object.
+
+- **Predict.** Every track advances by the time since the previous scan with the
+  constant-velocity transition and a discrete white-noise-acceleration process
+  covariance scaled by the spectral density `process_noise`. Non-monotonic stamps
+  hold the position with no prediction.
+- **Associate.** Gated greedy nearest-neighbour: all track–measurement pairs
+  within `association_gate` are formed and assigned closest-first, one
+  measurement per track.
+- **Update.** Matched tracks take a linear Kalman position update with
+  measurement variance `measurement_noise`; the radius is smoothed
+  (`0.5·old + 0.5·new`).
+- **Birth / confirm / death.** An unmatched measurement spawns a tentative track
+  (initial velocity variance `initial_velocity_variance`, up to `max_tracks`); a
+  track is confirmed and published after `confirm_count` consecutive hits, and
+  dropped after `drop_count` consecutive misses. Confirmation requires
+  *consecutive* hits (a miss resets the hit count).
+
+Only confirmed tracks are published.
+Each published `Obstacle` carries the track id, the estimated position and
+velocity, the smoothed radius, and the 2×2 position and velocity covariance blocks
+read from the filter covariance.
+
+## Interfaces
+
+| Interface | Type | QoS | Direction | Description |
+| --- | --- | --- | --- | --- |
+| `scan` (`scan_topic`) | `sensor_msgs/msg/LaserScan` | `SensorDataQoS` (best-effort, depth 1, volatile) | Subscribed | Input lidar scan; the subscription is created on activate and dropped on deactivate. |
+| `tracked_obstacles` (`output_topic`) | `prox_mpc_msgs/msg/ObstacleArray` | reliable, `KeepLast(5)` | Published | Confirmed tracks in the tracking frame; a lifecycle publisher (emits only while active). |
+
+The node looks up TF `tracking_frame ← scan.frame_id` with a dedicated TF listener
+thread, so the scan callback can perform a timed lookup at the scan stamp.
+
+## Lifecycle behavior
+
+The node follows the standard managed-node lifecycle.
+
+- `on_configure` declares and validates every parameter (a bad value fails
+  configure rather than corrupting the loop), constructs the tracker, the TF
+  buffer/listener, and the publisher. No subscription yet.
+- `on_activate` activates the publisher, resets the tracker (fresh velocity
+  estimate), and subscribes to the scan so processing begins.
+- `on_deactivate` drops the subscription and deactivates the publisher (fail-safe:
+  output stops).
+- `on_cleanup` / `on_shutdown` release the publisher, TF, and tracker through one
+  idempotent teardown path.
+
+The standalone driver installs its own async-signal-safe `SIGINT`/`SIGTERM`
+handler, cancels the spin, and runs a single checked finalize ladder
+(`deactivate → cleanup → shutdown`); a second signal force-quits.
+
+## Parameters
+
+All parameters are `double`, `int`, or `string` per the project type rules and
+mirror [../config/obstacle_tracker.yaml](../config/obstacle_tracker.yaml).
+The defaults below are the values declared in the node; the shipped config sets
+operational values for some of them (noted).
+
+### Interfaces
+
+| Parameter | Type | Default | Description |
+| --- | --- | --- | --- |
+| `scan_topic` | string | `scan` | Input `LaserScan` topic. |
+| `output_topic` | string | `tracked_obstacles` | Output `ObstacleArray` topic. |
+| `tracking_frame` | string | `odom` | Fixed, non-rotating frame velocity is estimated in. |
+| `transform_timeout` | double | 0.1 s | TF lookup timeout for scan → tracking frame. |
+
+### Detection and clustering
+
+| Parameter | Type | Default | Unit | Description |
+| --- | --- | --- | --- | --- |
+| `cluster_gap` | double | 0.3 | m | Euclidean gap that closes a cluster. |
+| `min_cluster_points` | int | 3 | count | Drop clusters with fewer member returns. |
+| `max_clusters` | int | 20 | count | Cap clusters per scan (largest kept). |
+| `max_cluster_radius` | double | 0.0 (`0.6` in config) | m | Drop clusters whose enclosing radius exceeds this (wall rejection); 0 disables it. |
+| `min_detection_range` | double | 0.0 | m | Lower range cutoff (0 uses the scan `range_min`). |
+| `max_detection_range` | double | 0.0 (`2.5` in config) | m | Upper range cutoff (0 uses the scan `range_max`). |
+
+### Association and Kalman filter
+
+| Parameter | Type | Default | Unit | Description |
+| --- | --- | --- | --- | --- |
+| `association_gate` | double | 0.5 | m | Max track-to-cluster gating distance. |
+| `process_noise` | double | 1.0 | m²/s⁴ | Acceleration spectral density. |
+| `measurement_noise` | double | 0.01 | m² | Position measurement variance. |
+| `initial_velocity_variance` | double | 1.0 | m²/s² | Initial vx/vy variance for a new track. |
+
+### Track lifecycle
+
+| Parameter | Type | Default | Description |
+| --- | --- | --- | --- |
+| `confirm_count` | int | 3 | Consecutive hits before a track is published. |
+| `drop_count` | int | 3 | Consecutive misses tolerated before a track is dropped. |
+| `max_tracks` | int | 10 | Cap on simultaneously held tracks. |
+
+## Design decisions
+
+- **TF listener spin thread.** The TF listener runs its own thread so the scan
+  callback can perform a timed `lookupTransform` at the scan stamp; without it the
+  timed lookup always fails and logs per scan.
+- **Wall rejection lives in the tracker.** An extended wall's cluster centroid is
+  not a stable physical point and drifts at roughly robot speed, so it would be
+  tracked as a phantom fast-moving obstacle. The `max_cluster_radius` cap keeps
+  walls out of the dynamic feed; static structure remains the costmap's job. The
+  controller carries a matching `max_dynamic_obstacle_radius` guard as a backstop.
+- **Pure core.** Keeping clustering and tracking ROS-free makes the algorithms
+  unit-testable and license-clean (no third-party tracker).
