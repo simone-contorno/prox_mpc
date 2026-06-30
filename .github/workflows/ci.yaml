@@ -1,0 +1,124 @@
+name: ROS 2 CI
+
+on:
+  push:
+    branches: [main, dev]
+  pull_request:
+    branches: [main, dev]
+
+# Least privilege: the workflow only reads the repository.
+permissions:
+  contents: read
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-24.04
+    container:
+      image: ros:jazzy-ros-base-noble
+
+    # Run ament_cppcheck even with the bundled cppcheck (2.13 is flagged slow):
+    # without this the static analysis silently no-ops and reports a false green.
+    env:
+      AMENT_CPPCHECK_ALLOW_SLOW_VERSIONS: '1'
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4.3.1
+
+      - name: Install dependencies
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            python3-colcon-common-extensions \
+            python3-colcon-lcov-result \
+            cppcheck \
+            lcov
+          rosdep update
+          # Resolves proxsuite -> ros-jazzy-proxsuite (the canonical, pinned dep).
+          rosdep install --from-paths . --ignore-src -r -y
+
+      # Use a proper colcon workspace so build/ and install/ live outside the
+      # package source tree (keeps ament linters off CMake-generated files).
+      - name: Create colcon workspace
+        run: |
+          mkdir -p /ros_ws/src
+          ln -s "$GITHUB_WORKSPACE" /ros_ws/src/prox_mpc
+
+      - name: Build
+        working-directory: /ros_ws
+        run: |
+          . /opt/ros/jazzy/setup.sh
+          colcon build \
+            --symlink-install \
+            --cmake-args \
+              -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+              -DCMAKE_CXX_FLAGS="--coverage" \
+              -DCMAKE_C_FLAGS="--coverage"
+
+      - name: Test
+        working-directory: /ros_ws
+        run: |
+          . /opt/ros/jazzy/setup.sh
+          . install/setup.sh
+          colcon test --return-code-on-test-failure
+
+      - name: Display test results
+        if: always()
+        working-directory: /ros_ws
+        run: colcon test-result --verbose
+
+      - name: Generate coverage report
+        if: always()
+        working-directory: /ros_ws
+        run: |
+          lcov --capture \
+            --directory build \
+            --output-file coverage.info \
+            --ignore-errors mismatch,negative
+          lcov --remove coverage.info \
+            '/opt/*' '/usr/*' '*/test/*' '*/build/*' \
+            --output-file coverage_filtered.info \
+            --ignore-errors unused
+          lcov --list coverage_filtered.info
+
+      - name: Upload coverage artifact
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
+        with:
+          name: lcov-report
+          path: /ros_ws/coverage_filtered.info
+
+  # Static analysis with Clang Thread Safety Analysis (the controller and tracker
+  # share state across the executor; TSA catches unguarded access).
+  clang-tsa:
+    runs-on: ubuntu-24.04
+    container:
+      image: ros:jazzy-ros-base-noble
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4.3.1
+
+      - name: Install Clang and dependencies
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            clang \
+            python3-colcon-common-extensions
+          rosdep update
+          rosdep install --from-paths . --ignore-src -r -y
+
+      - name: Create colcon workspace
+        run: |
+          mkdir -p /ros_ws/src
+          ln -s "$GITHUB_WORKSPACE" /ros_ws/src/prox_mpc
+
+      - name: Build with Clang + Thread Safety Analysis
+        working-directory: /ros_ws
+        run: |
+          . /opt/ros/jazzy/setup.sh
+          CC=clang CXX=clang++ colcon build \
+            --symlink-install \
+            --cmake-args \
+              -DCMAKE_CXX_FLAGS="-Wthread-safety" \
+            --no-warn-unused-cli
