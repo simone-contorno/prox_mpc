@@ -1,0 +1,12 @@
+<library path="prox_mpc_test_models">
+  <class
+    name="prox_mpc_test_models/NonFiniteTwist"
+    type="prox_mpc_test_models::NonFiniteTwistModel"
+    base_class_type="prox_mpc::Model">
+    <description>
+      Fault-injection test model: finite linear dynamics (state [x, y, theta],
+      control [v, omega]) but a deliberately non-finite toTwist(), used to
+      exercise the controller's non-finite-command fail-safe. Test fixture only.
+    </description>
+  </class>
+</library>

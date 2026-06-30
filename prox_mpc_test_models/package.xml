@@ -1,0 +1,28 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>prox_mpc_test_models</name>
+  <version>0.1.0</version>
+  <description>Test-fixture prox_mpc::Model plugins for the ProxMPC stack. These
+  fault-injection models exercise controller fail-safe paths that the bundled
+  models cannot reach (for example a non-finite command). Not for production
+  use.</description>
+  <maintainer email="simone.contorno@outlook.it">Simone Contorno</maintainer>
+  <license>Apache-2.0</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <depend>Eigen3</depend>
+  <depend>geometry_msgs</depend>
+  <depend>pluginlib</depend>
+  <depend>prox_mpc_core</depend>
+  <depend version_gte="0.6.5">proxsuite</depend>
+  <depend>rclcpp</depend>
+
+  <test_depend>ament_lint_auto</test_depend>
+  <test_depend>ament_lint_common</test_depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>
