@@ -15,17 +15,28 @@ converges in a single QP solve.
 | Package | What it is |
 | --- | --- |
 | [prox_mpc_core](prox_mpc_core) | The math core (`prox_mpc::MPC` / `ProxQP` / `Model`) — the reusable SQP/QP library, no ROS node. |
-| [prox_mpc_controller](prox_mpc_controller) | A Nav2 `nav2_core::Controller` plugin built on the core. **Skeleton**: the control law is under development. |
-| [prox_mpc_demo](prox_mpc_demo) | A self-contained closed-loop simulation and benchmark for the core — no external simulator. |
+| [prox_mpc_controller](prox_mpc_controller) | A Nav2 `nav2_core::Controller` plugin built on the core, verified in simulation under a full Nav2 stack. |
+| [prox_mpc_obstacle_tracker](prox_mpc_obstacle_tracker) | An in-house 2D-lidar dynamic-obstacle detector and Kalman tracker; feeds the controller's predictive avoidance. |
+| [prox_mpc_msgs](prox_mpc_msgs) | The `Obstacle` / `ObstacleArray` message contract between the tracker and the controller (interface-only). |
+| [prox_mpc_demo](prox_mpc_demo) | Runnable demos: a no-simulator core benchmark and a full Nav2 + Gazebo Harmonic bring-up. |
+| [prox_mpc_test_models](prox_mpc_test_models) | Fault-injection `prox_mpc::Model` plugins for the controller's tests (not for production). |
 
-Each package keeps its own `docs/`.
-See [prox_mpc_core/docs/architecture.md](prox_mpc_core/docs/architecture.md) for
-the core design overview,
-[prox_mpc_core/docs/nmpc.md](prox_mpc_core/docs/nmpc.md) for the NMPC/SQP/QP math,
-and
-[prox_mpc_core/docs/obstacle-avoidance.md](prox_mpc_core/docs/obstacle-avoidance.md)
-for the obstacle constraints;
-[prox_mpc_controller/docs/](prox_mpc_controller/docs/) covers the Nav2 controller.
+## Architecture and docs
+
+[docs/architecture.md](docs/architecture.md) is the full-stack overview: how the
+packages depend on and communicate with each other, and the runtime data flow for
+the standalone, Nav2, and predictive paths.
+
+Each package keeps its own `docs/`:
+
+- core: [architecture](prox_mpc_core/docs/architecture.md),
+  [NMPC/SQP/QP math](prox_mpc_core/docs/nmpc.md), and
+  [obstacle avoidance](prox_mpc_core/docs/obstacle-avoidance.md);
+- controller: [architecture](prox_mpc_controller/docs/architecture.md) and
+  [control law](prox_mpc_controller/docs/control-law.md);
+- obstacle tracker: [architecture](prox_mpc_obstacle_tracker/docs/architecture.md);
+- demo: [standalone simulation](prox_mpc_demo/docs/simulation.md) and the
+  [Nav2 + Gazebo guide](prox_mpc_demo/docs/nav2-simulation.md).
 
 ## Requirements
 
@@ -48,8 +59,37 @@ source install/setup.bash
 ros2 launch prox_mpc_demo simulation.launch.py
 ```
 
-Building `prox_mpc_controller` additionally requires Nav2; see its
-[README](prox_mpc_controller/README.md).
+Building `prox_mpc_controller` (and, for predictive avoidance, the obstacle
+tracker) additionally requires Nav2:
+
+```bash
+colcon build --symlink-install --packages-select \
+  prox_mpc_msgs prox_mpc_core prox_mpc_controller prox_mpc_obstacle_tracker prox_mpc_demo
+source install/setup.bash
+```
+
+See each package README and [docs/architecture.md](docs/architecture.md) for the
+dependency graph.
+
+### Target tuning (Jetson / packaging)
+
+The portable high-optimization default is `CMAKE_BUILD_TYPE=Release` (GCC `-O3
+-DNDEBUG`), set in each package behind an `if(NOT CMAKE_BUILD_TYPE)` guard, plus
+`EIGEN_NO_DEBUG`. Keep architecture and link-time tuning **out of the source** and
+apply it at build/packaging time so the tree stays portable across x86 CI and the
+Orin/Thor boards:
+
+- Per-board CPU tuning via a CMake toolchain file or `--cmake-args`, e.g.
+  `-DCMAKE_CXX_FLAGS_RELEASE="-O3 -DNDEBUG -mcpu=cortex-a78ae"` (Orin) or the
+  bloom/debian `rules` flags. Never hardcode `-march=native` / `-mcpu=native`
+  (it bakes the build host CPU into the binary and breaks cross/CI builds).
+- LTO via `-DCMAKE_INTERPROCEDURAL_OPTIMIZATION=ON`, guarded by
+  `check_ipo_supported()` and measured — not hardcoded.
+- **Never** `-Ofast` / `-ffast-math` for the solver: it breaks the IEEE-754
+  semantics the SQP/QP convergence and the NaN / `isfinite` guards rely on.
+
+Verify the loop meets `1/dt` on the actual Jetson with the demo's solve-time
+logger and `tegrastats`.
 
 ## Test and lint
 
@@ -61,10 +101,12 @@ colcon test-result --all --verbose
 `prox_mpc_core` ships GoogleTest suites that cover the model interface and its
 analytic Jacobians, an obstacle-off regression against recorded reference values,
 a custom model driven through the interface, and the obstacle-avoidance
-constraints. The C++ style is enforced by `uncrustify` (the ROS 2 default
-formatter); `cpplint` and `ament_copyright` are disabled (single enforced
-formatter, and a short SPDX header per file with the full text in
-[LICENSE](LICENSE)).
+constraints. `prox_mpc_controller` drives every `nav2_core::Controller` method and
+fail-safe branch through the plugin's public surface, and
+`prox_mpc_obstacle_tracker` unit-tests its ROS-free clustering and tracking core.
+The C++ style is enforced by `uncrustify` (the ROS 2 default formatter); `cpplint`
+and `ament_copyright` are disabled (single enforced formatter, and a short SPDX
+header per file with the full text in [LICENSE](LICENSE)).
 
 ## Provenance
 
