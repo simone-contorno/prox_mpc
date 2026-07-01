@@ -16,6 +16,17 @@ This plugin is verified in simulation: it runs inside a live `controller_server`
 driving a TurtleBot3 waffle under a full Nav2 stack in Gazebo Harmonic (see
 [prox_mpc_demo/docs/nav2-simulation.md](../prox_mpc_demo/docs/nav2-simulation.md)).
 
+## Table of Contents
+
+- [Documentation](#documentation)
+- [Key Features](#key-features)
+- [Prerequisites](#prerequisites)
+- [Build](#build)
+- [Use in a Nav2 stack](#use-in-a-nav2-stack)
+- [Testing](#testing)
+- [Troubleshooting](#troubleshooting)
+- [License](#license)
+
 ## Documentation
 
 - [docs/architecture.md](docs/architecture.md) — the Nav2 integration design:
@@ -52,11 +63,12 @@ driving a TurtleBot3 waffle under a full Nav2 stack in Gazebo Harmonic (see
 
 ## Prerequisites
 
-- ROS 2 Jazzy.
+- ROS 2 Jazzy on Ubuntu 24.04.
 - [prox_mpc_core](../prox_mpc_core) and [prox_mpc_msgs](../prox_mpc_msgs)
   (workspace packages).
 - Nav2: `nav2_core`, `nav2_costmap_2d`.
 - Eigen 3 and ProxQP / proxsuite (transitively, through the core).
+- `tf2`, `tf2_ros`, `visualization_msgs`, `rclcpp_lifecycle` (resolved by `rosdep`).
 
 ## Build
 
@@ -74,8 +86,11 @@ source install/setup.bash
 Confirm the plugin is discoverable:
 
 ```bash
-ros2 plugin list nav2_core::Controller   # lists prox_mpc_controller::ProxMpcController
+ros2 plugin list --package prox_mpc_controller   # lists prox_mpc_controller::ProxMpcController
 ```
+
+The `--package` value is the package that installs the plugin description, not the
+`nav2_core` base the plugin registers against.
 
 ## Use in a Nav2 stack
 
@@ -123,8 +138,8 @@ disabled (single formatter, and a short SPDX header per file with the full text 
 
 ## Troubleshooting
 
-- **Plugin not listed by `ros2 plugin list nav2_core::Controller`:** the overlay
-  is not sourced, or the package failed to build against Nav2.
+- **Plugin not listed by `ros2 plugin list --package prox_mpc_controller`:** the
+  overlay is not sourced, or the package failed to build against Nav2.
 - **`controller_server` aborts at configure with a model-load error:** the
   `model_plugin` name is wrong or its package is not on the overlay; the valid
   bundled names are `prox_mpc_core/Bicycle` and `prox_mpc_core/Unicycle`.

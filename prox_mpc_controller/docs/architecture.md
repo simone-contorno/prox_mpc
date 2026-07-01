@@ -177,6 +177,11 @@ The command itself is the `TwistStamped` returned from `computeVelocityCommands`
 | `prox_mpc_local_plan` | `nav_msgs/msg/Path` | depth 1 | Published | always | Predicted NMPC trajectory (`Np+1` poses, costmap global frame), distinct from the Nav2 global plan; sent only when a subscriber is connected. |
 | `tracked_obstacles` (configurable) | `prox_mpc_msgs/msg/ObstacleArray` | reliable, depth 5 | Subscribed | `predict_obstacles` only | Tracked dynamic obstacles for predictive avoidance. |
 | `prox_mpc_predicted_obstacles` | `visualization_msgs/msg/MarkerArray` | depth 1 | Published | `predict_obstacles` only | Predicted dynamic-obstacle trajectories for RViz; sent only when a subscriber is connected. |
+| `<plugin>/diagnostics` (e.g. `FollowPath/diagnostics`) | `prox_mpc_msgs/msg/SolverDiagnostics` | reliable, depth 10 | Published | `publish_diagnostics` only | Per-cycle NMPC/QP solver telemetry for benchmarking; sent only when a subscriber is connected. |
+
+The published topics `prox_mpc_local_plan`, `prox_mpc_predicted_obstacles`, and
+`<plugin>/diagnostics` are all emitted only when at least one subscriber is
+connected, so an unwatched controller carries no serialization cost.
 
 The plugin also reads the local costmap and the robot footprint through the
 `Costmap2DROS` handle, and uses the `tf2` buffer to transform the plan and the
@@ -223,9 +228,14 @@ Per the project type rules they are `double`, `int`, `string`, or `bool` only.
 | `max_int_iter_qp` | int | 1500 | ProxQP internal-iteration cap. |
 | `max_ext_iter_qp` | int | 10000 | ProxQP external-iteration cap. |
 | `max_iter_sqp` | int | 100 | SQP-iteration cap per cycle. |
+| `max_solve_time` | double | 0.0 | Wall-clock budget in seconds for the whole SQP loop; 0.0 disables it (the iteration caps are then the only bound). On timeout the solve reports non-convergence and the cycle brakes. Floored at 0.0. |
 | `qp_type` | bool | false | QP backend: false = sparse, true = dense. |
 | `guess` | bool | true | Warm-start the QP from the previous solve. |
 | `max_solver_failures` | int | 3 | Consecutive non-converged solves before escalating to a recovery. |
+
+`max_solve_time` defaults to `0.0` (disabled) in
+[config/prox_mpc_controller.yaml](../config/prox_mpc_controller.yaml), so the
+iteration caps are the only bound unless a stack sets a positive budget.
 
 ### Obstacle avoidance (costmap)
 
@@ -254,8 +264,14 @@ Per the project type rules they are `double`, `int`, `string`, or `bool` only.
 Out-of-range predictive values are clamped (non-fatal) with a warning so the
 controller stays available.
 
-### Logging
+### Logging and diagnostics
 
 | Parameter | Type | Default | Description |
 | --- | --- | --- | --- |
 | `log_level` | string | `info` | Plugin logger level: `debug`, `info`, `warn`, `error`, or `fatal`. |
+| `publish_diagnostics` | bool | false | Opt-in per-cycle solver telemetry on `<plugin>/diagnostics` (`prox_mpc_msgs/msg/SolverDiagnostics`); off by default and published only when a subscriber is connected. |
+
+`publish_diagnostics` defaults to `false` in
+[config/prox_mpc_controller.yaml](../config/prox_mpc_controller.yaml); set it to
+`true` to emit per-cycle solver telemetry (published only when a subscriber is
+connected).
