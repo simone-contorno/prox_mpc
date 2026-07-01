@@ -140,7 +140,7 @@ ros2 topic echo /tracked_obstacles
 ## 6. `prox_mpc_demo` — runnable demonstrations
 
 **What it is.**
-The package that makes the stack runnable two ways: a no-simulator core benchmark and a full Nav2 + Gazebo Harmonic bring-up.
+The package that makes the stack runnable two ways: a standalone closed-loop simulation and a full Nav2 + Gazebo Harmonic bring-up.
 
 **How it works.**
 
@@ -151,7 +151,7 @@ The package that makes the stack runnable two ways: a no-simulator core benchmar
 **How to use it.**
 
 ```bash
-# standalone (core + demo only)
+# standalone (msgs + core + demo)
 ros2 launch prox_mpc_demo simulation.launch.py
 
 # Nav2 + Gazebo (baseline, then predictive)

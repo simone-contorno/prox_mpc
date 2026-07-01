@@ -75,6 +75,7 @@ flowchart LR
   end
   model -- /robot/cmd_vel Twist --> rviz[RViz]
   mpc -- /prox_mpc/path Path --> rviz
+  mpc -- /prox_mpc/diagnostics SolverDiagnostics --> tele[solver telemetry / benchmark]
   sim -- map to base_link TF --> rviz
   model -- predicted next state --> mpc
 ```

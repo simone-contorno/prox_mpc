@@ -18,8 +18,9 @@ converges in a single QP solve.
 | [prox_mpc_controller](prox_mpc_controller) | A Nav2 `nav2_core::Controller` plugin built on the core, verified in simulation under a full Nav2 stack. |
 | [prox_mpc_obstacle_tracker](prox_mpc_obstacle_tracker) | An in-house 2D-lidar dynamic-obstacle detector and Kalman tracker; feeds the controller's predictive avoidance. |
 | [prox_mpc_msgs](prox_mpc_msgs) | The `Obstacle` / `ObstacleArray` message contract between the tracker and the controller (interface-only). |
-| [prox_mpc_demo](prox_mpc_demo) | Runnable demos: a no-simulator core benchmark and a full Nav2 + Gazebo Harmonic bring-up. |
+| [prox_mpc_demo](prox_mpc_demo) | Runnable demos: a standalone closed-loop simulation and a full Nav2 + Gazebo Harmonic bring-up. |
 | [prox_mpc_test_models](prox_mpc_test_models) | Fault-injection `prox_mpc::Model` plugins for the controller's tests (not for production). |
+| [prox_mpc_benchmark](prox_mpc_benchmark) | The scenario-driven benchmarking harness that measures accuracy, precision, and real-time behaviour across the scenario × model × controller × mode matrix, and compares ProxMPC against the stock Nav2 controllers. |
 
 ## Architecture and docs
 
@@ -36,7 +37,12 @@ Each package keeps its own `docs/`:
   [control law](prox_mpc_controller/docs/control-law.md);
 - obstacle tracker: [architecture](prox_mpc_obstacle_tracker/docs/architecture.md);
 - demo: [standalone simulation](prox_mpc_demo/docs/simulation.md) and the
-  [Nav2 + Gazebo guide](prox_mpc_demo/docs/nav2-simulation.md).
+  [Nav2 + Gazebo guide](prox_mpc_demo/docs/nav2-simulation.md);
+- benchmark: [harness README](prox_mpc_benchmark/README.md) and the
+  [controller-comparison results](docs/controller-comparison-results.md).
+
+A single top-to-bottom reading path across every package is in
+[docs/prox-mpc.md](docs/prox-mpc.md).
 
 ## Requirements
 
@@ -51,8 +57,8 @@ Each package keeps its own `docs/`:
 Build in an overlay workspace, never inside the package source tree.
 
 ```bash
-# core + demo (no Nav2 required)
-colcon build --symlink-install --packages-select prox_mpc_core prox_mpc_demo
+# msgs + core + demo (no Nav2 required)
+colcon build --symlink-install --packages-select prox_mpc_msgs prox_mpc_core prox_mpc_demo
 source install/setup.bash
 
 # run the bundled simulation
