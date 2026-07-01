@@ -38,6 +38,7 @@ controller_server:
       max_int_iter_qp: 1500
       max_ext_iter_qp: 10000
       max_iter_sqp: 100
+      max_solve_time: 0.0   # [s] wall-clock budget for the SQP loop; 0 = disabled (iteration caps only)
       qp_type: false        # false = sparse, true = dense
       guess: true           # warm start
 
@@ -70,6 +71,10 @@ controller_server:
       prediction_uncertainty_growth: 0.0    # [m/s] extra d_safe per second of prediction
       max_dynamic_obstacles: 2              # slot budget reserved for dynamic tracks
       max_dynamic_obstacle_radius: 0.0      # [m] skip tracks larger than this (walls); 0 = no limit
+
+      # Solver telemetry. Publishes prox_mpc_msgs/SolverDiagnostics on
+      # <plugin>/diagnostics (only when subscribed); off by default.
+      publish_diagnostics: false
 
       # Logging (node-only logger level).
       log_level: "info"     # debug | info | warn | error | fatal
