@@ -15,9 +15,11 @@ are unit-testable without a running graph.
 - `prox_mpc_obstacle_tracker_core` — an Eigen-only library: `clustering`
   (scan → points → clusters) and `Tracker` (the constant-velocity multi-object
   filter). No ROS dependency.
-- `obstacle_tracker` — the `ObstacleTrackerNode` lifecycle node plus a
-  standalone driver (`main`) that brings the node up, spins, and tears it down on
-  a signal.
+- `prox_mpc_obstacle_tracker_component` — the `ObstacleTrackerNode` lifecycle
+  node, registered as an `rclcpp_components` node so it can be loaded into a
+  shared-process container as well as run standalone.
+- `obstacle_tracker` — the standalone driver (`main`) that links the component,
+  brings the node up, spins, and tears it down on a signal.
 
 ## Per-scan pipeline
 
@@ -125,7 +127,13 @@ mirror [../config/obstacle_tracker.yaml](../config/obstacle_tracker.yaml).
 The defaults below are the values declared in the node; the shipped config sets
 operational values for some of them (noted).
 
-### Interfaces
+### Logging
+
+| Parameter | Type | Default | Description |
+| --- | --- | --- | --- |
+| `log_level` | string | `info` | Node-only logger level: `debug`, `info`, `warn`, `error`, or `fatal`. Applied to this node's logger, and parsed by the launch file to set only this node's verbosity. |
+
+### Interface parameters
 
 | Parameter | Type | Default | Description |
 | --- | --- | --- | --- |

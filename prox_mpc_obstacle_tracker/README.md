@@ -15,6 +15,18 @@ ROS.
 The design, algorithm, parameters, and interfaces are documented in
 [docs/architecture.md](docs/architecture.md).
 
+## Table of Contents
+
+- [Key Features](#key-features)
+- [Prerequisites](#prerequisites)
+- [Build](#build)
+- [Run](#run)
+- [Interfaces](#interfaces)
+- [Lifecycle](#lifecycle)
+- [Composition](#composition)
+- [Testing](#testing)
+- [License](#license)
+
 ## Key Features
 
 - **Lifecycle node:** managed `configure → activate → deactivate → cleanup`, with
@@ -30,10 +42,10 @@ The design, algorithm, parameters, and interfaces are documented in
 
 ## Prerequisites
 
-- ROS 2 Jazzy.
+- ROS 2 Jazzy on Ubuntu 24.04.
 - [prox_mpc_msgs](../prox_mpc_msgs) (workspace package).
-- `Eigen3`, `rclcpp`, `rclcpp_lifecycle`, `lifecycle_msgs`, `sensor_msgs`,
-  `geometry_msgs`, `tf2`, `tf2_ros` (resolved by `rosdep`).
+- `Eigen3`, `rclcpp`, `rclcpp_components`, `rclcpp_lifecycle`, `lifecycle_msgs`,
+  `sensor_msgs`, `geometry_msgs`, `tf2`, `tf2_ros` (resolved by `rosdep`).
 
 ## Build
 
@@ -45,7 +57,18 @@ source install/setup.bash
 ## Run
 
 The standalone executable is a self-activating lifecycle node: it brings itself up
-(`configure → activate`), spins, and tears itself down on `SIGINT`/`SIGTERM`:
+(`configure → activate`), spins, and tears itself down on `SIGINT`/`SIGTERM`.
+The bundled launch file loads [config/obstacle_tracker.yaml](config/obstacle_tracker.yaml)
+and wires the node-only logger level, with a `params_file` argument to override the
+parameters:
+
+```bash
+ros2 launch prox_mpc_obstacle_tracker obstacle_tracker.launch.py
+ros2 launch prox_mpc_obstacle_tracker obstacle_tracker.launch.py \
+  params_file:=/path/to/custom.yaml
+```
+
+To run the executable directly instead of through the launch file:
 
 ```bash
 ros2 run prox_mpc_obstacle_tracker obstacle_tracker \
@@ -77,6 +100,49 @@ in the tracking frame.
 The full parameter and lifecycle reference is in
 [docs/architecture.md](docs/architecture.md).
 
+## Lifecycle
+
+The node is a managed lifecycle node.
+The standalone `obstacle_tracker` executable is a self-activating driver: it walks
+the node up (`configure → activate`), spins, and on `SIGINT`/`SIGTERM` runs a
+single checked finalize ladder (`deactivate → cleanup → shutdown`); a second
+signal force-quits.
+
+```mermaid
+stateDiagram-v2
+  [*] --> Unconfigured : constructed
+  Unconfigured --> Inactive : on_configure
+  Inactive --> Active : on_activate
+  Active --> Inactive : on_deactivate
+  Inactive --> Unconfigured : on_cleanup
+  Active --> Finalized : on_shutdown
+  Inactive --> Finalized : on_shutdown
+  Unconfigured --> Finalized : on_shutdown
+```
+
+`on_configure` declares and validates every parameter, builds the tracker, the TF
+buffer/listener, and the publisher; `on_activate` resets the tracker and creates
+the scan subscription so processing begins; `on_deactivate` drops the subscription
+and stops output; `on_cleanup` and `on_shutdown` release resources through one
+idempotent teardown path.
+Per-transition detail is in [docs/architecture.md](docs/architecture.md).
+
+## Composition
+
+The lifecycle node is also registered as an `rclcpp_components` node
+(`prox_mpc_obstacle_tracker::ObstacleTrackerNode`), so it can be loaded into a
+shared-process component container instead of the standalone executable:
+
+```bash
+ros2 run rclcpp_components component_container
+ros2 component load /ComponentManager prox_mpc_obstacle_tracker \
+  prox_mpc_obstacle_tracker::ObstacleTrackerNode
+```
+
+When loaded as a component the lifecycle transitions are driven externally (the
+container does not self-activate the node); the standalone executable is the path
+that brings itself up.
+
 ## Testing
 
 ```bash
@@ -84,9 +150,12 @@ colcon test --packages-select prox_mpc_obstacle_tracker
 colcon test-result --all --verbose
 ```
 
-Two GoogleTest suites cover the ROS-free core: `test_clustering` (scan-to-points
-and adjacency segmentation, including the wall-radius cap) and `test_tracker` (the
-constant-velocity filter, association, and the birth/confirm/death lifecycle).
+Three GoogleTest suites run.
+`test_clustering` and `test_tracker` cover the ROS-free core: scan-to-points and
+adjacency segmentation (including the wall-radius cap), and the constant-velocity
+filter, association, and birth/confirm/death lifecycle.
+`test_obstacle_tracker_node` is a lifecycle-node integration test that drives the
+transition ladder and the scan-to-publish path against a synthetic scan.
 `uncrustify` is the enforced C++ formatter; `cpplint` and `ament_copyright` are
 disabled (short SPDX header per file; full text in [LICENSE](../LICENSE)).
 
