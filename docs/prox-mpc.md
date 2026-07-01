@@ -186,7 +186,7 @@ The scenario-driven harness that *measures* the stack across three metric classe
 A controller-agnostic C++ live metrics node measures pose-based accuracy (cross-track against the scenario reference polyline, goal error, time-to-goal, path length) from generic signals (TF pose) and taps the `SolverDiagnostics` stream for the real-time/feasibility class, writing one per-run JSON.
 Installed Python tooling orchestrates the matrix, generates scaled maps, sends goals, and aggregates the per-run JSONs into mean ± std tables.
 A small C++ **kinematic plant** integrates a controller's body twist as a unicycle and publishes `/odom` + TF, so the stock Nav2 controllers and ProxMPC can be compared on the identical plant without Gazebo (mode b2).
-On that comparison a **resource sampler** also records the `controller_server` process's CPU and memory (from `/proc`) and the achieved control rate, so the cross-controller comparison covers the embedded cost (CPU, RAM, frequency), not only tracking — see the [comparison results](controller-comparison-results.md#4-real-time-and-embedded-resource-cost).
+On that comparison a **resource sampler** records the `controller_server` process's CPU and memory (from `/proc`) and the achieved control rate, and a **`nav2_core::Controller` timing decorator** wraps whichever controller is under test and wall-clock times its `computeVelocityCommands` identically, so the cross-controller comparison covers the embedded cost (per-cycle compute, CPU, RAM, frequency) at a fairly-matched operating point, not only tracking — see the [comparison results](controller-comparison-results.md#4-per-cycle-compute-cost-and-process-resources).
 
 **How to use it.**
 
