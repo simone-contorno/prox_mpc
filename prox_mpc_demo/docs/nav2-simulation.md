@@ -5,6 +5,19 @@ plugin inside a live `controller_server`, driving a simulated diff-drive robot i
 Gazebo Harmonic under a full Nav2 stack. All scenarios below were run headless and
 verified (see "Verified results").
 
+## Table of Contents
+
+- [What is wired](#what-is-wired)
+- [Launch arguments](#launch-arguments)
+- [Build](#build)
+- [Scenario 0 — plugin loads in controller_server (no Gazebo)](#scenario-0--plugin-loads-in-controller_server-no-gazebo)
+- [Scenario 1 — clean run, NavigateToPose SUCCEEDED (open room)](#scenario-1--clean-run-navigatetopose-succeeded-open-room)
+- [Scenario 2 — obstacle avoidance (unmapped static + dynamic)](#scenario-2--obstacle-avoidance-unmapped-static--dynamic)
+- [Verified results](#verified-results)
+- [Controller config notes (what these defaults encode)](#controller-config-notes-what-these-defaults-encode)
+- [tb3 pillar-maze world (prox_mpc_world.sdf.xacro)](#tb3-pillar-maze-world-prox_mpc_worldsdfxacro)
+- [Spawning custom robot models](#spawning-custom-robot-models)
+
 ## What is wired
 
 A thin wrapper ([launch/nav2_simulation.launch.py](../launch/nav2_simulation.launch.py))
@@ -33,6 +46,23 @@ over the canonical Nav2 Jazzy scenario (`nav2_bringup/tb3_simulation_launch.py` 
 
 AMCL self-seeds at the spawn pose `(-2.0, -0.5)`.
 
+## Launch arguments
+
+`nav2_simulation.launch.py` declares the arguments below and forwards `world`,
+`map`, `params_file`, `headless`, and `use_rviz` to
+`nav2_bringup/tb3_simulation_launch.py`.
+
+| Argument | Default | Meaning |
+| --- | --- | --- |
+| `world` | `worlds/prox_mpc_open.sdf.xacro` | Full path to the Gazebo world (xacro). |
+| `map` | `maps/prox_mpc_open.yaml` | Full path to the occupancy map yaml (must match the world). |
+| `params_file` | `''` | Full path to the Nav2 params; empty selects the file from `predictive`. |
+| `headless` | `True` | Run Gazebo headless (no GUI / SceneBroadcaster). |
+| `use_rviz` | `False` | Start RViz (requires a display). |
+| `predictive` | `False` | Enable predictive obstacle avoidance and start the tracker on `/scan`. |
+
+An explicit `params_file:=<path>` overrides the file chosen by `predictive`.
+
 > Rendering note: the Gazebo `Sensors` system (gpu_lidar) needs an OGRE2 render
 > context. These scenarios were verified on a host with a GPU + display; on a
 > headless host without a GPU/EGL the lidar may fail to start. Scenario 0 (plugin
@@ -42,14 +72,18 @@ AMCL self-seeds at the spawn pose `(-2.0, -0.5)`.
 
 ```bash
 colcon build --symlink-install \
-  --packages-select prox_mpc_core prox_mpc_controller prox_mpc_demo
+  --packages-select prox_mpc_msgs prox_mpc_core prox_mpc_controller prox_mpc_demo
 source install/setup.bash
 ```
+
+The predictive mode (`predictive:=True`) additionally needs
+`prox_mpc_obstacle_tracker` built, since the launch then starts the tracker on
+`/scan`.
 
 ## Scenario 0 — plugin loads in controller_server (no Gazebo)
 
 ```bash
-ros2 plugin list nav2_core::Controller        # lists prox_mpc_controller::ProxMpcController
+ros2 plugin list --package prox_mpc_controller   # lists prox_mpc_controller::ProxMpcController
 ```
 
 The load line appears at controller_server configure/activate (Scenarios 1-2):
@@ -233,8 +267,11 @@ are the verified gate.
 
 ## Spawning custom robot models
 
-Any custom robot SDF/URDF can replace the waffle via the `robot_sdf` launch
-argument (forwarded to the tb3 spawn), or be inserted live with
-`ros2 run ros_gz_sim create -file <sdf> ...`. `model_plugin` in the params selects
-the prox_mpc model: `prox_mpc_core/Unicycle` matches the diff-drive waffle;
-`prox_mpc_core/Bicycle` is car-like (spawn an Ackermann robot for faithful motion).
+This wrapper forwards only `world`, `map`, `params_file`, `headless`, and
+`use_rviz` to `tb3_simulation_launch.py`, so it always spawns the stock TurtleBot3
+waffle. To use a different robot, insert it live into the running world with
+`ros2 run ros_gz_sim create -file <sdf> ...` (as Scenario 2 spawns the box and
+actor), or invoke `nav2_bringup/tb3_simulation_launch.py` directly with its own
+`robot_sdf` argument. `model_plugin` in the params selects the prox_mpc model:
+`prox_mpc_core/Unicycle` matches the diff-drive waffle; `prox_mpc_core/Bicycle` is
+car-like (spawn an Ackermann robot for faithful motion).
