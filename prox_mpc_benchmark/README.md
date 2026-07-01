@@ -5,6 +5,26 @@ It measures three metric classes — **accuracy** (cross-track / goal error),
 **precision** (mean ± std over repeats), and **real-time / feasibility** (solver
 diagnostics) — across a matrix of *scenario × model × controller × run mode*.
 
+## Table of Contents
+
+- [Overview](#overview)
+- [Prerequisites](#prerequisites)
+- [Build](#build)
+- [Project structure](#project-structure)
+- [Run modes](#run-modes)
+- [Coverage and status (this run)](#coverage-and-status-this-run)
+- [Notes on the metrics](#notes-on-the-metrics)
+- [Configuration](#configuration)
+- [Usage](#usage)
+  - [Quick start](#quick-start)
+  - [Standalone matrix (b1)](#standalone-matrix-b1)
+  - [Cross-controller comparison (b2)](#cross-controller-comparison-b2)
+  - [Aggregate the tables](#aggregate-the-tables)
+- [Results](#results)
+- [License](#license)
+
+## Overview
+
 The package contains a controller-agnostic **C++ live metrics node**
 ([src/metrics_node.cpp](src/metrics_node.cpp)) plus installed **Python tooling**
 ([scripts/](scripts/)) for orchestration, map generation, goal sending, bag
@@ -12,17 +32,50 @@ reduction, and aggregation (D4). It **reuses** the demo worlds/maps/models rathe
 than duplicating them, and **owns the result artifacts**, which stay local and
 gitignored (D7) — the framework performs no git operations.
 
-## Layout
+The narrative companion — how ProxMPC compares against the stock Nav2 controllers
+and what the suite concluded — is in
+[docs/controller-comparison-results.md](../docs/controller-comparison-results.md).
+
+## Prerequisites
+
+- **Operating system:** Ubuntu 24.04 (Noble).
+- **ROS 2 distribution:** Jazzy.
+- **Build system:** `ament_cmake`.
+- **Always needed:** `prox_mpc_core`, `prox_mpc_msgs`, and `prox_mpc_demo` (the
+  reused worlds, maps, and models).
+- **Modes a / b2:** additionally Nav2 and the stock Nav2 controllers under
+  comparison (DWB, MPPI, Regulated Pure Pursuit), plus `prox_mpc_controller`;
+  mode a also needs Gazebo Harmonic and `ros_gz`.
+
+ROS dependencies are declared in `package.xml` and resolved by `rosdep install`.
+
+## Build
+
+Build the harness and its dependencies in an overlay workspace:
+
+```bash
+colcon build --symlink-install --packages-select \
+  prox_mpc_msgs prox_mpc_core prox_mpc_controller prox_mpc_demo prox_mpc_benchmark
+source install/setup.bash
+```
+
+## Project structure
 
 - `config/scenarios/` — the four motion scenarios (`static_box`, `dynamic_circle`,
-  `dynamic_line_forward`, `dynamic_line_backward`), one YAML each (section 2, D10).
-- `config/controllers/` — one preset per Nav2 controller under test (D2).
-- `config/robots/` — robot ↔ prox_mpc model pairing (waffle→Unicycle, ackermann→Bicycle, D3).
+  `dynamic_line_forward`, `dynamic_line_backward`) driven by the standalone matrix,
+  plus `nav2_open` for the cross-controller cell; one YAML each (section 2, D10).
+- `config/controllers/` — one preset per Nav2 controller under test: `proxmpc`,
+  `dwb`, `mppi`, `regulated_pure_pursuit` (D2).
+- `config/robots/` — robot ↔ prox_mpc model pairing (`waffle`→Unicycle,
+  `ackermann`→Bicycle, D3).
 - `config/metrics.yaml` — metric set, pass thresholds, repeats, shared control params.
+- `config/nav2_b2_base.yaml` — the shared Nav2 stack the mode-b2 launch injects each controller preset into.
 - `src/metrics_node.cpp` — live cross-track/goal-error + SolverDiagnostics tap; writes a per-run JSON.
 - `src/kinematic_plant.cpp` — mode (b2) plant: integrates `/cmd_vel` as a unicycle, publishes `/odom` + TF.
 - `src/timing_controller_wrapper.cpp` — a `nav2_core::Controller` decorator that wall-clock times the
   wrapped controller's `computeVelocityCommands` so every controller's per-cycle compute is measured identically.
+- `launch/benchmark.launch.py` — standalone (b1) sim + metrics node for one scenario × model.
+- `launch/benchmark_nav2.launch.py` — mode (b2) Nav2 + kinematic plant with the selected controller preset.
 - `scripts/run_matrix.py` — orchestrate the standalone (b1) matrix × repeats.
 - `scripts/run_nav2.py` — orchestrate the mode (b2) cross-controller comparison (Nav2 + plant, no Gazebo).
 - `scripts/resource_sampler.py` — sample the controller_server process CPU/RSS + `/cmd_vel` rate (b2).
@@ -30,6 +83,7 @@ gitignored (D7) — the framework performs no git operations.
 - `scripts/goal_sender.py` — auto-send NavigateToPose / NavigateThroughPoses (modes a/b2).
 - `scripts/compute_metrics.py` — bag → per-run JSON (modes a/b2).
 - `scripts/aggregate.py` — per-run JSON → mean ± std tables → this README.
+- `init.sh` — one-command reproducible build + single-scenario (b1) run.
 - `results/` — per-run JSON, the `scenarios.json` index, progress files (gitignored, D7).
 
 ## Run modes
@@ -42,10 +96,10 @@ gitignored (D7) — the framework performs no git operations.
   Nav2 controller_server for controller-agnostic comparison without Gazebo physics
   cost. Wired (`benchmark_nav2.launch.py`, `run_nav2.py`) and run here.
 
-## Coverage & status (this run)
+## Coverage and status (this run)
 
 What was actually built and executed in this environment (ROS 2 Jazzy, Gazebo
-Harmonic 8.11, full Nav2 + DWB/MPPI/RPP/Graceful/RotationShim):
+Harmonic 8.11, full Nav2 with the ProxMPC / DWB / MPPI / RPP controllers compared):
 
 | Capability | Status |
 | --- | --- |
@@ -66,6 +120,9 @@ controller-agnostic metrics node. The narrative and the conclusion on ProxMPC ar
 in [docs/controller-comparison-results.md](../docs/controller-comparison-results.md).
 
 ## Notes on the metrics
+
+<details>
+<summary>How the metrics are defined and why (precision, deadline-miss, obstacle placement, resources, fair tuning)</summary>
 
 - **Precision (D9).** Mode b1 is deterministic, so the geometric metrics (path,
   goal error, cross-track) have ≈0 std across repeats — the precision signal is
@@ -100,19 +157,79 @@ in [docs/controller-comparison-results.md](../docs/controller-comparison-results
   default — those are not cross-equalisable. See
   [docs/controller-comparison-results.md](../docs/controller-comparison-results.md).
 
-## Quick start
+</details>
+
+## Configuration
+
+Every run is configured from the YAML files in `config/`, which are the single
+source of truth for the harness.
+`config/metrics.yaml` holds the metric set, pass thresholds, repeat count, and the
+shared control parameters; `config/scenarios/<name>.yaml` defines each scenario's
+geometry, reference polyline, and obstacles; `config/controllers/<name>.yaml`
+holds one preset per Nav2 controller under comparison; and
+`config/robots/<name>.yaml` pairs a robot with its prox_mpc model.
+The mode-b2 launch injects the selected controller preset into the shared
+`config/nav2_b2_base.yaml` stack so every controller runs against an identical Nav2
+configuration.
+
+The orchestration scripts select from these files by name.
+`run_matrix.py` accepts `--scenarios`, `--models`, `--modes` (b1 here),
+`--controller`, `--repeats`, and `--results-dir`; `run_nav2.py` accepts
+`--scenario`, `--controllers`, `--robot`, `--repeats`, `--warmup`, and
+`--results-dir`.
+The launch files parametrise a single cell: `benchmark.launch.py` takes
+`scenario`, `model`, `mode`, and `summary_json`; `benchmark_nav2.launch.py` takes
+`controller`, `robot`, `timing`, `map_yaml`, `start_x`, `start_y`, and
+`start_theta`.
+
+## Usage
+
+### Quick start
+
+Run one scenario end to end — the script sources the overlay, builds the affected
+packages in `~/ros2_ws`, runs the standalone (b1) cell, and prints the per-run
+summary JSON.
+`init.sh` lives in the package root, so run it from there:
 
 ```bash
-# Build + run one scenario reproducibly (sources the overlay, builds, runs b1):
+cd ~/ros2_ws/src/prox_mpc/prox_mpc_benchmark
 ./init.sh static_box bike
+```
 
-# Or the whole standalone matrix (both models × 4 scenarios × repeats):
+Its usage is `./init.sh [scenario] [model]`, where `scenario` is one of
+`static_box`, `dynamic_circle`, `dynamic_line_forward`, `dynamic_line_backward`
+(default `static_box`) and `model` is `r2d2` or `bike` (default `bike`).
+Override the workspace path with the `ROS2_WS` environment variable if the
+workspace is not at `~/ros2_ws`.
+
+### Standalone matrix (b1)
+
+Run the whole deterministic standalone matrix (both models × the four motion
+scenarios × repeats):
+
+```bash
 ros2 run prox_mpc_benchmark run_matrix.py --modes b1
+```
 
-# Cross-controller comparison on the open-world cell (mode b2, no Gazebo):
+Narrow the run to specific cells with `--scenarios` and `--models`, for example
+`--scenarios static_box --models bike`.
+
+### Cross-controller comparison (b2)
+
+Compare ProxMPC against the stock Nav2 controllers on the open-world cell, Nav2 +
+kinematic plant, no Gazebo:
+
+```bash
 ros2 run prox_mpc_benchmark run_nav2.py --controllers proxmpc,dwb,mppi,regulated_pure_pursuit
+```
 
-ros2 run prox_mpc_benchmark aggregate.py     # renders the tables below
+### Aggregate the tables
+
+Reduce the per-run JSONs into the mean ± std tables and render them into the
+[Results](#results) block below:
+
+```bash
+ros2 run prox_mpc_benchmark aggregate.py
 ```
 
 ## Results
@@ -150,3 +267,8 @@ _Auto-generated by `aggregate.py` from `results/scenarios.json` (54 runs). Value
 | nav2_open | r2d2 | 3 | 100% | 10.73±0.74 | 4.75±0.00 | 0.246±0.002 | 0.000±0.000 | 0.000±0.000 | n/a | n/a | n/a | 0.0±0.0% | 0.00±0.00 | 0.00±0.00 | 0.0±0.0% | 0.000±0.000 | 20.10±0.00 | 3.70±0.05 | 53.78±0.05 | 0.207±0.004 | 0.281±0.020 |
 
 <!-- BENCHMARK_RESULTS_END -->
+
+## License
+
+[Apache-2.0](../LICENSE) — the full text is in [LICENSE](../LICENSE) and
+attribution in [NOTICE](../NOTICE).
