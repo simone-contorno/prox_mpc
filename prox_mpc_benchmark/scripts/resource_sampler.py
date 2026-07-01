@@ -20,14 +20,31 @@ The per-run JSON is merged into the run record by run_nav2.py.
 
 import argparse
 import json
+import math
 import os
 import time
 
 from geometry_msgs.msg import Twist
 import rclpy
 from rclpy.node import Node
+from std_msgs.msg import Float64
 
 CLK_TCK = os.sysconf('SC_CLK_TCK')
+
+
+def percentile(values, q):
+    """Linear-interpolated q-quantile (0..1) of values, or None if empty."""
+    if not values:
+        return None
+    s = sorted(values)
+    if len(s) == 1:
+        return s[0]
+    idx = q * (len(s) - 1)
+    lo = int(math.floor(idx))
+    hi = int(math.ceil(idx))
+    if lo == hi:
+        return s[lo]
+    return s[lo] + (s[hi] - s[lo]) * (idx - lo)
 
 
 def read_cpu_rss(pid):
@@ -53,7 +70,7 @@ def read_cpu_rss(pid):
 class ResourceSampler(Node):
     """Poll a PID's CPU/RSS and count /cmd_vel messages until shutdown."""
 
-    def __init__(self, pid, out_path, hz, cmd_topic):
+    def __init__(self, pid, out_path, hz, cmd_topic, compute_topic):
         super().__init__('prox_mpc_resource_sampler')
         self._pid = pid
         self._out = out_path
@@ -68,8 +85,16 @@ class ResourceSampler(Node):
         self._rss_peak_kb = 0
         self._rss_sum_kb = 0
         self._rss_n = 0
+        self._compute_ms = []
         self.create_subscription(Twist, cmd_topic, self._on_cmd, 10)
+        if compute_topic:
+            self.create_subscription(Float64, compute_topic, self._on_compute, 50)
         self.create_timer(1.0 / hz, self._sample)
+
+    def _on_compute(self, msg):
+        # Per-cycle controller compute time [ms] from the timing decorator.
+        if self._first_cmd is not None:
+            self._compute_ms.append(msg.data)
 
     def _on_cmd(self, _msg):
         now = time.monotonic()
@@ -113,6 +138,10 @@ class ResourceSampler(Node):
                             if self._rss_n else None),
             'control_rate_hz': freq,
             'cmd_count': self._cmd_count,
+            'compute_ms_p50': percentile(self._compute_ms, 0.50),
+            'compute_ms_p95': percentile(self._compute_ms, 0.95),
+            'compute_ms_max': max(self._compute_ms) if self._compute_ms else None,
+            'compute_count': len(self._compute_ms),
             'sampled_pid': self._pid,
         }
         with open(self._out, 'w') as fh:
@@ -125,10 +154,11 @@ def main():
     ap.add_argument('--out', required=True)
     ap.add_argument('--hz', type=float, default=10.0)
     ap.add_argument('--cmd-topic', default='cmd_vel')
+    ap.add_argument('--compute-topic', default='')
     args = ap.parse_args()
 
     rclpy.init()
-    node = ResourceSampler(args.pid, args.out, args.hz, args.cmd_topic)
+    node = ResourceSampler(args.pid, args.out, args.hz, args.cmd_topic, args.compute_topic)
     try:
         rclpy.spin(node)
     except KeyboardInterrupt:

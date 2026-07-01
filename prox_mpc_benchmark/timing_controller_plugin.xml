@@ -1,0 +1,9 @@
+<library path="timing_controller_wrapper">
+  <class type="prox_mpc_benchmark::TimingControllerWrapper" base_class_type="nav2_core::Controller">
+    <description>
+      Benchmark-only decorator that loads a real controller (wrapped_plugin) and
+      wall-clock times its computeVelocityCommands, publishing the per-cycle compute
+      time on &lt;name&gt;/compute_time_ms for an apples-to-apples controller comparison.
+    </description>
+  </class>
+</library>

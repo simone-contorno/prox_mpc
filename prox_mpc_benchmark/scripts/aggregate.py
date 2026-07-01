@@ -36,6 +36,9 @@ COLUMNS = [
     ('control_rate_hz', 'rate', 'Hz', 'ms'),
     ('cpu_mean_pct', 'cpu', '%', 'ms'),
     ('rss_peak_mb', 'rss', 'MB', 'ms'),
+    # Per-cycle controller compute time from the timing decorator (mode b2).
+    ('compute_ms_p50', 'cmp_p50', 'ms', 'ms3'),
+    ('compute_ms_p95', 'cmp_p95', 'ms', 'ms3'),
 ]
 
 

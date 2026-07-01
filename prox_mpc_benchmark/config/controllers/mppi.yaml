@@ -1,8 +1,12 @@
 # MPPI controller preset (FollowPath block) for cross-controller comparison (D2).
 # Stock nav2_mppi_controller params trimmed to the diff-drive case.
+# batch_size is MPPI's count of sampled candidate trajectories per cycle (its
+# dominant cost knob, no equivalent in the other controllers); it is left at the
+# upstream default. The fair-tuning lever is the prediction horizon: time_steps *
+# model_dt = 40 * 0.05 = 2.0 s, matching ProxMPC (np*dt) and DWB (sim_time).
 FollowPath:
   plugin: "nav2_mppi_controller::MPPIController"
-  time_steps: 56
+  time_steps: 40          # fair tuning: 40 * model_dt = 2.0 s horizon
   model_dt: 0.05
   batch_size: 2000
   vx_std: 0.2

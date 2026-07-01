@@ -23,6 +23,10 @@ find_package(nav_msgs REQUIRED)
 find_package(tf2 REQUIRED)
 find_package(tf2_ros REQUIRED)
 find_package(prox_mpc_msgs REQUIRED)
+find_package(rclcpp_lifecycle REQUIRED)
+find_package(nav2_core REQUIRED)
+find_package(nav2_costmap_2d REQUIRED)
+find_package(pluginlib REQUIRED)
 
 # C++ live metrics node
 add_executable(metrics_node src/metrics_node.cpp)
@@ -53,6 +57,37 @@ ament_target_dependencies(kinematic_plant
 )
 install(TARGETS kinematic_plant
   DESTINATION lib/${PROJECT_NAME}
+)
+
+# nav2_core::Controller decorator that times the wrapped controller, so the
+# cross-controller compute comparison measures every controller identically.
+add_library(timing_controller_wrapper SHARED src/timing_controller_wrapper.cpp)
+target_include_directories(timing_controller_wrapper PUBLIC
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  $<INSTALL_INTERFACE:include>
+)
+ament_target_dependencies(timing_controller_wrapper
+  rclcpp
+  rclcpp_lifecycle
+  std_msgs
+  geometry_msgs
+  nav_msgs
+  tf2_ros
+  nav2_core
+  nav2_costmap_2d
+  pluginlib
+)
+pluginlib_export_plugin_description_file(nav2_core timing_controller_plugin.xml)
+install(TARGETS timing_controller_wrapper
+  ARCHIVE DESTINATION lib
+  LIBRARY DESTINATION lib
+  RUNTIME DESTINATION bin
+)
+install(DIRECTORY include/
+  DESTINATION include/${PROJECT_NAME}
+)
+install(FILES timing_controller_plugin.xml
+  DESTINATION share/${PROJECT_NAME}
 )
 
 # Installed Python tooling (orchestration / metrics / aggregation / generation).

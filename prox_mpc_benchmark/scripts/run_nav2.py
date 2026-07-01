@@ -159,7 +159,8 @@ def run_cell(scn, controller, repeat, control, results_dir, robot, map_yaml,
         if pid is not None:
             sampler, _ = popen_group(
                 ['ros2', 'run', PKG, 'resource_sampler.py', '--pid', str(pid),
-                 '--out', str(resource_json), '--cmd-topic', '/cmd_vel'],
+                 '--out', str(resource_json), '--cmd-topic', '/cmd_vel',
+                 '--compute-topic', '/FollowPath/compute_time_ms'],
                 runs_dir / f'{tag}.resource.log')
         metrics, _ = popen_group(
             ['ros2', 'run', PKG, 'metrics_node',

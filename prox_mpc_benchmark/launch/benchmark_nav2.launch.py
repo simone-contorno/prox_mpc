@@ -49,6 +49,13 @@ def _merged_params(context):
         follow_path['model_plugin'] = rb['model_plugin']
         follow_path['model_params'] = {'L': float(rb.get('wheelbase', 0.0))}
 
+    # Wrap the real controller in the timing decorator so every controller's
+    # per-cycle compute is measured identically on /FollowPath/compute_time_ms.
+    timing = LaunchConfiguration('timing').perform(context).lower() in ('true', '1', 'yes')
+    if timing:
+        follow_path['wrapped_plugin'] = follow_path['plugin']
+        follow_path['plugin'] = 'prox_mpc_benchmark::TimingControllerWrapper'
+
     params['controller_server']['ros__parameters']['FollowPath'] = follow_path
     params['controller_server']['ros__parameters']['controller_plugins'] = ['FollowPath']
 
@@ -113,6 +120,7 @@ def generate_launch_description():
     return LaunchDescription([
         DeclareLaunchArgument('controller', default_value='proxmpc'),
         DeclareLaunchArgument('robot', default_value='waffle'),
+        DeclareLaunchArgument('timing', default_value='true'),
         DeclareLaunchArgument('map_yaml', default_value='prox_mpc_open.yaml'),
         DeclareLaunchArgument('start_x', default_value='-3.0'),
         DeclareLaunchArgument('start_y', default_value='0.0'),

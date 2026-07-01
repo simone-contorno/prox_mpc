@@ -18,7 +18,7 @@ FollowPath:
   decel_lim_theta: -3.2
   vx_samples: 20
   vtheta_samples: 20
-  sim_time: 1.7
+  sim_time: 2.0           # fair tuning: 2.0 s prediction horizon, matching ProxMPC (np*dt) and MPPI
   transform_tolerance: 0.2
   xy_goal_tolerance: 0.25
   critics: ["RotateToGoal", "Oscillation", "BaseObstacle", "GoalAlign", "PathAlign", "PathDist", "GoalDist"]
