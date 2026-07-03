@@ -24,6 +24,9 @@ COLUMNS = [
     ('goal_error_m', 'goal_err', 'm', 'ms3'),
     ('cross_track_rms_m', 'ct_rms', 'm', 'ms3'),
     ('cross_track_max_m', 'ct_max', 'm', 'ms3'),
+    # Controller-agnostic avoidance metrics (obstacle scenarios; n/a on the open cell).
+    ('min_obstacle_gap_m', 'obs_gap', 'm', 'ms3'),
+    ('collision', 'coll', '', 'rate'),
     ('solve_ms_p50', 'solve_p50', 'ms', 'ms3'),
     ('solve_ms_p95', 'solve_p95', 'ms', 'ms3'),
     ('solve_ms_max', 'solve_max', 'ms', 'ms3'),
@@ -71,9 +74,9 @@ def build_tables(records):
     out = []
     for mode in modes:
         out.append(f'### Mode `{mode}`\n')
-        header = '| scenario | model | n | ' + ' | '.join(
+        header = '| scenario | model | controller | n | ' + ' | '.join(
             f"{h}{'['+u+']' if u else ''}" for _, h, u, _ in COLUMNS) + ' |'
-        sep = '|' + '---|' * (3 + len(COLUMNS))
+        sep = '|' + '---|' * (4 + len(COLUMNS))
         out.append(header)
         out.append(sep)
         keys = sorted(k for k in groups if k[0] == mode)
@@ -82,12 +85,14 @@ def build_tables(records):
             n = len(recs)
             cells = []
             for key, _h, _u, kind in COLUMNS:
-                if key == 'success':
-                    vals = [1.0 if r.get('success') else 0.0 for r in recs]
+                if key in ('success', 'collision'):
+                    # Booleans (collision null on the open cell is dropped by fmt).
+                    vals = [(1.0 if r.get(key) else 0.0) for r in recs
+                            if key != 'collision' or r.get(key) is not None]
                 else:
                     vals = [r.get(key) for r in recs]
                 cells.append(fmt(key, kind, vals))
-            out.append(f'| {k[1]} | {k[2]} | {n} | ' + ' | '.join(cells) + ' |')
+            out.append(f'| {k[1]} | {k[2]} | {k[3]} | {n} | ' + ' | '.join(cells) + ' |')
         out.append('')
     return '\n'.join(out)
 
