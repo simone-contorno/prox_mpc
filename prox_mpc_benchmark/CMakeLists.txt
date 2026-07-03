@@ -20,6 +20,7 @@ find_package(rclcpp REQUIRED)
 find_package(std_msgs REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(nav_msgs REQUIRED)
+find_package(sensor_msgs REQUIRED)
 find_package(tf2 REQUIRED)
 find_package(tf2_ros REQUIRED)
 find_package(prox_mpc_msgs REQUIRED)
@@ -56,6 +57,21 @@ ament_target_dependencies(kinematic_plant
   tf2_ros
 )
 install(TARGETS kinematic_plant
+  DESTINATION lib/${PROJECT_NAME}
+)
+
+# Obstacle scan simulator for mode (b2): ray-casts the scenario obstacles into a
+# LaserScan so the costmap obstacle_layer feeds every controller the same obstacle.
+add_executable(scan_simulator src/scan_simulator.cpp)
+target_include_directories(scan_simulator PRIVATE
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+)
+ament_target_dependencies(scan_simulator
+  rclcpp
+  nav_msgs
+  sensor_msgs
+)
+install(TARGETS scan_simulator
   DESTINATION lib/${PROJECT_NAME}
 )
 
@@ -118,6 +134,10 @@ if(BUILD_TESTING)
   find_package(ament_cmake_gtest REQUIRED)
   ament_add_gtest(test_metrics test/test_metrics.cpp)
   target_include_directories(test_metrics PRIVATE
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  )
+  ament_add_gtest(test_obstacle_field test/test_obstacle_field.cpp)
+  target_include_directories(test_obstacle_field PRIVATE
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   )
 endif()

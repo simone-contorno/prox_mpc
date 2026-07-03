@@ -36,9 +36,14 @@
 #include <prox_mpc_msgs/msg/solver_diagnostics.hpp>
 
 #include <prox_mpc_benchmark/metrics_math.hpp>
+#include <prox_mpc_benchmark/obstacle_field.hpp>
 
 using prox_mpc_benchmark::crossTrack;
+using prox_mpc_benchmark::ObstacleSpec;
+using prox_mpc_benchmark::obstacleCenterAt;
+using prox_mpc_benchmark::parseObstacleSpecs;
 using prox_mpc_benchmark::percentile;
+using prox_mpc_benchmark::robotObstacleGap;
 
 class MetricsNode : public rclcpp::Node
 {
@@ -59,6 +64,20 @@ public:
     summary_json_ = declare_parameter<std::string>("summary_json", "");
     auto_exit_ = declare_parameter<bool>("auto_exit", true);
     settle_s_ = declare_parameter<double>("settle_s", 1.0);
+
+    // Obstacle field (parallel arrays, same source as the scan simulator) for the
+    // controller-agnostic clearance metric. Empty on the obstacle-free cell.
+    robot_radius_ = declare_parameter<double>("robot_radius", 0.22);
+    motion_eps_ = declare_parameter<double>("motion_eps", 1.0e-3);
+    obstacles_ = parseObstacleSpecs(
+      declare_parameter<std::vector<std::string>>("obs_motion", std::vector<std::string>{}),
+      declare_parameter<std::vector<double>>("obs_cx", std::vector<double>{}),
+      declare_parameter<std::vector<double>>("obs_cy", std::vector<double>{}),
+      declare_parameter<std::vector<double>>("obs_ex", std::vector<double>{}),
+      declare_parameter<std::vector<double>>("obs_ey", std::vector<double>{}),
+      declare_parameter<std::vector<double>>("obs_radius", std::vector<double>{}),
+      declare_parameter<std::vector<double>>("obs_speed", std::vector<double>{}),
+      declare_parameter<std::vector<double>>("obs_body", std::vector<double>{}));
 
     // Labels echoed into the summary so the aggregator can index the matrix cell.
     label_scenario_ = declare_parameter<std::string>("scenario", "");
@@ -135,6 +154,16 @@ public:
     os << "  \"min_goal_distance_m\": " << num(min_goal_dist_) << ",\n";
     os << "  \"cross_track_rms_m\": " << num(ct_rms) << ",\n";
     os << "  \"cross_track_max_m\": " << num(ct_max_) << ",\n";
+    // Controller-agnostic avoidance metrics (null on the obstacle-free cell). The
+    // gap is robot-disc to obstacle-disc; < 0 means the discs overlapped, which on
+    // the collision-free kinematic plant is a would-be collision.
+    const bool has_obs = !obstacles_.empty() && std::isfinite(min_obs_gap_);
+    os << "  \"min_obstacle_gap_m\": " <<
+      (has_obs ? num(min_obs_gap_) : std::string("null")) << ",\n";
+    os << "  \"min_obstacle_dist_m\": " <<
+      (has_obs ? num(min_obs_dist_) : std::string("null")) << ",\n";
+    os << "  \"collision\": " <<
+      (has_obs ? (min_obs_gap_ < 0.0 ? "true" : "false") : std::string("null")) << ",\n";
     os << "  \"solve_ms_p50\": " << num(percentile(solve_ms_, 0.50)) << ",\n";
     os << "  \"solve_ms_p95\": " << num(percentile(solve_ms_, 0.95)) << ",\n";
     os << "  \"solve_ms_max\": " << num(solve_ms_.empty() ? std::nan("") :
@@ -187,12 +216,31 @@ private:
       start_stamp_ = stamp;
       prev_x_ = px;
       prev_y_ = py;
+      first_x_ = px;
+      first_y_ = py;
     } else {
       path_length_ += std::hypot(px - prev_x_, py - prev_y_);
       prev_x_ = px;
       prev_y_ = py;
     }
     pose_samples_++;
+
+    // Clearance to the (time-varying) obstacle field. The obstacle clock starts at
+    // first motion, matching the scan simulator, so the sampled obstacle positions
+    // are the ones the controller actually faced. Reported for every controller.
+    if (!obstacles_.empty()) {
+      if (!obs_started_ && std::hypot(px - first_x_, py - first_y_) > motion_eps_) {
+        obs_started_ = true;
+        obs_t0_ = stamp;
+      }
+      const double t = obs_started_ ? (stamp - obs_t0_).seconds() : 0.0;
+      for (const auto & o : obstacles_) {
+        const double gap = robotObstacleGap(o, t, px, py, robot_radius_);
+        min_obs_gap_ = std::min(min_obs_gap_, gap);
+        const auto [ox, oy] = obstacleCenterAt(o, t);
+        min_obs_dist_ = std::min(min_obs_dist_, std::hypot(px - ox, py - oy));
+      }
+    }
 
     const double ct = crossTrack(ref_x_, ref_y_, px, py);
     ct_sumsq_ += ct * ct;
@@ -228,6 +276,8 @@ private:
   int label_repeat_{0};
   std::vector<double> ref_x_, ref_y_;
   double goal_x_{0.0}, goal_y_{0.0}, goal_tol_{0.25};
+  std::vector<ObstacleSpec> obstacles_;
+  double robot_radius_{0.22}, motion_eps_{1.0e-3};
 
   std::unique_ptr<tf2_ros::Buffer> tf_buffer_;
   std::shared_ptr<tf2_ros::TransformListener> tf_listener_;
@@ -239,6 +289,11 @@ private:
   bool have_first_{false};
   rclcpp::Time start_stamp_;
   double prev_x_{0.0}, prev_y_{0.0}, path_length_{0.0};
+  double first_x_{0.0}, first_y_{0.0};
+  bool obs_started_{false};
+  rclcpp::Time obs_t0_;
+  double min_obs_gap_{std::numeric_limits<double>::infinity()};
+  double min_obs_dist_{std::numeric_limits<double>::infinity()};
   double ct_sumsq_{0.0}, ct_max_{0.0};
   std::size_t ct_count_{0}, pose_samples_{0};
   bool reached_{false};

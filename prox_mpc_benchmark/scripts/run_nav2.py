@@ -30,7 +30,14 @@ import time
 import yaml
 
 PKG = 'prox_mpc_benchmark'
-DEFAULT_CONTROLLERS = ['proxmpc', 'dwb', 'mppi', 'regulated_pure_pursuit']
+DEFAULT_CONTROLLERS = ['proxmpc', 'dwb', 'mppi', 'regulated_pure_pursuit', 'graceful']
+
+# Shared robot radius (nav2_b2_base costmap) and ProxMPC safety margin. The physical
+# obstacle radius is back-computed so that this robot inflation plus the marked
+# obstacle disc reproduces the scenario keep-out clearance — so every controller
+# faces the identical physical obstacle and ProxMPC's effective keep-out matches b1.
+ROBOT_RADIUS = 0.22
+SAFETY_MARGIN = 0.10
 
 
 def share_dir() -> Path:
@@ -41,6 +48,72 @@ def share_dir() -> Path:
 def load_yaml(path: Path) -> dict:
     with open(path) as fh:
         return yaml.safe_load(fh)
+
+
+def obstacle_arrays(scn: dict):
+    """
+    Map scenario obstacles to the scan-simulator / metrics parallel arrays.
+
+    Mirrors run_matrix.obstacle_arrays so b1 and b2 drive the identical obstacle
+    geometry, and adds the physical body radius used for costmap marking and the
+    clearance metric.
+    """
+    motion, cx, cy, ex, ey, radius, speed, body = ([] for _ in range(8))
+    for o in scn.get('obstacles', []) or []:
+        otype = o.get('type', 'static')
+        m = 'static' if otype == 'static' else o.get('motion', 'static')
+        motion.append(m)
+        if m == 'circle':
+            c = o.get('center', {})
+            cx.append(float(c.get('x', 0.0)))
+            cy.append(float(c.get('y', 0.0)))
+            ex.append(0.0)
+            ey.append(0.0)
+            radius.append(float(o.get('radius', 1.0)))
+            speed.append(float(o.get('speed', 0.0)))
+        elif m == 'line':
+            a = o.get('from', {})
+            b = o.get('to', {})
+            cx.append(float(a.get('x', 0.0)))
+            cy.append(float(a.get('y', 0.0)))
+            ex.append(float(b.get('x', 0.0)))
+            ey.append(float(b.get('y', 0.0)))
+            radius.append(1.0)
+            speed.append(float(o.get('speed', 0.0)))
+        else:  # static
+            p = o.get('pose', {})
+            cx.append(float(p.get('x', 0.0)))
+            cy.append(float(p.get('y', 0.0)))
+            ex.append(0.0)
+            ey.append(0.0)
+            radius.append(1.0)
+            speed.append(0.0)
+        clearance = float(o.get('clearance', 0.7))
+        body.append(max(0.05, clearance - (ROBOT_RADIUS + SAFETY_MARGIN)))
+    return motion, cx, cy, ex, ey, radius, speed, body
+
+
+def write_scan_params(path: Path, scn: dict):
+    """Write the scan-simulator params (obstacle field + scan geometry)."""
+    motion, cx, cy, ex, ey, radius, speed, body = obstacle_arrays(scn)
+    params = {
+        'scan_frame': 'base_link',
+        'odom_topic': 'odom',
+        'scan_topic': 'scan',
+        'rate_hz': 10.0,
+        'num_beams': 360,
+        'range_min': 0.05,
+        'range_max': 4.0,
+    }
+    if motion:
+        params.update({
+            'obs_motion': motion,
+            'obs_cx': cx, 'obs_cy': cy, 'obs_ex': ex, 'obs_ey': ey,
+            'obs_radius': radius, 'obs_speed': speed, 'obs_body': body,
+        })
+    doc = {'scan_simulator': {'ros__parameters': params}}
+    with open(path, 'w') as fh:
+        yaml.safe_dump(doc, fh, default_flow_style=None, sort_keys=False)
 
 
 def reference(scn: dict):
@@ -57,7 +130,8 @@ def write_metrics_params(path: Path, scn: dict, control: dict, controller: str,
                          repeat: int, summary_json: Path):
     goal = scn['goals'][-1]
     ref_x, ref_y = reference(scn)
-    diag_topic = '/FollowPath/diagnostics' if controller == 'proxmpc' else '/__none__'
+    diag_topic = '/FollowPath/diagnostics' \
+        if controller in ('proxmpc', 'proxmpc_pred') else '/__none__'
     metrics = {
         'map_frame': 'map',
         'base_frame': 'base_link',
@@ -76,14 +150,24 @@ def write_metrics_params(path: Path, scn: dict, control: dict, controller: str,
         'repeat': int(repeat),
         'auto_exit': True,
         'settle_s': 1.5,
+        'robot_radius': ROBOT_RADIUS,
     }
+    # Same obstacle field the scan simulator uses, so the clearance metric measures
+    # the obstacles the controller actually faced (controller-agnostic).
+    motion, cx, cy, ex, ey, radius, speed, body = obstacle_arrays(scn)
+    if motion:
+        metrics.update({
+            'obs_motion': motion,
+            'obs_cx': cx, 'obs_cy': cy, 'obs_ex': ex, 'obs_ey': ey,
+            'obs_radius': radius, 'obs_speed': speed, 'obs_body': body,
+        })
     doc = {'prox_mpc_metrics': {'ros__parameters': metrics}}
     with open(path, 'w') as fh:
         yaml.safe_dump(doc, fh, default_flow_style=None, sort_keys=False)
 
 
-def find_controller_pid():
-    """Return the controller_server PID (its /proc comm), or None if not up yet."""
+def find_pid_by_comm(prefix):
+    """Return the first PID whose /proc comm starts with prefix, or None."""
     for entry in os.listdir('/proc'):
         if not entry.isdigit():
             continue
@@ -92,9 +176,14 @@ def find_controller_pid():
                 comm = fh.read().strip()
         except OSError:
             continue
-        if comm.startswith('controller_serv'):  # comm is truncated to 15 chars
+        if comm.startswith(prefix):
             return int(entry)
     return None
+
+
+def find_controller_pid():
+    """Return the controller_server PID (its /proc comm), or None if not up yet."""
+    return find_pid_by_comm('controller_serv')  # comm is truncated to 15 chars
 
 
 def popen_group(cmd, log_path):
@@ -126,14 +215,20 @@ def run_cell(scn, controller, repeat, control, results_dir, robot, map_yaml,
     runs_dir = results_dir / 'runs'
     runs_dir.mkdir(parents=True, exist_ok=True)
     tag = f"{scn['name']}__{scn.get('models', ['r2d2'])[0]}__b2__{controller}__r{repeat}"
+    predictive = controller == 'proxmpc_pred'
     summary_json = runs_dir / f'{tag}.json'
     resource_json = runs_dir / f'{tag}.resource.json'
+    tracker_resource_json = runs_dir / f'{tag}.tracker_resource.json'
     metrics_params = runs_dir / f'{tag}.metrics.yaml'
+    scan_params = runs_dir / f'{tag}.scan.yaml'
     if summary_json.exists():
         summary_json.unlink()
     if resource_json.exists():
         resource_json.unlink()
+    if tracker_resource_json.exists():
+        tracker_resource_json.unlink()
     write_metrics_params(metrics_params, scn, control, controller, repeat, summary_json)
+    write_scan_params(scan_params, scn)
 
     s = scn['start']
     goal = scn['goals'][-1]
@@ -142,10 +237,12 @@ def run_cell(scn, controller, repeat, control, results_dir, robot, map_yaml,
     stack, stack_log = popen_group(
         ['ros2', 'launch', PKG, 'benchmark_nav2.launch.py',
          f'controller:={controller}', f'robot:={robot}', f'map_yaml:={map_yaml}',
-         f"start_x:={s['x']}", f"start_y:={s['y']}", f"start_theta:={s.get('yaw', 0.0)}"],
+         f"start_x:={s['x']}", f"start_y:={s['y']}", f"start_theta:={s.get('yaw', 0.0)}",
+         f'scan_params_file:={scan_params}',
+         f"obstacle_tracker:={'true' if predictive else 'false'}"],
         runs_dir / f'{tag}.stack.log')
 
-    metrics = goal_proc = sampler = None
+    metrics = goal_proc = sampler = tracker_sampler = None
     metrics_log = open(runs_dir / f'{tag}.metrics.log', 'w')
     try:
         time.sleep(warmup_s)  # let the lifecycle manager activate the servers
@@ -162,6 +259,17 @@ def run_cell(scn, controller, repeat, control, results_dir, robot, map_yaml,
                  '--out', str(resource_json), '--cmd-topic', '/cmd_vel',
                  '--compute-topic', '/FollowPath/compute_time_ms'],
                 runs_dir / f'{tag}.resource.log')
+        # Predictive mode adds a companion tracker process; sample it separately so
+        # the true system cost of prediction (controller + tracker) is reported, not
+        # just the controller_server the decorator times.
+        if predictive:
+            tpid = find_pid_by_comm('obstacle_tracke')  # comm truncated to 15 chars
+            if tpid is not None:
+                tracker_sampler, _ = popen_group(
+                    ['ros2', 'run', PKG, 'resource_sampler.py', '--pid', str(tpid),
+                     '--out', str(tracker_resource_json), '--cmd-topic', '/cmd_vel',
+                     '--node-name', 'prox_mpc_tracker_resource_sampler'],
+                    runs_dir / f'{tag}.tracker_resource.log')
         metrics, _ = popen_group(
             ['ros2', 'run', PKG, 'metrics_node',
              '--ros-args', '--params-file', str(metrics_params)],
@@ -183,6 +291,7 @@ def run_cell(scn, controller, repeat, control, results_dir, robot, map_yaml,
         terminate(goal_proc)
         terminate(metrics)
         terminate(sampler)  # SIGINT before the stack so it samples a live PID
+        terminate(tracker_sampler)
         terminate(stack)
         metrics_log.close()
         stack_log.close()
@@ -194,6 +303,14 @@ def run_cell(scn, controller, repeat, control, results_dir, robot, map_yaml,
         if resource_json.exists():
             try:
                 rec.update(json.load(open(resource_json)))
+            except (json.JSONDecodeError, OSError):
+                pass
+        if predictive and tracker_resource_json.exists():
+            try:
+                tr = json.load(open(tracker_resource_json))
+                rec['tracker_cpu_mean_pct'] = tr.get('cpu_mean_pct')
+                rec['tracker_cpu_peak_pct'] = tr.get('cpu_peak_pct')
+                rec['tracker_rss_peak_mb'] = tr.get('rss_peak_mb')
             except (json.JSONDecodeError, OSError):
                 pass
         return rec

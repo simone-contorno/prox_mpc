@@ -20,10 +20,18 @@ import tempfile
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, OpaqueFunction
+from launch.actions import DeclareLaunchArgument, OpaqueFunction, TimerAction
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 import yaml
+
+# Seconds to hold the obstacle tracker back so it does not publish /tracked_obstacles
+# during Nav2 bringup. The tracker self-activates immediately, and at 10 Hz it
+# contends with controller_server's activation, intermittently pushing that
+# transition past the lifecycle manager's service timeout and aborting the whole
+# bringup. Starting it after the stack is up (well inside run_nav2's 10 s warmup)
+# removes the race; predictions are flowing before the goal is sent.
+TRACKER_START_DELAY_S = 6.0
 
 PKG = 'prox_mpc_benchmark'
 
@@ -43,7 +51,7 @@ def _merged_params(context):
 
     # ProxMPC needs the robot's prox_mpc model pairing; the stock Nav2 controllers
     # ignore it. The waffle pairing is Unicycle so the body twist matches diff drive.
-    if controller == 'proxmpc':
+    if controller in ('proxmpc', 'proxmpc_pred'):
         with open(os.path.join(share, 'config', 'robots', f'{robot}.yaml')) as fh:
             rb = yaml.safe_load(fh)['robot']
         follow_path['model_plugin'] = rb['model_plugin']
@@ -83,6 +91,17 @@ def _setup(context, *args, **kwargs):
     start_x = LaunchConfiguration('start_x').perform(context)
     start_y = LaunchConfiguration('start_y').perform(context)
     start_theta = LaunchConfiguration('start_theta').perform(context)
+    scan_params = LaunchConfiguration('scan_params_file').perform(context)
+    want_tracker = LaunchConfiguration('obstacle_tracker').perform(context).lower() \
+        in ('true', '1', 'yes')
+
+    # The scan simulator ray-casts the scenario obstacles into /scan for the local
+    # costmap obstacle_layer, so every controller perceives them identically. With
+    # no params file (obstacle-free cell) it publishes all-max-range clearing beams.
+    scan_node_params = [scan_params] if scan_params and os.path.isfile(scan_params) else [{
+        'scan_frame': 'base_link', 'odom_topic': 'odom', 'scan_topic': 'scan',
+        'rate_hz': 10.0, 'num_beams': 360, 'range_min': 0.05, 'range_max': 4.0,
+    }]
 
     lifecycle_nodes = [
         'map_server', 'planner_server', 'controller_server',
@@ -92,6 +111,22 @@ def _setup(context, *args, **kwargs):
     def server(pkg, exe, name):
         return Node(package=pkg, executable=exe, name=name, output='screen',
                     parameters=[params_file])
+
+    # Predictive ProxMPC: start the obstacle tracker on the simulated /scan so a
+    # confirmed moving track is fed to the controller as /tracked_obstacles (odom
+    # frame). The tracker's own main() self-configures and self-activates, so it is
+    # NOT added to the Nav2 lifecycle manager's node_names (the manager would try to
+    # configure an already-active node and abort the whole bringup). It is also held
+    # back TRACKER_START_DELAY_S so it does not contend with controller_server's
+    # activation. Its config is the single source of truth in prox_mpc_obstacle_tracker.
+    tracker_nodes = []
+    if want_tracker:
+        tracker_share = get_package_share_directory('prox_mpc_obstacle_tracker')
+        tracker_cfg = os.path.join(tracker_share, 'config', 'obstacle_tracker.yaml')
+        tracker_nodes.append(TimerAction(period=TRACKER_START_DELAY_S, actions=[
+            Node(package='prox_mpc_obstacle_tracker', executable='obstacle_tracker',
+                 name='prox_mpc_obstacle_tracker', output='screen',
+                 parameters=[tracker_cfg])]))
 
     return [
         Node(package='tf2_ros', executable='static_transform_publisher',
@@ -105,11 +140,14 @@ def _setup(context, *args, **kwargs):
                  'cmd_topic': 'cmd_vel', 'odom_topic': 'odom',
                  'odom_frame': 'odom', 'base_frame': 'base_link', 'rate_hz': 50.0,
              }]),
+        Node(package=PKG, executable='scan_simulator', name='scan_simulator',
+             output='screen', parameters=scan_node_params),
         server('nav2_map_server', 'map_server', 'map_server'),
         server('nav2_planner', 'planner_server', 'planner_server'),
         server('nav2_controller', 'controller_server', 'controller_server'),
         server('nav2_behaviors', 'behavior_server', 'behavior_server'),
         server('nav2_bt_navigator', 'bt_navigator', 'bt_navigator'),
+        *tracker_nodes,
         Node(package='nav2_lifecycle_manager', executable='lifecycle_manager',
              name='lifecycle_manager_b2', output='screen',
              parameters=[{'autostart': True, 'node_names': lifecycle_nodes}]),
@@ -125,5 +163,7 @@ def generate_launch_description():
         DeclareLaunchArgument('start_x', default_value='-3.0'),
         DeclareLaunchArgument('start_y', default_value='0.0'),
         DeclareLaunchArgument('start_theta', default_value='0.0'),
+        DeclareLaunchArgument('scan_params_file', default_value=''),
+        DeclareLaunchArgument('obstacle_tracker', default_value='false'),
         OpaqueFunction(function=_setup),
     ])

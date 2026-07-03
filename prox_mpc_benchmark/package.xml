@@ -2,7 +2,7 @@
 <?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
 <package format="3">
   <name>prox_mpc_benchmark</name>
-  <version>0.1.0</version>
+  <version>1.0.0</version>
   <description>
     Scenario-driven benchmarking harness for the ProxMPC stack: a controller-
     agnostic C++ live metrics node (cross-track / goal error + solver-diagnostics
@@ -20,6 +20,7 @@
   <depend>std_msgs</depend>
   <depend>geometry_msgs</depend>
   <depend>nav_msgs</depend>
+  <depend>sensor_msgs</depend>
   <depend>tf2</depend>
   <depend>tf2_ros</depend>
   <depend>prox_mpc_msgs</depend>
@@ -60,6 +61,7 @@
   <exec_depend>dwb_core</exec_depend>
   <exec_depend>nav2_mppi_controller</exec_depend>
   <exec_depend>nav2_regulated_pure_pursuit_controller</exec_depend>
+  <exec_depend>nav2_graceful_controller</exec_depend>
 
   <test_depend>ament_lint_auto</test_depend>
   <test_depend>ament_lint_common</test_depend>

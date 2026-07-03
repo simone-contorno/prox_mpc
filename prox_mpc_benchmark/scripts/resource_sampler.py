@@ -70,8 +70,9 @@ def read_cpu_rss(pid):
 class ResourceSampler(Node):
     """Poll a PID's CPU/RSS and count /cmd_vel messages until shutdown."""
 
-    def __init__(self, pid, out_path, hz, cmd_topic, compute_topic):
-        super().__init__('prox_mpc_resource_sampler')
+    def __init__(self, pid, out_path, hz, cmd_topic, compute_topic,
+                 node_name='prox_mpc_resource_sampler'):
+        super().__init__(node_name)
         self._pid = pid
         self._out = out_path
         self._cmd_count = 0
@@ -155,10 +156,12 @@ def main():
     ap.add_argument('--hz', type=float, default=10.0)
     ap.add_argument('--cmd-topic', default='cmd_vel')
     ap.add_argument('--compute-topic', default='')
+    ap.add_argument('--node-name', default='prox_mpc_resource_sampler')
     args = ap.parse_args()
 
     rclpy.init()
-    node = ResourceSampler(args.pid, args.out, args.hz, args.cmd_topic, args.compute_topic)
+    node = ResourceSampler(args.pid, args.out, args.hz, args.cmd_topic,
+                           args.compute_topic, args.node_name)
     try:
         rclpy.spin(node)
     except KeyboardInterrupt:
