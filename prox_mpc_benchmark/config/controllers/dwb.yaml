@@ -1,6 +1,10 @@
 # DWB local planner preset (FollowPath block) for cross-controller comparison (D2).
 # Stock nav2_dwb_controller params trimmed to the diff-drive case; the Ackermann
 # robot receives the same Twist converted to steering by the steering bridge.
+# Obstacle avoidance is the BaseObstacle critic (scale 0.02 — the nav2_bringup
+# default, calibrated to that critic's raw costmap-cost magnitude, not a hobbling)
+# fed the same costmap + inflation as every other controller; the path/goal critic
+# scales are the nav2_bringup values and are on a different numeric footing.
 FollowPath:
   plugin: "dwb_core::DWBLocalPlanner"
   debug_trajectory_details: True

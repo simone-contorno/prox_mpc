@@ -4,6 +4,11 @@
 # dominant cost knob, no equivalent in the other controllers); it is left at the
 # upstream default. The fair-tuning lever is the prediction horizon: time_steps *
 # model_dt = 40 * 0.05 = 2.0 s, matching ProxMPC (np*dt) and DWB (sim_time).
+# Obstacle avoidance is the CostCritic (below), left at its upstream default
+# strength (cost_weight 3.81) and fed the same costmap + inflation as every other
+# controller. MPPI is the one stochastic controller and Nav2 Jazzy exposes no RNG
+# seed, so its repeats capture real sampling variance (reported as mean +/- std),
+# not reproducibility; the obstacle scenarios use extra repeats for it accordingly.
 FollowPath:
   plugin: "nav2_mppi_controller::MPPIController"
   time_steps: 40          # fair tuning: 40 * model_dt = 2.0 s horizon
