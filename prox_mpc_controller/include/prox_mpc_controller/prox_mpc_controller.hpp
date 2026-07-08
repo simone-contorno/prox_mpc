@@ -88,9 +88,11 @@ protected:
   /// Fill the per-node (o_x, o_y, d_safe) obstacle matrix for one cycle. With
   /// predict_obstacles_ off, or no fresh tracked-obstacle message, this reproduces
   /// the costmap-only reduceCostmap() exactly. Otherwise it propagates each
-  /// dynamic track over the horizon (constant velocity), binds each to a fixed
-  /// slot across nodes, and fills the remaining slots from the costmap (hybrid).
-  /// `now` is the reference time predictions are aged to (the command stamp).
+  /// dynamic track over the horizon (interpolating the tracker's sampled curved
+  /// prediction when present, constant-velocity straight ray otherwise), binds
+  /// each to a fixed slot across nodes, and fills the remaining slots from the
+  /// costmap (hybrid). `now` is the reference time predictions are aged to (the
+  /// command stamp).
   void fillObstacles(const MatrixXd & reference, MatrixXd & obs, const rclcpp::Time & now);
 
   /// Reduce the local costmap to at most max_obstacles_ (o_x, o_y, d_safe) triples

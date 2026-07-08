@@ -26,8 +26,10 @@
 // The wrapped SQP/QP solver lives in prox_mpc_core and is out of coverage scope;
 // these tests drive it only through the plugin's public surface.
 
+#include <array>
 #include <chrono>
 #include <cmath>
+#include <cstddef>
 #include <limits>
 #include <memory>
 #include <string>
@@ -170,6 +172,24 @@ prox_mpc_msgs::msg::ObstacleArray::SharedPtr makeObstacleMsg(
   o.radius = radius;
   msg->obstacles.push_back(o);
   return msg;
+}
+
+// Attach tracker-sampled predicted positions (sample k, 1-based, is the
+// position at stamp + k * prediction_dt) to the last obstacle of the message.
+void addPredictedSamples(
+  prox_mpc_msgs::msg::ObstacleArray & msg,
+  const std::vector<std::array<double, 2>> & samples, double prediction_dt)
+{
+  auto & o = msg.obstacles.back();
+  o.prediction_dt = prediction_dt;
+  o.predicted_positions.clear();
+  for (const auto & s : samples) {
+    geometry_msgs::msg::Point p;
+    p.x = s[0];
+    p.y = s[1];
+    p.z = 0.0;
+    o.predicted_positions.push_back(p);
+  }
 }
 
 // Minimal GoalChecker stub returning a fixed xy tolerance. goal_checker is a raw
@@ -1238,6 +1258,191 @@ TEST_F(ProxMpcControllerTest, NonFiniteObstacleIsDropped)
 
   for (Eigen::Index r = 0; r < obs.rows(); ++r) {
     EXPECT_NEAR(obs(r, 0), prox_mpc::MPC::kObsFarSentinel, kTol);
+  }
+}
+
+// Tracker-sampled curved prediction drives the obs rows: with samples pinning
+// the obstacle's future at x = 2 and advancing +y, the constraint positions
+// follow the sampled arc while the straight ray (position + velocity * dt_k)
+// would advance along +x at y = 0.
+TEST_F(ProxMpcControllerTest, CurvedSamplesDriveConstraintRows)
+{
+  auto c = makeConfigured(
+  {
+    rclcpp::Parameter("FollowPath.np", 5),
+    rclcpp::Parameter("FollowPath.nc", 5),
+    rclcpp::Parameter("FollowPath.max_obstacles", 1),
+    rclcpp::Parameter("FollowPath.predict_obstacles", true),
+    rclcpp::Parameter("FollowPath.dynamic_speed_threshold", 0.05),
+    rclcpp::Parameter("FollowPath.robot_radius", 0.5),
+    rclcpp::Parameter("FollowPath.safety_margin", 0.1),
+  });
+  const std::size_t np = 5;
+  const double dt = 0.1;
+  const rclcpp::Time now(1000, 0, RCL_ROS_TIME);
+
+  // Velocity says +x (passes the dynamic gate); the sampled prediction turns
+  // the track to +y instead.
+  auto msg = makeObstacleMsg(now, 2.0, 0.0, 1.0, 0.0, 0.2);
+  std::vector<std::array<double, 2>> samples;
+  for (int k = 1; k <= 25; ++k) {
+    samples.push_back({2.0, 0.1 * static_cast<double>(k)});
+  }
+  addPredictedSamples(*msg, samples, 0.1);
+  c->injectObstacles(msg);
+
+  MatrixXd reference = MatrixXd::Zero(static_cast<Eigen::Index>(np + 1), c->nDim());
+  for (std::size_t i = 0; i <= np; ++i) {
+    reference(static_cast<Eigen::Index>(i), 0) = static_cast<double>(i) * 0.2;
+  }
+  MatrixXd obs(static_cast<Eigen::Index>(np), 3);
+  c->fillObstacles(reference, obs, now);
+
+  for (std::size_t node = 0; node < np; ++node) {
+    const double dt_k = static_cast<double>(node + 1) * dt;
+    const Eigen::Index row = static_cast<Eigen::Index>(node);
+    EXPECT_NEAR(obs(row, 0), 2.0, 1e-9);                             // arc: x pinned
+    EXPECT_NEAR(obs(row, 1), 0.1 * static_cast<double>(node + 1), 1e-9);   // arc: +y
+    EXPECT_NEAR(obs(row, 2), 0.5 + 0.2 + 0.1, 1e-9);                 // growth default 0
+    // Far from the straight ray (2 + dt_k, 0) the legacy fill would produce.
+    EXPECT_GT(std::hypot(obs(row, 0) - (2.0 + dt_k), obs(row, 1)), 0.05);
+  }
+}
+
+// The sampled polyline is interpolated between samples (anchored on the
+// current position before the first sample) and extrapolated along the last
+// segment's direction past the span; a single-sample polyline extrapolates
+// along the position-to-sample direction.
+TEST_F(ProxMpcControllerTest, SampledPredictionInterpolatesAndExtrapolates)
+{
+  auto c = makeConfigured(
+  {
+    rclcpp::Parameter("FollowPath.np", 5),
+    rclcpp::Parameter("FollowPath.nc", 5),
+    rclcpp::Parameter("FollowPath.max_obstacles", 1),
+    rclcpp::Parameter("FollowPath.predict_obstacles", true),
+    rclcpp::Parameter("FollowPath.dynamic_speed_threshold", 0.05),
+  });
+  const std::size_t np = 5;
+  const rclcpp::Time now(1000, 0, RCL_ROS_TIME);
+  MatrixXd reference = MatrixXd::Zero(static_cast<Eigen::Index>(np + 1), c->nDim());
+  MatrixXd obs(static_cast<Eigen::Index>(np), 3);
+
+  // Two samples 0.2 s apart from an obstacle at (2, 0): with dt = 0.1 the
+  // nodes fall mid-segment, on a sample, at the span end, and past it.
+  auto msg = makeObstacleMsg(now, 2.0, 0.0, 1.0, 0.0, 0.2);
+  addPredictedSamples(*msg, {{2.2, 0.1}, {2.4, 0.4}}, 0.2);
+  c->injectObstacles(msg);
+  c->fillObstacles(reference, obs, now);
+
+  EXPECT_NEAR(obs(0, 0), 2.1, 1e-9);    // t = 0.1: midpoint of (2, 0) and sample 1
+  EXPECT_NEAR(obs(0, 1), 0.05, 1e-9);
+  EXPECT_NEAR(obs(1, 0), 2.2, 1e-9);    // t = 0.2: exactly sample 1
+  EXPECT_NEAR(obs(1, 1), 0.1, 1e-9);
+  EXPECT_NEAR(obs(2, 0), 2.3, 1e-9);    // t = 0.3: midpoint of samples 1 and 2
+  EXPECT_NEAR(obs(2, 1), 0.25, 1e-9);
+  EXPECT_NEAR(obs(3, 0), 2.4, 1e-9);    // t = 0.4 (span end): exactly sample 2
+  EXPECT_NEAR(obs(3, 1), 0.4, 1e-9);
+  EXPECT_NEAR(obs(4, 0), 2.5, 1e-9);    // t = 0.5: extrapolated along the last segment
+  EXPECT_NEAR(obs(4, 1), 0.55, 1e-9);
+
+  // Single sample: past the 0.2 s span the ray runs from the current position
+  // through that sample.
+  auto msg1 = makeObstacleMsg(now, 2.0, 0.0, 1.0, 0.0, 0.2);
+  addPredictedSamples(*msg1, {{2.2, 0.1}}, 0.2);
+  c->injectObstacles(msg1);
+  c->fillObstacles(reference, obs, now);
+
+  EXPECT_NEAR(obs(0, 0), 2.1, 1e-9);    // t = 0.1: midpoint of (2, 0) and the sample
+  EXPECT_NEAR(obs(0, 1), 0.05, 1e-9);
+  EXPECT_NEAR(obs(1, 0), 2.2, 1e-9);    // t = 0.2 (span end): the sample itself
+  EXPECT_NEAR(obs(1, 1), 0.1, 1e-9);
+  EXPECT_NEAR(obs(2, 0), 2.3, 1e-9);    // t = 0.3..0.5: extrapolated
+  EXPECT_NEAR(obs(2, 1), 0.15, 1e-9);
+  EXPECT_NEAR(obs(3, 0), 2.4, 1e-9);
+  EXPECT_NEAR(obs(3, 1), 0.2, 1e-9);
+  EXPECT_NEAR(obs(4, 0), 2.5, 1e-9);
+  EXPECT_NEAR(obs(4, 1), 0.25, 1e-9);
+}
+
+// An empty predicted_positions (old publisher, prediction disabled, or a
+// tracker with prediction_steps 0) reproduces the straight-ray fill
+// bit-for-bit: exact double equality against p = position + velocity * dt_k
+// and d_safe = robot_radius + radius + margin + growth * dt_k.
+TEST_F(ProxMpcControllerTest, EmptyPredictedPositionsMatchStraightRayBitForBit)
+{
+  auto c = makeConfigured(
+  {
+    rclcpp::Parameter("FollowPath.np", 5),
+    rclcpp::Parameter("FollowPath.nc", 5),
+    rclcpp::Parameter("FollowPath.dt", 0.1),
+    rclcpp::Parameter("FollowPath.max_obstacles", 1),
+    rclcpp::Parameter("FollowPath.predict_obstacles", true),
+    rclcpp::Parameter("FollowPath.dynamic_speed_threshold", 0.05),
+    rclcpp::Parameter("FollowPath.robot_radius", 0.5),
+    rclcpp::Parameter("FollowPath.safety_margin", 0.1),
+    rclcpp::Parameter("FollowPath.prediction_uncertainty_growth", 0.1),
+  });
+  const std::size_t np = 5;
+  const rclcpp::Time now(1000, 0, RCL_ROS_TIME);
+
+  // makeObstacleMsg leaves predicted_positions empty and prediction_dt 0.0,
+  // exactly what an old (pre-IMM) tracker publishes. Obstacle frame == costmap
+  // global frame, so the rigid transform is the exact identity.
+  c->injectObstacles(makeObstacleMsg(now, 2.0, -1.0, 0.7, 0.3, 0.2));
+
+  MatrixXd reference = MatrixXd::Zero(static_cast<Eigen::Index>(np + 1), c->nDim());
+  MatrixXd obs(static_cast<Eigen::Index>(np), 3);
+  c->fillObstacles(reference, obs, now);
+
+  for (std::size_t node = 0; node < np; ++node) {
+    // Same expression as the fill: dt_k = (node + 1) * dt + age, age = 0 here.
+    const double dt_k = static_cast<double>(node + 1) * 0.1 + 0.0;
+    const Eigen::Index row = static_cast<Eigen::Index>(node);
+    EXPECT_EQ(obs(row, 0), 2.0 + 0.7 * dt_k);
+    EXPECT_EQ(obs(row, 1), -1.0 + 0.3 * dt_k);
+    EXPECT_EQ(obs(row, 2), 0.5 + 0.2 + 0.1 + 0.1 * dt_k);
+  }
+}
+
+// A non-finite sample or an invalid prediction_dt invalidates the whole
+// sampled prediction (fail-closed): the fill falls back to the straight ray
+// bit-for-bit instead of consuming a corrupt polyline.
+TEST_F(ProxMpcControllerTest, NonFiniteSamplesFallBackToStraightRay)
+{
+  auto c = makeConfigured(
+  {
+    rclcpp::Parameter("FollowPath.np", 5),
+    rclcpp::Parameter("FollowPath.nc", 5),
+    rclcpp::Parameter("FollowPath.max_obstacles", 1),
+    rclcpp::Parameter("FollowPath.predict_obstacles", true),
+    rclcpp::Parameter("FollowPath.dynamic_speed_threshold", 0.05),
+    rclcpp::Parameter("FollowPath.robot_radius", 0.5),
+    rclcpp::Parameter("FollowPath.safety_margin", 0.1),
+  });
+  const std::size_t np = 5;
+  const double nan = std::numeric_limits<double>::quiet_NaN();
+  const rclcpp::Time now(1000, 0, RCL_ROS_TIME);
+  MatrixXd reference = MatrixXd::Zero(static_cast<Eigen::Index>(np + 1), c->nDim());
+  MatrixXd obs(static_cast<Eigen::Index>(np), 3);
+
+  auto with_nan_sample = makeObstacleMsg(now, 2.0, 0.0, 1.0, 0.0, 0.2);
+  addPredictedSamples(*with_nan_sample, {{2.2, 0.1}, {nan, 0.4}}, 0.1);
+  auto with_nan_dt = makeObstacleMsg(now, 2.0, 0.0, 1.0, 0.0, 0.2);
+  addPredictedSamples(*with_nan_dt, {{2.2, 0.1}, {2.4, 0.4}}, nan);
+  auto with_negative_dt = makeObstacleMsg(now, 2.0, 0.0, 1.0, 0.0, 0.2);
+  addPredictedSamples(*with_negative_dt, {{2.2, 0.1}, {2.4, 0.4}}, -0.1);
+
+  for (const auto & msg : {with_nan_sample, with_nan_dt, with_negative_dt}) {
+    c->injectObstacles(msg);
+    c->fillObstacles(reference, obs, now);
+    for (std::size_t node = 0; node < np; ++node) {
+      const double dt_k = static_cast<double>(node + 1) * 0.1 + 0.0;
+      const Eigen::Index row = static_cast<Eigen::Index>(node);
+      EXPECT_EQ(obs(row, 0), 2.0 + 1.0 * dt_k);    // straight ray, exact
+      EXPECT_EQ(obs(row, 1), 0.0 + 0.0 * dt_k);
+      EXPECT_EQ(obs(row, 2), 0.5 + 0.2 + 0.1 + 0.0 * dt_k);
+    }
   }
 }
 

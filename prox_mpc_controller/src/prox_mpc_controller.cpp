@@ -59,6 +59,33 @@ double brake_toward(double prev, double decel, double dt)
   return 0.0;
 }
 
+/// Position at time t > 0 along the tracker's sampled prediction polyline
+/// {(0, (x0, y0)), (k * sample_dt, samples[k-1])}: piecewise-linear
+/// interpolation inside the sampled span, and extrapolation along the last
+/// segment's direction beyond it (straight-line, the best remaining guess).
+/// samples must be non-empty and sample_dt > 0.
+std::array<double, 2> sample_polyline(
+  double x0, double y0, const std::vector<std::array<double, 2>> & samples,
+  double sample_dt, double t)
+{
+  const std::size_t n = samples.size();
+  const double span = static_cast<double>(n) * sample_dt;
+  if (t >= span) {
+    const std::array<double, 2> & last = samples[n - 1];
+    const double prev_x = (n >= 2) ? samples[n - 2][0] : x0;
+    const double prev_y = (n >= 2) ? samples[n - 2][1] : y0;
+    const double s = (t - span) / sample_dt;
+    return {last[0] + (last[0] - prev_x) * s, last[1] + (last[1] - prev_y) * s};
+  }
+  // Segment index; the min guards the t ~ span floating-point edge.
+  const std::size_t k = std::min(static_cast<std::size_t>(t / sample_dt), n - 1);
+  const double alpha = (t - static_cast<double>(k) * sample_dt) / sample_dt;
+  const double ax = (k == 0) ? x0 : samples[k - 1][0];
+  const double ay = (k == 0) ? y0 : samples[k - 1][1];
+  const std::array<double, 2> & b = samples[k];
+  return {ax + (b[0] - ax) * alpha, ay + (b[1] - ay) * alpha};
+}
+
 /// Apply the project log_level key to the plugin's own logger.
 void apply_log_level(rclcpp::Logger & logger, const std::string & level)
 {
@@ -117,6 +144,12 @@ void ProxMpcController::configure(
   const std::string model_plugin =
     node->declare_parameter<std::string>(p + "model_plugin", "prox_mpc_core/Bicycle");
   const double model_l = node->declare_parameter<double>(p + "model_params.L", 1.6);
+  /* Optional model input-velocity bound [m/s]; 0.0 (default) keeps the model's
+   * built-in limit. Sourced from the robot config's max_linear_vel, so the speed
+   * cap is a property of the model constraint rather than a controller output
+   * clamp. A positive v_max caps the forward input; v_min defaults to -v_max. */
+  const double model_v_max = node->declare_parameter<double>(p + "model_params.v_max", 0.0);
+  const double model_v_min = node->declare_parameter<double>(p + "model_params.v_min", 0.0);
 
   /* Horizon sizing and step are structural: np/nc below 1 wrap to an astronomical
    * size_t allocation and dt <= 0 divides by zero, so fail configure outright. */
@@ -227,7 +260,11 @@ void ProxMpcController::configure(
     throw nav2_core::ControllerException(
             std::string("ProxMpcController: failed to load model plugin: ") + ex.what());
   }
-  const std::map<std::string, double> model_params{{"L", model_l}};
+  std::map<std::string, double> model_params{{"L", model_l}};
+  if (model_v_max > 0.0) {
+    model_params["v_max"] = model_v_max;
+    model_params["v_min"] = (model_v_min < 0.0) ? model_v_min : -model_v_max;
+  }
   model_->configure(model_params);
   wheelbase_ = model_l;
   n_ = model_->getN();
@@ -818,6 +855,9 @@ void ProxMpcController::fillObstacles(
     double radius;
     std::uint32_t id;
     double priority;
+    /* Transformed curved-prediction samples (empty -> straight-ray fill). */
+    std::vector<std::array<double, 2>> samples;
+    double sample_dt;
   };
   std::vector<DynObs> dyn;
   dyn.reserve(msg->obstacles.size());
@@ -841,16 +881,48 @@ void ProxMpcController::fillObstacles(
     const double ovx = ct * o.velocity.x - st * o.velocity.y;
     const double ovy = st * o.velocity.x + ct * o.velocity.y;
     if (std::hypot(ovx, ovy) < dynamic_speed_threshold_) {continue;}  // costmap covers static
+    // Tracker-sampled curved prediction: validate fail-closed (prediction_dt
+    // finite and > 0, every sample finite — else treat as empty, keeping the
+    // straight-ray fill), then transform with the same rigid transform as
+    // position/velocity above.
+    std::vector<std::array<double, 2>> samples;
+    double sample_dt = 0.0;
+    if (std::isfinite(o.prediction_dt) && o.prediction_dt > 0.0 &&
+      !o.predicted_positions.empty())
+    {
+      bool samples_finite = true;
+      for (const auto & p : o.predicted_positions) {
+        if (!std::isfinite(p.x) || !std::isfinite(p.y)) {
+          samples_finite = false;
+          break;
+        }
+      }
+      if (samples_finite) {
+        samples.reserve(o.predicted_positions.size());
+        for (const auto & p : o.predicted_positions) {
+          samples.push_back({tx + ct * p.x - st * p.y, ty + st * p.x + ct * p.y});
+        }
+        sample_dt = o.prediction_dt;
+      }
+    }
     double best = std::numeric_limits<double>::max();
     for (std::size_t node = 0; node < np_; ++node) {
       const double dt_k = static_cast<double>(node + 1) * dt_ + age;
-      const double px = ox + ovx * dt_k;
-      const double py = oy + ovy * dt_k;
+      double px;
+      double py;
+      if (samples.empty()) {
+        px = ox + ovx * dt_k;
+        py = oy + ovy * dt_k;
+      } else {
+        const std::array<double, 2> p = sample_polyline(ox, oy, samples, sample_dt, dt_k);
+        px = p[0];
+        py = p[1];
+      }
       const double rx = reference(static_cast<Eigen::Index>(node + 1), 0);
       const double ry = reference(static_cast<Eigen::Index>(node + 1), 1);
       best = std::min(best, std::hypot(px - rx, py - ry));
     }
-    dyn.push_back({ox, oy, ovx, ovy, o.radius, o.id, best});
+    dyn.push_back({ox, oy, ovx, ovy, o.radius, o.id, best, std::move(samples), sample_dt});
   }
   std::sort(
     dyn.begin(), dyn.end(), [](const DynObs & a, const DynObs & b) {
@@ -863,8 +935,9 @@ void ProxMpcController::fillObstacles(
   }
 
   /* Propagate each selected obstacle over the horizon, binding slot j to obstacle
-   * j for every node so the half-planes track one object across the horizon. The
-   * clearance grows with prediction time as the constant-velocity assumption ages. */
+   * j for every node so the half-planes track one object across the horizon
+   * (tracker-sampled curved prediction when available, straight ray otherwise).
+   * The clearance grows with prediction time as the prediction ages. */
   std::vector<std::vector<std::array<double, 3>>> exclusions(np_);
   predicted_obstacles_.resize(n_dyn);
   for (std::size_t j = 0; j < n_dyn; ++j) {
@@ -876,8 +949,18 @@ void ProxMpcController::fillObstacles(
     const double dt_k = static_cast<double>(node + 1) * dt_ + age;
     for (std::size_t j = 0; j < n_dyn; ++j) {
       const DynObs & d = dyn[j];
-      const double px = d.x + d.vx * dt_k;
-      const double py = d.y + d.vy * dt_k;
+      // Curved prediction when the tracker published samples; otherwise the
+      // straight constant-velocity ray, unchanged.
+      double px;
+      double py;
+      if (d.samples.empty()) {
+        px = d.x + d.vx * dt_k;
+        py = d.y + d.vy * dt_k;
+      } else {
+        const std::array<double, 2> p = sample_polyline(d.x, d.y, d.samples, d.sample_dt, dt_k);
+        px = p[0];
+        py = p[1];
+      }
       const double d_safe = robot_radius_ + d.radius + safety_margin_ +
         prediction_uncertainty_growth_ * dt_k;
       const Eigen::Index row = static_cast<Eigen::Index>(node * k_obs + j);
