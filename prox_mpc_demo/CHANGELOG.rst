@@ -2,7 +2,7 @@
 Changelog for package prox_mpc_demo
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-0.1.0 (2026-06-30)
+1.0.0 (2026-07-01)
 ------------------
 * Initial release: self-contained closed-loop NMPC simulation node (bike / r2d2)
   with solve-time benchmarking, plus the Nav2 + Gazebo Harmonic bringup that

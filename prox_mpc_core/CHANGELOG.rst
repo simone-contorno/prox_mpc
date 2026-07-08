@@ -2,7 +2,7 @@
 Changelog for package prox_mpc_core
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-0.1.0 (2026-06-30)
+1.0.0 (2026-07-01)
 ------------------
 * Initial release: NMPC core solved by a Sequential Quadratic Programming scheme
   over the ProxQP solver, with a pluginlib ``prox_mpc::Model`` base and bundled

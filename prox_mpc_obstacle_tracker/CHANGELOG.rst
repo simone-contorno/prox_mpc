@@ -2,7 +2,7 @@
 Changelog for package prox_mpc_obstacle_tracker
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-0.1.0 (2026-06-30)
+1.0.0 (2026-07-01)
 ------------------
 * Initial release: lifecycle node that clusters a 2D ``LaserScan``, associates
   clusters to constant-velocity Kalman tracks in a fixed frame, and publishes a

@@ -2,7 +2,7 @@
 <?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
 <package format="3">
   <name>prox_mpc_controller</name>
-  <version>0.1.0</version>
+  <version>1.0.0</version>
   <description>Nav2 nav2_core::Controller plugin built on the ProxMPC core: it
   builds the reference from the global plan, reduces the local costmap (and,
   optionally, tracked dynamic obstacles) to the solver's constraints, solves one
