@@ -216,6 +216,12 @@ TEST(ModelInterface, ConfigureKeepsLiteralsAndOverrides)
   getBound(model, "u", 0, low, upp);
   EXPECT_NEAR(low, -3.0, kTol);   // lower kept (key absent)
   EXPECT_NEAR(upp, 4.0, kTol);    // upper overridden
+
+  // Symmetric cap as the benchmark launch emits it from robot max_linear_vel.
+  model.configure({{"v_min", -0.5}, {"v_max", 0.5}});
+  getBound(model, "u", 0, low, upp);
+  EXPECT_NEAR(low, -0.5, kTol);
+  EXPECT_NEAR(upp, 0.5, kTol);
 }
 
 // Each model maps its control vector to the expected body Twist.
