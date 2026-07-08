@@ -27,7 +27,7 @@ It depends only on `std_msgs` and `geometry_msgs`, so any package on the workspa
 
 | Message | Purpose |
 | --- | --- |
-| `prox_mpc_msgs/msg/Obstacle` | One tracked dynamic obstacle: id, planar position, velocity, enclosing radius, and covariances. |
+| `prox_mpc_msgs/msg/Obstacle` | One tracked dynamic obstacle: id, planar position, velocity, enclosing radius, covariances, and sampled predicted positions. |
 | `prox_mpc_msgs/msg/ObstacleArray` | A set of tracked obstacles published once per processed scan, with a header carrying the scan stamp and tracking frame. |
 | `prox_mpc_msgs/msg/SolverDiagnostics` | Per-control-cycle NMPC/QP solver telemetry for benchmarking (real-time, feasibility, and accuracy inputs). |
 
@@ -44,7 +44,9 @@ A single tracked dynamic obstacle, expressed in the frame of the enclosing `Obst
 | `velocity` | `geometry_msgs/Vector3` | m/s | Estimated velocity; `z` unused (kept 0). |
 | `radius` | `float64` | m | Enclosing radius of the detected cluster. |
 | `position_covariance` | `float64[4]` | m² | 2×2 position covariance, row-major `[xx, xy, yx, yy]`. Informational: the tracker fills it, but the bundled controller consumes only `velocity_covariance`. |
-| `velocity_covariance` | `float64[4]` | m²/s² | 2×2 velocity covariance, row-major `[xx, xy, yx, yy]`. The controller sizes the prediction-uncertainty clearance growth from its trace. |
+| `velocity_covariance` | `float64[4]` | m²/s² | 2×2 velocity covariance, row-major `[xx, xy, yx, yy]`. Informational: the bundled controller's clearance growth is driven by its own `prediction_uncertainty_growth` parameter, not this field. |
+| `predicted_positions` | `geometry_msgs/Point[]` | m | Sampled predicted centroid positions in the `ObstacleArray` header frame; sample `k` (0-based) is the prediction at `header.stamp + (k+1) * prediction_dt`. `z` unused (kept 0). Empty when prediction sampling is disabled (`prediction_steps: 0`); consumers then fall back to a straight constant-velocity ray. |
+| `prediction_dt` | `float64` | s | Spacing between predicted samples; `0.0` when `predicted_positions` is empty. |
 
 ### ObstacleArray
 
@@ -92,7 +94,8 @@ The `status` field takes one of the following constants, mirroring PROXQP's `QPS
 The producer ([prox_mpc_obstacle_tracker](../prox_mpc_obstacle_tracker)) publishes an `ObstacleArray` per processed scan on `tracked_obstacles` (`rclcpp::QoS(KeepLast(5))`, reliable), with positions and velocities expressed in a fixed, non-rotating tracking frame and the header stamp set to the scan time.
 
 The consumer ([prox_mpc_controller](../prox_mpc_controller)) subscribes when `predict_obstacles` is enabled (reliable, depth 5).
-It uses `header.stamp` to age the constant-velocity prediction, `header.frame_id` to transform the obstacles into the costmap global frame, the `radius` to size the keep-out clearance, and the velocity-covariance trace to optionally grow the prediction-uncertainty clearance.
+It uses `header.stamp` to age the prediction, `header.frame_id` to transform the obstacles into the costmap global frame, and the `radius` to size the keep-out clearance.
+When `predicted_positions` is non-empty and valid (`prediction_dt` finite and positive, all samples finite), the controller interpolates the sampled polyline at its horizon times (extrapolating along the last segment beyond the span); otherwise it falls back to the straight constant-velocity ray `position + velocity * t`.
 See the controller's [control-law.md](../prox_mpc_controller/docs/control-law.md) for how the fields drive predictive avoidance.
 
 `SolverDiagnostics` is published by the controller on `<plugin>/diagnostics` (for example `FollowPath/diagnostics`, reliable, depth 10) when `publish_diagnostics` is set, and is consumed by the benchmarking tooling rather than by the control loop.

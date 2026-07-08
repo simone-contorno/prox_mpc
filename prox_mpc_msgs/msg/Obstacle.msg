@@ -21,3 +21,11 @@ float64[4] position_covariance
 # 2x2 velocity covariance [m^2/s^2], row-major [xx, xy, yx, yy]; the controller
 # sizes the prediction-uncertainty clearance growth from its trace.
 float64[4] velocity_covariance
+
+# Sampled predicted centroid positions [m], in the ObstacleArray header frame;
+# sample k (0-based) is the prediction at header.stamp + (k+1) * prediction_dt.
+# z is unused (kept 0). Empty when prediction sampling is disabled.
+geometry_msgs/Point[] predicted_positions
+
+# Spacing between predicted samples [s]; 0.0 when predicted_positions is empty.
+float64 prediction_dt
