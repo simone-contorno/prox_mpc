@@ -32,3 +32,17 @@ FollowPath:
     trajectory_step: 5
     time_step: 3
   critics: ["ConstraintCritic", "CostCritic", "GoalCritic", "GoalAngleCritic", "PathAlignCritic", "PathFollowCritic", "PathAngleCritic", "PreferForwardCritic"]
+  # Fair-tuning pass (2026-07-04, fair-comparison-log.md): at the upstream
+  # default cost_weight 3.81 MPPI grazed the orbiting obstacle on 5/5 runs
+  # (gaps -0.01..-0.10). Raise the obstacle-cost weight so candidate
+  # trajectories near obstacles lose against the path/goal critics.
+  # Fair-tuning sweep (2026-07-04, fair-comparison-log.md) on CostCritic:
+  # cost_weight 3.81 (default) / 10 / 14 / 20 and critical_cost 300 / 5000.
+  # No setting is a net win — raising the obstacle weight cuts orbiting-cell
+  # collisions (5/5 -> 3/5 at cw10) but tanks static_box completion (5/5 ->
+  # 2/5) and roughly doubles t_goal; cw20 avoids (1/5 coll) but never
+  # completes (0/5). Kept at the upstream default, MPPI's best-balanced point.
+  CostCritic:
+    enabled: true
+    cost_weight: 3.81
+    critical_cost: 300.0

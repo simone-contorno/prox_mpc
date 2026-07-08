@@ -2,7 +2,11 @@
 FollowPath:
   plugin: "nav2_regulated_pure_pursuit_controller::RegulatedPurePursuitController"
   desired_linear_vel: 0.5
-  lookahead_dist: 0.6
+  # Fair-tuning pass (2026-07-04, fair-comparison-log.md): at 0.6 the carrot
+  # cut the corner into the static box's inflation and the collision-ahead
+  # check aborted every static_box run (0/5 success); 0.4 keeps the robot on
+  # the replanned detour.
+  lookahead_dist: 0.4
   min_lookahead_dist: 0.3
   max_lookahead_dist: 0.9
   use_velocity_scaled_lookahead_dist: false
@@ -10,7 +14,10 @@ FollowPath:
   use_collision_detection: true
   max_allowed_time_to_collision_up_to_carrot: 1.0
   use_regulated_linear_velocity_scaling: true
-  use_cost_regulated_linear_velocity_scaling: false
+  # Fair-tuning pass: RPP cannot deviate from the path, so slowing near high
+  # cost is its only obstacle response besides the emergency stop; on gives it
+  # a fair chance on the crossing/orbiting movers (3/5 collisions at off).
+  use_cost_regulated_linear_velocity_scaling: true
   regulated_linear_scaling_min_radius: 0.9
   regulated_linear_scaling_min_speed: 0.25
   use_rotate_to_heading: true

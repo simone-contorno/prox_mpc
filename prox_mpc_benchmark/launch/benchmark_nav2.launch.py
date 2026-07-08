@@ -55,7 +55,16 @@ def _merged_params(context):
         with open(os.path.join(share, 'config', 'robots', f'{robot}.yaml')) as fh:
             rb = yaml.safe_load(fh)['robot']
         follow_path['model_plugin'] = rb['model_plugin']
-        follow_path['model_params'] = {'L': float(rb.get('wheelbase', 0.0))}
+        model_params = {'L': float(rb.get('wheelbase', 0.0))}
+        # The robot's max_linear_vel bounds the model's linear input, so ProxMPC's
+        # commanded speed is hard-capped in the solver exactly like the stock
+        # controllers cap their sampler/optimizer (matched-cap fairness). Applied
+        # symmetrically (v_min = -v_max); absent/0 keeps the model's built-in limit.
+        v_max = float(rb.get('max_linear_vel', 0.0))
+        if v_max > 0.0:
+            model_params['v_max'] = v_max
+            model_params['v_min'] = -v_max
+        follow_path['model_params'] = model_params
 
     # Wrap the real controller in the timing decorator so every controller's
     # per-cycle compute is measured identically on /FollowPath/compute_time_ms.

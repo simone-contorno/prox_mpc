@@ -56,7 +56,13 @@ controller_server:
     general_goal_checker:
       stateful: True
       plugin: "nav2_controller::SimpleGoalChecker"
-      xy_goal_tolerance: 0.25
+      # Strictly inside the scored success tolerance (0.25, metrics goal_tol):
+      # with the two equal, a controller that stops the moment ITS OWN distance
+      # reads inside tolerance can park at metric-0.2500 exactly and deadlock —
+      # Nav2's strict '< 0.25' never fires and the run is scored failed
+      # (measured on graceful: every failed run at min_goal 0.2500-0.2726;
+      # fair-comparison-log.md 2026-07-04). Applies to every controller alike.
+      xy_goal_tolerance: 0.24
       yaw_goal_tolerance: 0.25
     # FollowPath is injected at launch from the controller preset.
 

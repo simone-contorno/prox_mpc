@@ -27,6 +27,7 @@
 
 #include <rclcpp/rclcpp.hpp>
 #include <geometry_msgs/msg/transform_stamped.hpp>
+#include <nav_msgs/msg/odometry.hpp>
 #include <std_msgs/msg/float64.hpp>
 #include <tf2/exceptions.h>
 #include <tf2/time.h>
@@ -95,6 +96,19 @@ public:
     diag_sub_ = create_subscription<prox_mpc_msgs::msg::SolverDiagnostics>(
       diag_topic, rclcpp::QoS(50),
       std::bind(&MetricsNode::onDiag, this, std::placeholders::_1));
+
+    // Obstacle clock anchor: latch on the SAME /odom stream and stamps the scan
+    // simulator latches on, so the scored obstacle trajectory is phase-identical
+    // to the one ray-cast into /scan. The TF-displacement latch in sample() is
+    // kept only as a fallback for setups without this odom topic; the two clocks
+    // were measured desynced by seconds in both directions under load
+    // (collision-fix-b2-log.md, 2026-07-04), which mis-scores collisions.
+    const std::string odom_topic = declare_parameter<std::string>("odom_topic", "odom");
+    if (!obstacles_.empty()) {
+      odom_sub_ = create_subscription<nav_msgs::msg::Odometry>(
+        odom_topic, rclcpp::QoS(50),
+        std::bind(&MetricsNode::onOdom, this, std::placeholders::_1));
+    }
 
     const auto period = std::chrono::duration<double>(rate > 0.0 ? 1.0 / rate : 0.02);
     timer_ = create_wall_timer(
@@ -188,6 +202,23 @@ public:
   }
 
 private:
+  void onOdom(nav_msgs::msg::Odometry::ConstSharedPtr msg)
+  {
+    const double px = msg->pose.pose.position.x;
+    const double py = msg->pose.pose.position.y;
+    odom_stamp_ = msg->header.stamp;
+    if (!have_odom_) {
+      have_odom_ = true;
+      odom_first_x_ = px;
+      odom_first_y_ = py;
+    } else if (!odom_moved_ && std::hypot(px - odom_first_x_, py - odom_first_y_) > motion_eps_) {
+      // Mirrors scan_simulator::onOdom: same stream, same eps, same stamp source,
+      // so both latches fire on the same message.
+      odom_moved_ = true;
+      odom_t0_ = odom_stamp_;
+    }
+  }
+
   void onDiag(prox_mpc_msgs::msg::SolverDiagnostics::ConstSharedPtr msg)
   {
     diag_count_++;
@@ -225,15 +256,21 @@ private:
     }
     pose_samples_++;
 
-    // Clearance to the (time-varying) obstacle field. The obstacle clock starts at
-    // first motion, matching the scan simulator, so the sampled obstacle positions
-    // are the ones the controller actually faced. Reported for every controller.
+    // Clearance to the (time-varying) obstacle field, evaluated on the scan
+    // simulator's own clock (odom-anchored latch above) so the scored obstacle is
+    // phase-identical to the one the controller actually faced. The TF-based
+    // latch below only serves setups where no odom message ever arrives.
     if (!obstacles_.empty()) {
       if (!obs_started_ && std::hypot(px - first_x_, py - first_y_) > motion_eps_) {
         obs_started_ = true;
         obs_t0_ = stamp;
       }
-      const double t = obs_started_ ? (stamp - obs_t0_).seconds() : 0.0;
+      double t = 0.0;
+      if (have_odom_) {
+        t = odom_moved_ ? (odom_stamp_ - odom_t0_).seconds() : 0.0;
+      } else if (obs_started_) {
+        t = (stamp - obs_t0_).seconds();
+      }
       for (const auto & o : obstacles_) {
         const double gap = robotObstacleGap(o, t, px, py, robot_radius_);
         min_obs_gap_ = std::min(min_obs_gap_, gap);
@@ -283,6 +320,7 @@ private:
   std::shared_ptr<tf2_ros::TransformListener> tf_listener_;
   rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr pub_ct_, pub_gd_;
   rclcpp::Subscription<prox_mpc_msgs::msg::SolverDiagnostics>::SharedPtr diag_sub_;
+  rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr odom_sub_;
   rclcpp::TimerBase::SharedPtr timer_;
 
   // Accuracy accumulators.
@@ -292,6 +330,12 @@ private:
   double first_x_{0.0}, first_y_{0.0};
   bool obs_started_{false};
   rclcpp::Time obs_t0_;
+  // Odom-anchored obstacle clock (authoritative when the odom topic exists).
+  bool have_odom_{false};
+  bool odom_moved_{false};
+  double odom_first_x_{0.0}, odom_first_y_{0.0};
+  rclcpp::Time odom_t0_;
+  rclcpp::Time odom_stamp_;
   double min_obs_gap_{std::numeric_limits<double>::infinity()};
   double min_obs_dist_{std::numeric_limits<double>::infinity()};
   double ct_sumsq_{0.0}, ct_max_{0.0};

@@ -115,6 +115,9 @@ install(PROGRAMS
   scripts/goal_sender.py
   scripts/compute_metrics.py
   scripts/aggregate.py
+  scripts/gen_blind_multi.py
+  scripts/gt_obstacle_publisher.py
+  scripts/space_time_feasible.py
   DESTINATION lib/${PROJECT_NAME}
 )
 

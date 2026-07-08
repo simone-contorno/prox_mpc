@@ -93,9 +93,15 @@ def obstacle_arrays(scn: dict):
     return motion, cx, cy, ex, ey, radius, speed, body
 
 
-def write_scan_params(path: Path, scn: dict):
-    """Write the scan-simulator params (obstacle field + scan geometry)."""
+def write_scan_params(path: Path, scn: dict, repeat: int = 0):
+    """Write the scan-simulator params (obstacle field + scan geometry).
+
+    An optional scenario `sensor.range_noise_std` [m] enables a realistic
+    Gaussian range-noise model on obstacle returns; the seed is varied per
+    repeat so repeats sample independent (but reproducible) noise.
+    """
     motion, cx, cy, ex, ey, radius, speed, body = obstacle_arrays(scn)
+    noise_std = float(scn.get('sensor', {}).get('range_noise_std', 0.0))
     params = {
         'scan_frame': 'base_link',
         'odom_topic': 'odom',
@@ -104,6 +110,8 @@ def write_scan_params(path: Path, scn: dict):
         'num_beams': 360,
         'range_min': 0.05,
         'range_max': 4.0,
+        'range_noise_std': noise_std,
+        'range_noise_seed': int(repeat),
     }
     if motion:
         params.update({
@@ -112,6 +120,22 @@ def write_scan_params(path: Path, scn: dict):
             'obs_radius': radius, 'obs_speed': speed, 'obs_body': body,
         })
     doc = {'scan_simulator': {'ros__parameters': params}}
+    with open(path, 'w') as fh:
+        yaml.safe_dump(doc, fh, default_flow_style=None, sort_keys=False)
+
+
+def write_gt_params(path: Path, scn: dict):
+    """Write ground-truth obstacle-publisher (oracle) params: the same obstacle
+    field as the scan simulator, republished as perfect /tracked_obstacles."""
+    motion, cx, cy, ex, ey, radius, speed, body = obstacle_arrays(scn)
+    params = {'odom_topic': 'odom', 'tracking_frame': 'odom', 'rate_hz': 20.0}
+    if motion:
+        params.update({
+            'obs_motion': motion,
+            'obs_cx': cx, 'obs_cy': cy, 'obs_ex': ex, 'obs_ey': ey,
+            'obs_radius': radius, 'obs_speed': speed, 'obs_body': body,
+        })
+    doc = {'gt_obstacle_publisher': {'ros__parameters': params}}
     with open(path, 'w') as fh:
         yaml.safe_dump(doc, fh, default_flow_style=None, sort_keys=False)
 
@@ -211,11 +235,15 @@ def terminate(proc):
 
 
 def run_cell(scn, controller, repeat, control, results_dir, robot, map_yaml,
-             warmup_s, timeout_s):
+             warmup_s, timeout_s, oracle=False):
     runs_dir = results_dir / 'runs'
     runs_dir.mkdir(parents=True, exist_ok=True)
     tag = f"{scn['name']}__{scn.get('models', ['r2d2'])[0]}__b2__{controller}__r{repeat}"
     predictive = controller == 'proxmpc_pred'
+    # Oracle mode: feed proxmpc_pred perfect obstacle knowledge (ground-truth
+    # publisher) instead of the IMM tracker, for the feasibility gate.
+    use_tracker = predictive and not oracle
+    use_oracle = predictive and oracle
     summary_json = runs_dir / f'{tag}.json'
     resource_json = runs_dir / f'{tag}.resource.json'
     tracker_resource_json = runs_dir / f'{tag}.tracker_resource.json'
@@ -228,7 +256,10 @@ def run_cell(scn, controller, repeat, control, results_dir, robot, map_yaml,
     if tracker_resource_json.exists():
         tracker_resource_json.unlink()
     write_metrics_params(metrics_params, scn, control, controller, repeat, summary_json)
-    write_scan_params(scan_params, scn)
+    write_scan_params(scan_params, scn, repeat)
+    gt_params = runs_dir / f'{tag}.gt.yaml'
+    if use_oracle:
+        write_gt_params(gt_params, scn)
 
     s = scn['start']
     goal = scn['goals'][-1]
@@ -239,8 +270,15 @@ def run_cell(scn, controller, repeat, control, results_dir, robot, map_yaml,
          f'controller:={controller}', f'robot:={robot}', f'map_yaml:={map_yaml}',
          f"start_x:={s['x']}", f"start_y:={s['y']}", f"start_theta:={s.get('yaw', 0.0)}",
          f'scan_params_file:={scan_params}',
-         f"obstacle_tracker:={'true' if predictive else 'false'}"],
+         f"obstacle_tracker:={'true' if use_tracker else 'false'}"],
         runs_dir / f'{tag}.stack.log')
+
+    gt_proc = None
+    if use_oracle:
+        gt_proc, _ = popen_group(
+            ['ros2', 'run', PKG, 'gt_obstacle_publisher.py',
+             '--ros-args', '--params-file', str(gt_params)],
+            runs_dir / f'{tag}.gt.log')
 
     metrics = goal_proc = sampler = tracker_sampler = None
     metrics_log = open(runs_dir / f'{tag}.metrics.log', 'w')
@@ -262,7 +300,7 @@ def run_cell(scn, controller, repeat, control, results_dir, robot, map_yaml,
         # Predictive mode adds a companion tracker process; sample it separately so
         # the true system cost of prediction (controller + tracker) is reported, not
         # just the controller_server the decorator times.
-        if predictive:
+        if use_tracker:
             tpid = find_pid_by_comm('obstacle_tracke')  # comm truncated to 15 chars
             if tpid is not None:
                 tracker_sampler, _ = popen_group(
@@ -274,6 +312,17 @@ def run_cell(scn, controller, repeat, control, results_dir, robot, map_yaml,
             ['ros2', 'run', PKG, 'metrics_node',
              '--ros-args', '--params-file', str(metrics_params)],
             runs_dir / f'{tag}.metrics.log')
+        # The metrics node anchors its obstacle clock to the first robot motion
+        # IT observes. If the goal races ahead of its subscriptions (slow
+        # discovery under load), the clock starts late and the whole obstacle
+        # field is evaluated out of phase — false collision/clearance numbers.
+        # Gate the goal on the node being discoverable.
+        for _ in range(20):
+            probe = subprocess.run(
+                ['ros2', 'node', 'list'], capture_output=True, text=True, timeout=10.0)
+            if '/prox_mpc_metrics' in probe.stdout:
+                break
+            time.sleep(0.5)
         goal_proc, _ = popen_group(
             ['ros2', 'run', PKG, 'goal_sender.py', '--points', points,
              '--timeout', str(timeout_s)],
@@ -292,6 +341,7 @@ def run_cell(scn, controller, repeat, control, results_dir, robot, map_yaml,
         terminate(metrics)
         terminate(sampler)  # SIGINT before the stack so it samples a live PID
         terminate(tracker_sampler)
+        terminate(gt_proc)
         terminate(stack)
         metrics_log.close()
         stack_log.close()
@@ -327,8 +377,14 @@ def main() -> int:
     ap.add_argument('--controllers', default=','.join(DEFAULT_CONTROLLERS))
     ap.add_argument('--robot', default='waffle')
     ap.add_argument('--repeats', type=int, default=0, help='override scenario repeats')
+    ap.add_argument('--repeat-indices', default='',
+                    help='comma-separated repeat indices to run (overrides --repeats); '
+                         'used to re-run only specific runs, e.g. a transient bringup failure')
     ap.add_argument('--warmup', type=float, default=10.0, help='stack activation wait [s]')
     ap.add_argument('--results-dir', default='')
+    ap.add_argument('--oracle', action='store_true',
+                    help='feed proxmpc_pred ground-truth obstacles (feasibility-gate oracle) '
+                         'instead of the IMM tracker')
     args = ap.parse_args()
 
     share = share_dir()
@@ -353,12 +409,15 @@ def main() -> int:
         except json.JSONDecodeError:
             index = []
 
+    rep_indices = ([int(x) for x in args.repeat_indices.split(',') if x != '']
+                   if args.repeat_indices else list(range(repeats)))
+
     for controller in controllers:
-        for r in range(repeats):
-            print(f'[run_nav2] {scn["name"]} | {controller} | b2 | repeat {r+1}/{repeats}',
+        for r in rep_indices:
+            print(f'[run_nav2] {scn["name"]} | {controller} | b2 | repeat {r}',
                   flush=True)
             rec = run_cell(scn, controller, r, control, results_dir, args.robot,
-                           map_yaml, args.warmup, timeout_s)
+                           map_yaml, args.warmup, timeout_s, oracle=args.oracle)
             print(f"           -> success={rec.get('success')} "
                   f"ttg={rec.get('time_to_goal_s')} "
                   f"goal_err={rec.get('goal_error_m')} "

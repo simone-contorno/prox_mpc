@@ -9,6 +9,8 @@ robot:
   drive: ackermann
   wheelbase: 1.0                  # L [m]; must match the SDF and model_params.L
   robot_radius: 0.5
+  # Bounds the ProxMPC model's linear input (v_max); the commanded speed is
+  # hard-capped in the solver at 0.5 m/s, matching the stock controllers' caps.
   max_linear_vel: 0.5
   max_steer_angle: 0.6            # [rad]
   gazebo:

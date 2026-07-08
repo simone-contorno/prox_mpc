@@ -8,6 +8,8 @@ robot:
   drive: diff
   wheelbase: 0.0                  # unused by the unicycle
   robot_radius: 0.22
+  # Bounds the ProxMPC model's linear input (v_max); the commanded speed is
+  # hard-capped in the solver at 0.5 m/s, matching the stock controllers' caps.
   max_linear_vel: 0.5
   max_angular_vel: 1.0
   gazebo:

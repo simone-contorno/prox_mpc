@@ -27,6 +27,7 @@
 #include <chrono>
 #include <cmath>
 #include <memory>
+#include <random>
 #include <string>
 #include <vector>
 
@@ -53,6 +54,14 @@ public:
     range_min_ = declare_parameter<double>("range_min", 0.05);
     range_max_ = declare_parameter<double>("range_max", 4.0);
     motion_eps_ = declare_parameter<double>("motion_eps", 1.0e-3);
+    // Optional Gaussian range noise [m std]; 0.0 = ideal sensor (unchanged
+    // behaviour). Only returns that strike an obstacle are perturbed, so
+    // clearing beams never fabricate a phantom near-return. Seeded so a run is
+    // reproducible; the runner varies the seed per repeat to sample noise.
+    range_noise_std_ = declare_parameter<double>("range_noise_std", 0.0);
+    const int noise_seed = declare_parameter<int>("range_noise_seed", 0);
+    if (range_noise_std_ < 0.0) {range_noise_std_ = 0.0;}
+    rng_.seed(static_cast<std::uint_fast32_t>(noise_seed));
     if (rate_hz_ <= 0.0) {rate_hz_ = 10.0;}
     if (num_beams_ < 8) {num_beams_ = 8;}
 
@@ -79,8 +88,10 @@ public:
 
     RCLCPP_INFO(
       get_logger(),
-      "scan_simulator: %zu obstacle(s), %d beams, range [%.2f, %.2f] m @ %.1f Hz, frame=%s",
-      obstacles_.size(), num_beams_, range_min_, range_max_, rate_hz_, scan_frame_.c_str());
+      "scan_simulator: %zu obstacle(s), %d beams, range [%.2f, %.2f] m @ %.1f Hz, "
+      "noise_std=%.3f m, frame=%s",
+      obstacles_.size(), num_beams_, range_min_, range_max_, rate_hz_,
+      range_noise_std_, scan_frame_.c_str());
   }
 
 private:
@@ -141,6 +152,11 @@ private:
           range_min_, range_max_);
         if (std::isfinite(r) && r < best) {best = r;}
       }
+      // Perturb only actual obstacle returns; clamp to the valid range window.
+      if (range_noise_std_ > 0.0 && best < range_max_) {
+        std::normal_distribution<double> noise(0.0, range_noise_std_);
+        best = std::clamp(best + noise(rng_), range_min_, range_max_);
+      }
       scan.ranges[static_cast<std::size_t>(i)] = static_cast<float>(best);
     }
     scan_pub_->publish(scan);
@@ -150,6 +166,8 @@ private:
   double rate_hz_{10.0};
   int num_beams_{360};
   double range_min_{0.05}, range_max_{4.0}, motion_eps_{1.0e-3};
+  double range_noise_std_{0.0};
+  std::mt19937 rng_;
   std::vector<ObstacleSpec> obstacles_;
 
   bool have_pose_{false}, moved_{false};
