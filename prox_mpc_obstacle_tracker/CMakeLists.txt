@@ -34,6 +34,7 @@ find_package(tf2_ros REQUIRED)
 # Pure (Eigen-only) detection + tracking library, unit-testable without ROS.
 add_library(${PROJECT_NAME}_core SHARED
   src/clustering.cpp
+  src/imm_filter.cpp
   src/tracker.cpp
 )
 target_include_directories(${PROJECT_NAME}_core PUBLIC
@@ -122,6 +123,9 @@ if(BUILD_TESTING)
 
   ament_add_gtest(test_clustering test/test_clustering.cpp)
   target_link_libraries(test_clustering ${PROJECT_NAME}_core Eigen3::Eigen)
+
+  ament_add_gtest(test_imm_filter test/test_imm_filter.cpp)
+  target_link_libraries(test_imm_filter ${PROJECT_NAME}_core Eigen3::Eigen)
 
   ament_add_gtest(test_tracker test/test_tracker.cpp)
   target_link_libraries(test_tracker ${PROJECT_NAME}_core Eigen3::Eigen)

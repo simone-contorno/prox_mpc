@@ -3,9 +3,10 @@
 An in-house 2D-lidar dynamic-obstacle detector and tracker for ProxMPC.
 
 A managed lifecycle node clusters a `sensor_msgs/LaserScan`, transforms the
-cluster centroids into a fixed tracking frame, runs one constant-velocity Kalman
-filter per object, and publishes the confirmed tracks as a
-[prox_mpc_msgs/ObstacleArray](../prox_mpc_msgs).
+cluster centroids into a fixed tracking frame, runs one IMM
+(constant-velocity + constant-turn-rate) filter per object, and publishes the
+confirmed tracks — including sampled predicted positions along each track's
+estimated arc — as a [prox_mpc_msgs/ObstacleArray](../prox_mpc_msgs).
 That feed is what [prox_mpc_controller](../prox_mpc_controller) consumes for
 predictive (dynamic) obstacle avoidance.
 
@@ -32,9 +33,17 @@ The design, algorithm, parameters, and interfaces are documented in
 - **Lifecycle node:** managed `configure → activate → deactivate → cleanup`, with
   a signal-safe shutdown ladder in the standalone driver.
 - **Self-contained pipeline:** LaserScan → planar points → adjacency clusters →
-  tracking-frame centroids → constant-velocity Kalman tracks.
+  tracking-frame centroids → IMM (CV + CTRV) tracks with sampled predicted
+  positions.
 - **Multi-object tracking:** gated greedy nearest-neighbour association, one
-  Kalman filter per track, and a birth/confirm/death lifecycle.
+  IMM filter per track (a constant-velocity Kalman filter and a
+  constant-turn-rate-and-velocity EKF run in parallel, blended by model
+  probability), and a birth/confirm/death lifecycle. `imm_enabled: false`
+  restores the legacy single-CV path.
+- **Curved prediction feed:** each published obstacle carries
+  `prediction_steps` predicted positions at `prediction_dt` spacing (default
+  25 × 0.1 s = 2.5 s), so the controller can follow turning obstacles instead
+  of a straight constant-velocity ray.
 - **Wall rejection:** a cluster-radius cap drops extended structure (walls) whose
   centroid would otherwise be tracked as a phantom fast-moving obstacle.
 - **Pure core:** the clustering and tracker are a ROS-free Eigen library
@@ -100,6 +109,34 @@ in the tracking frame.
 The full parameter and lifecycle reference is in
 [docs/architecture.md](docs/architecture.md).
 
+### IMM and prediction parameters
+
+Declared and validated in `on_configure` (out-of-range values fail the
+transition; no clamping), with
+[config/obstacle_tracker.yaml](config/obstacle_tracker.yaml) as the single
+source of truth.
+
+| Name | Type | Default | Units | Range | Meaning |
+| --- | --- | --- | --- | --- | --- |
+| `imm_enabled` | bool | `true` | — | true/false | Run IMM(CV+CTRV); `false` = legacy single-CV KF path (single-switch rollback, no rebuild). |
+| `imm_p_cv_stay` | double | `0.95` | — | (0.0, 1.0) exclusive | Markov `P(CV → CV)`; off-diagonal is `1 -` this. |
+| `imm_p_ctrv_stay` | double | `0.95` | — | (0.0, 1.0) exclusive | Markov `P(CTRV → CTRV)`; off-diagonal is `1 -` this. |
+| `ctrv_process_noise_accel` | double | `1.0` | m²/s⁴ | ≥ 0.0 | CTRV linear-acceleration noise variance `σ_a²` (discrete white-noise form). |
+| `ctrv_process_noise_yaw_accel` | double | `1.0` | rad²/s⁴ | ≥ 0.0 | CTRV yaw-acceleration noise variance `σ_ω̇²` (drives the `ω` random walk). |
+| `ctrv_init_omega_variance` | double | `1.0` | rad²/s² | > 0.0 | `ω` variance at track birth and in the CV → CTRV mixing conversion. |
+| `prediction_steps` | int | `25` | samples | [0, 100] | Predicted positions published per obstacle; `0` publishes none (the controller falls back to straight-ray). |
+| `prediction_dt` | double | `0.1` | s | > 0.0 | Spacing between predicted samples. |
+
+The defaults span `25 × 0.1 s = 2.5 s`, covering the controller's maximum
+prediction time (`np·dt + obstacle_timeout = 2.0 + 0.5 s` at the benchmark
+preset), so the controller always interpolates and never extrapolates there.
+
+### Detection correction parameters
+
+| Name | Type | Default | Units | Range | Meaning |
+| --- | --- | --- | --- | --- | --- |
+| `cluster_center_offset_gain` | double | `0.0` | — | [0.0, 1.0] | Arc-centroid → disc-centre correction: the cluster centroid is pushed away from the sensor along its ray by this fraction of the enclosing cluster radius. A lidar sees only the near arc of a compact obstacle, so the raw centroid is biased toward the sensor and slides around the disc as the viewpoint changes (fake tangential velocity during close passes). `0.5` matches the half-disc arc seen at close range; thin far arcs are under-corrected, which errs toward the sensor-facing surface (conservative). `0.0` disables (raw centroid). |
+
 ## Lifecycle
 
 The node is a managed lifecycle node.
@@ -152,8 +189,8 @@ colcon test-result --all --verbose
 
 Three GoogleTest suites run.
 `test_clustering` and `test_tracker` cover the ROS-free core: scan-to-points and
-adjacency segmentation (including the wall-radius cap), and the constant-velocity
-filter, association, and birth/confirm/death lifecycle.
+adjacency segmentation (including the wall-radius cap), and the tracking
+filters, association, and birth/confirm/death lifecycle.
 `test_obstacle_tracker_node` is a lifecycle-node integration test that drives the
 transition ladder and the scan-to-publish path against a synthetic scan.
 `uncrustify` is the enforced C++ formatter; `cpplint` and `ament_copyright` are

@@ -9,8 +9,10 @@
 // TF is needed, and observe the published ObstacleArray). The clustering and
 // Kalman tracking themselves are covered by test_clustering / test_tracker.
 
+#include <array>
 #include <chrono>
 #include <cmath>
+#include <cstddef>
 #include <limits>
 #include <memory>
 #include <string>
@@ -146,6 +148,156 @@ TEST(ObstacleTrackerNode, ProcessesScanAndPublishesConfirmedTrack)
 
   EXPECT_GT(arrays_received, 0);          // the scan callback ran and published
   EXPECT_GE(max_obstacles_seen, 1u);      // the cluster confirmed into a track
+
+  exec.remove_node(helper);
+  exec.remove_node(node->get_node_base_interface());
+  node->shutdown();
+}
+
+// With the centroid->centre correction enabled, the published position is the
+// cluster centroid pushed away from the sensor along its ray by
+// gain * enclosing radius (computed here from the same synthetic returns).
+TEST(ObstacleTrackerNode, CentroidOffsetPushesPositionAwayFromSensor)
+{
+  auto node = makeNode({rclcpp::Parameter("cluster_center_offset_gain", 0.5)});
+  ASSERT_EQ(node->configure().id(), State::PRIMARY_STATE_INACTIVE);
+  ASSERT_EQ(node->activate().id(), State::PRIMARY_STATE_ACTIVE);
+
+  auto helper = std::make_shared<rclcpp::Node>("tracker_offset_test_helper");
+  auto scan_pub = helper->create_publisher<sensor_msgs::msg::LaserScan>(
+    "scan", rclcpp::SensorDataQoS());
+
+  double seen_x = 0.0;
+  double seen_y = 0.0;
+  bool seen = false;
+  auto sub = helper->create_subscription<prox_mpc_msgs::msg::ObstacleArray>(
+    "tracked_obstacles", rclcpp::QoS(rclcpp::KeepLast(5)).reliable(),
+    [&](prox_mpc_msgs::msg::ObstacleArray::SharedPtr msg) {
+      if (!msg->obstacles.empty()) {
+        seen = true;
+        seen_x = msg->obstacles[0].position.x;
+        seen_y = msg->obstacles[0].position.y;
+      }
+    });
+
+  rclcpp::executors::SingleThreadedExecutor exec;
+  exec.add_node(node->get_node_base_interface());
+  exec.add_node(helper);
+
+  const rclcpp::Time base(1000, 0, RCL_ROS_TIME);
+  for (int i = 0; i < 10 && !seen; ++i) {
+    scan_pub->publish(makeScan(base + rclcpp::Duration::from_seconds(0.1 * i)));
+    for (int s = 0; s < 5; ++s) {
+      exec.spin_some();
+      std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+  }
+  ASSERT_TRUE(seen);
+
+  // Expected: centroid and enclosing radius of the makeScan returns (beams
+  // 178..183 at 2.0 m), then the 0.5 * radius push along the sensor ray.
+  const sensor_msgs::msg::LaserScan s = makeScan(base);
+  double sx = 0.0;
+  double sy = 0.0;
+  std::vector<std::array<double, 2>> pts;
+  for (int i = 178; i <= 183; ++i) {
+    const double a = s.angle_min + i * s.angle_increment;
+    pts.push_back({2.0 * std::cos(a), 2.0 * std::sin(a)});
+    sx += pts.back()[0];
+    sy += pts.back()[1];
+  }
+  const double cx = sx / 6.0;
+  const double cy = sy / 6.0;
+  double r2 = 0.0;
+  for (const auto & p : pts) {
+    r2 = std::max(r2, (p[0] - cx) * (p[0] - cx) + (p[1] - cy) * (p[1] - cy));
+  }
+  const double scale = 1.0 + 0.5 * std::sqrt(r2) / std::hypot(cx, cy);
+  EXPECT_NEAR(seen_x, cx * scale, 0.02);   // KF settles onto the constant measurement
+  EXPECT_NEAR(seen_y, cy * scale, 0.02);
+  EXPECT_GT(std::hypot(seen_x, seen_y), std::hypot(cx, cy));   // pushed away, not toward
+
+  exec.remove_node(helper);
+  exec.remove_node(node->get_node_base_interface());
+  node->shutdown();
+}
+
+// Every out-of-range IMM/prediction parameter fails on_configure (fail-closed,
+// Section-4 ranges: stay probabilities strictly inside (0, 1), non-negative
+// CTRV noise, positive omega variance, prediction_steps in [0, 100], positive
+// prediction_dt).
+TEST(ObstacleTrackerNode, ConfigureFailsOnOutOfRangeImmParameters)
+{
+  const std::vector<rclcpp::Parameter> bad{
+    rclcpp::Parameter("cluster_center_offset_gain", -0.1),
+    rclcpp::Parameter("cluster_center_offset_gain", 1.5),
+    rclcpp::Parameter("imm_p_cv_stay", 1.5),
+    rclcpp::Parameter("imm_p_cv_stay", 0.0),
+    rclcpp::Parameter("imm_p_ctrv_stay", 1.0),
+    rclcpp::Parameter("ctrv_process_noise_accel", -0.1),
+    rclcpp::Parameter("ctrv_process_noise_yaw_accel", -1.0),
+    rclcpp::Parameter("ctrv_init_omega_variance", 0.0),
+    rclcpp::Parameter("prediction_steps", 101),
+    rclcpp::Parameter("prediction_steps", -1),
+    rclcpp::Parameter("prediction_dt", 0.0),
+  };
+  for (const auto & param : bad) {
+    auto node = makeNode({param});
+    EXPECT_EQ(node->configure().id(), State::PRIMARY_STATE_UNCONFIGURED)
+      << param.get_name() << " = " << param.value_to_string();
+  }
+}
+
+// A published Obstacle carries the sampled prediction: prediction_steps
+// samples spaced by prediction_dt, planar (z = 0).
+TEST(ObstacleTrackerNode, PublishedObstacleCarriesPredictionSamples)
+{
+  const int prediction_steps = 5;
+  const double prediction_dt = 0.2;
+  auto node = makeNode(
+  {
+    rclcpp::Parameter("prediction_steps", prediction_steps),
+    rclcpp::Parameter("prediction_dt", prediction_dt),
+  });
+  ASSERT_EQ(node->configure().id(), State::PRIMARY_STATE_INACTIVE);
+  ASSERT_EQ(node->activate().id(), State::PRIMARY_STATE_ACTIVE);
+
+  auto helper = std::make_shared<rclcpp::Node>("tracker_prediction_test_helper");
+  auto scan_pub = helper->create_publisher<sensor_msgs::msg::LaserScan>(
+    "scan", rclcpp::SensorDataQoS());
+
+  prox_mpc_msgs::msg::Obstacle tracked;
+  bool got_obstacle = false;
+  auto sub = helper->create_subscription<prox_mpc_msgs::msg::ObstacleArray>(
+    "tracked_obstacles", rclcpp::QoS(rclcpp::KeepLast(5)).reliable(),
+    [&](prox_mpc_msgs::msg::ObstacleArray::SharedPtr msg) {
+      if (!msg->obstacles.empty()) {
+        tracked = msg->obstacles.front();
+        got_obstacle = true;
+      }
+    });
+
+  rclcpp::executors::SingleThreadedExecutor exec;
+  exec.add_node(node->get_node_base_interface());
+  exec.add_node(helper);
+
+  const rclcpp::Time base(1000, 0, RCL_ROS_TIME);
+  for (int i = 0; i < 8 && !got_obstacle; ++i) {
+    scan_pub->publish(makeScan(base + rclcpp::Duration::from_seconds(0.1 * i)));
+    for (int s = 0; s < 5; ++s) {
+      exec.spin_some();
+      std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+  }
+
+  ASSERT_TRUE(got_obstacle);
+  ASSERT_EQ(tracked.predicted_positions.size(), static_cast<std::size_t>(prediction_steps));
+  EXPECT_EQ(tracked.prediction_dt, prediction_dt);   // exact: same double end to end
+  for (const auto & sample : tracked.predicted_positions) {
+    EXPECT_TRUE(std::isfinite(sample.x));
+    EXPECT_TRUE(std::isfinite(sample.y));
+    EXPECT_EQ(sample.z, 0.0);                        // planar tracker: z unused
+  }
 
   exec.remove_node(helper);
   exec.remove_node(node->get_node_base_interface());

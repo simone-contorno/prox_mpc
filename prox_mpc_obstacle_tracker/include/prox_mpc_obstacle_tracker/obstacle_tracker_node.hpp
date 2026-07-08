@@ -27,8 +27,8 @@ namespace prox_mpc_obstacle_tracker
 /// Managed lifecycle node that detects and tracks dynamic obstacles from a 2D
 /// lidar and publishes them as a prox_mpc_msgs/ObstacleArray. The per-scan
 /// pipeline (LaserScan -> planar points -> clusters -> tracking-frame centroids
-/// -> constant-velocity Kalman tracks) feeds the in-house Tracker; only the
-/// algorithm-free ROS integration lives here.
+/// -> IMM CV+CTRV tracks with sampled predicted positions) feeds the in-house
+/// Tracker; only the algorithm-free ROS integration lives here.
 class ObstacleTrackerNode : public rclcpp_lifecycle::LifecycleNode
 {
 public:
@@ -73,7 +73,17 @@ private:
   double max_cluster_radius_{0.0};   // 0 = no limit; >0 rejects extended structure (walls)
   double min_detection_range_{0.0};
   double max_detection_range_{0.0};   // 0 -> use the scan's own range_max
+  // Arc-centroid -> disc-centre correction: fraction of the enclosing cluster
+  // radius the centroid is pushed away from the sensor along its ray (a lidar
+  // sees only the near arc, so the raw centroid is biased toward the sensor and
+  // slides around the disc as the viewpoint changes). 0 disables (raw centroid).
+  double cluster_center_offset_gain_{0.0};
   double transform_timeout_{0.1};
+  // Predicted-sample spacing [s], mirrored from the tracker params for the
+  // publish loop (Obstacle.prediction_dt; 0.0 is written when a track has no
+  // samples). The other IMM/CTRV parameters live only in Tracker::Params,
+  // like the existing filter parameters.
+  double prediction_dt_{0.1};
 
   // ROS interfaces.
   rclcpp::Subscription<sensor_msgs::msg::LaserScan>::SharedPtr scan_sub_;

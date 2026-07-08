@@ -43,8 +43,9 @@ std::vector<Point2> scan_to_points(
 /// not a stable physical point and drifts as the robot moves, which would
 /// otherwise be tracked as a phantom moving obstacle. The result is capped to the
 /// max_clusters largest clusters (by member count) to bound downstream cost. The
-/// scan seam (last-to-first wrap) is not merged, so an obstacle straddling it
-/// splits into two clusters — conservative for avoidance.
+/// scan seam (last-to-first wrap) IS merged when the sweep's end points are
+/// gap-adjacent: an object straddling +-pi bearing must yield one cluster, not
+/// two half-arc duplicates that spawn a second track with a corrupted centroid.
 std::vector<Cluster> cluster_points(
   const std::vector<Point2> & points, double cluster_gap, std::size_t min_points,
   std::size_t max_clusters, double max_radius = 0.0);

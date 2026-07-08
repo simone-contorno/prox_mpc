@@ -11,6 +11,9 @@
 
 #include <tf2/exceptions.h>
 
+#include <Eigen/Dense>
+
+#include <geometry_msgs/msg/point.hpp>
 #include <geometry_msgs/msg/transform_stamped.hpp>
 #include <rclcpp_components/register_node_macro.hpp>
 
@@ -74,6 +77,8 @@ ObstacleTrackerNode::CallbackReturn ObstacleTrackerNode::on_configure(
     max_cluster_radius_ = declare_parameter<double>("max_cluster_radius", 0.0);
     min_detection_range_ = declare_parameter<double>("min_detection_range", 0.0);
     max_detection_range_ = declare_parameter<double>("max_detection_range", 0.0);
+    cluster_center_offset_gain_ =
+      declare_parameter<double>("cluster_center_offset_gain", 0.0);
     transform_timeout_ = declare_parameter<double>("transform_timeout", 0.1);
 
     Tracker::Params tp;
@@ -86,7 +91,22 @@ ObstacleTrackerNode::CallbackReturn ObstacleTrackerNode::on_configure(
     tp.drop_count = declare_parameter<int>("drop_count", 3);
     tp.max_tracks = static_cast<std::size_t>(declare_parameter<int>("max_tracks", 10));
 
-    // Validate early; a bad value fails configure rather than corrupting the loop.
+    tp.imm_enabled = declare_parameter<bool>("imm_enabled", true);
+    tp.imm_p_cv_stay = declare_parameter<double>("imm_p_cv_stay", 0.95);
+    tp.imm_p_ctrv_stay = declare_parameter<double>("imm_p_ctrv_stay", 0.95);
+    tp.ctrv_process_noise_accel =
+      declare_parameter<double>("ctrv_process_noise_accel", 1.0);
+    tp.ctrv_process_noise_yaw_accel =
+      declare_parameter<double>("ctrv_process_noise_yaw_accel", 1.0);
+    tp.ctrv_init_omega_variance =
+      declare_parameter<double>("ctrv_init_omega_variance", 1.0);
+    tp.prediction_steps = declare_parameter<int>("prediction_steps", 25);
+    tp.prediction_dt = declare_parameter<double>("prediction_dt", 0.1);
+    prediction_dt_ = tp.prediction_dt;
+
+    // Validate early; a bad value fails configure rather than corrupting the
+    // loop. The Markov stay probabilities must lie strictly inside (0, 1).
+    const auto in_open_unit = [](double v) {return v > 0.0 && v < 1.0;};
     const bool ok =
       tracking_frame_.size() > 0 &&
       cluster_gap_ > 0.0 &&
@@ -95,6 +115,7 @@ ObstacleTrackerNode::CallbackReturn ObstacleTrackerNode::on_configure(
       max_cluster_radius_ >= 0.0 &&
       min_detection_range_ >= 0.0 &&
       max_detection_range_ >= 0.0 &&
+      cluster_center_offset_gain_ >= 0.0 && cluster_center_offset_gain_ <= 1.0 &&
       transform_timeout_ >= 0.0 &&
       tp.process_noise >= 0.0 &&
       tp.measurement_noise > 0.0 &&
@@ -102,7 +123,14 @@ ObstacleTrackerNode::CallbackReturn ObstacleTrackerNode::on_configure(
       tp.initial_velocity_variance >= 0.0 &&
       tp.confirm_count >= 1 &&
       tp.drop_count >= 0 &&
-      tp.max_tracks >= 1;
+      tp.max_tracks >= 1 &&
+      in_open_unit(tp.imm_p_cv_stay) &&
+      in_open_unit(tp.imm_p_ctrv_stay) &&
+      tp.ctrv_process_noise_accel >= 0.0 &&
+      tp.ctrv_process_noise_yaw_accel >= 0.0 &&
+      tp.ctrv_init_omega_variance > 0.0 &&
+      tp.prediction_steps >= 0 && tp.prediction_steps <= 100 &&
+      tp.prediction_dt > 0.0;
     if (!ok) {
       RCLCPP_ERROR(get_logger(), "Invalid parameter(s); refusing to configure.");
       return CallbackReturn::FAILURE;
@@ -248,8 +276,25 @@ void ObstacleTrackerNode::scanCallback(sensor_msgs::msg::LaserScan::ConstSharedP
   measurements.reserve(local.size());
   for (const Cluster & c : local) {
     Cluster m = c;
-    m.x = tx + ct * c.x - st * c.y;
-    m.y = ty + st * c.x + ct * c.y;
+    double cx_s = c.x;
+    double cy_s = c.y;
+    // Arc-centroid -> disc-centre estimate, applied in the sensor frame (the
+    // sensor is the origin here): push the centroid away from the sensor along
+    // its ray by gain * enclosing radius. 0.5 matches the half-disc arc seen at
+    // close range; thin far arcs are under-corrected, which errs toward the
+    // sensor-facing surface (conservative). The push direction rotates with the
+    // viewpoint, cancelling the centroid slide that otherwise reads as fake
+    // tangential velocity during a close pass.
+    if (cluster_center_offset_gain_ > 0.0) {
+      const double d = std::hypot(cx_s, cy_s);
+      if (d > 1e-9) {
+        const double scale = 1.0 + cluster_center_offset_gain_ * c.radius / d;
+        cx_s *= scale;
+        cy_s *= scale;
+      }
+    }
+    m.x = tx + ct * cx_s - st * cy_s;
+    m.y = ty + st * cx_s + ct * cy_s;
     measurements.push_back(m);
   }
 
@@ -271,6 +316,16 @@ void ObstacleTrackerNode::scanCallback(sensor_msgs::msg::LaserScan::ConstSharedP
     o.radius = t.radius;
     o.position_covariance = {t.cov(0, 0), t.cov(0, 1), t.cov(1, 0), t.cov(1, 1)};
     o.velocity_covariance = {t.cov(2, 2), t.cov(2, 3), t.cov(3, 2), t.cov(3, 3)};
+    const std::vector<Eigen::Vector2d> samples = tracker_->predicted_samples(t);
+    o.predicted_positions.reserve(samples.size());
+    for (const Eigen::Vector2d & s : samples) {
+      geometry_msgs::msg::Point p;
+      p.x = s(0);
+      p.y = s(1);
+      p.z = 0.0;
+      o.predicted_positions.push_back(p);
+    }
+    o.prediction_dt = samples.empty() ? 0.0 : prediction_dt_;
     out.obstacles.push_back(o);
   }
   obstacle_pub_->publish(out);

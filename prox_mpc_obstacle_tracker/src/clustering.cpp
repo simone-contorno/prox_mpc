@@ -34,14 +34,44 @@ std::vector<Cluster> cluster_points(
 
   const double gap2 = cluster_gap * cluster_gap;
 
-  // Sequential segmentation over bearing-ordered points; a member-index range
-  // [begin, end) per segment lets us recompute centroid and radius after closing.
-  auto close_segment = [&](std::size_t begin, std::size_t end) {
-      const std::size_t count = end - begin;
+  // Sequential segmentation over bearing-ordered points: index ranges [begin, end)
+  // are collected first so the scan-seam pair can be spliced before closing.
+  std::vector<std::pair<std::size_t, std::size_t>> segments;
+  std::size_t seg_begin = 0;
+  for (std::size_t i = 1; i < points.size(); ++i) {
+    const double dx = points[i].x - points[i - 1].x;
+    const double dy = points[i].y - points[i - 1].y;
+    if (dx * dx + dy * dy > gap2) {
+      segments.push_back({seg_begin, i});
+      seg_begin = i;
+    }
+  }
+  segments.push_back({seg_begin, points.size()});
+
+  // The scan is angularly cyclic: an object straddling the +-pi bearing seam
+  // arrives as one segment at each end of the sweep, and left unmerged it becomes
+  // two half-arc clusters, i.e. two duplicate tracks with corrupted centroids.
+  // If the sweep's last and first returns are gap-adjacent, splice the trailing
+  // segment onto the leading one.
+  bool wrap = false;
+  if (segments.size() >= 2) {
+    const double dx = points.front().x - points.back().x;
+    const double dy = points.front().y - points.back().y;
+    wrap = dx * dx + dy * dy <= gap2;
+  }
+
+  // Close a segment made of up to two index ranges (the second is the leading
+  // range of a seam-spliced pair; empty otherwise).
+  auto close_segment = [&](std::size_t b1, std::size_t e1, std::size_t b2, std::size_t e2) {
+      const std::size_t count = (e1 - b1) + (e2 - b2);
       if (count < min_points) {return;}
       double sx = 0.0;
       double sy = 0.0;
-      for (std::size_t i = begin; i < end; ++i) {
+      for (std::size_t i = b1; i < e1; ++i) {
+        sx += points[i].x;
+        sy += points[i].y;
+      }
+      for (std::size_t i = b2; i < e2; ++i) {
         sx += points[i].x;
         sy += points[i].y;
       }
@@ -50,7 +80,12 @@ std::vector<Cluster> cluster_points(
       c.x = sx / static_cast<double>(count);
       c.y = sy / static_cast<double>(count);
       double r2 = 0.0;
-      for (std::size_t i = begin; i < end; ++i) {
+      for (std::size_t i = b1; i < e1; ++i) {
+        const double dx = points[i].x - c.x;
+        const double dy = points[i].y - c.y;
+        r2 = std::max(r2, dx * dx + dy * dy);
+      }
+      for (std::size_t i = b2; i < e2; ++i) {
         const double dx = points[i].x - c.x;
         const double dy = points[i].y - c.y;
         r2 = std::max(r2, dx * dx + dy * dy);
@@ -60,16 +95,17 @@ std::vector<Cluster> cluster_points(
       clusters.push_back(c);
     };
 
-  std::size_t seg_begin = 0;
-  for (std::size_t i = 1; i < points.size(); ++i) {
-    const double dx = points[i].x - points[i - 1].x;
-    const double dy = points[i].y - points[i - 1].y;
-    if (dx * dx + dy * dy > gap2) {
-      close_segment(seg_begin, i);
-      seg_begin = i;
+  for (std::size_t s = 0; s < segments.size(); ++s) {
+    if (wrap && s == 0) {
+      // Seam splice: trailing segment first (bearing order across the wrap).
+      close_segment(
+        segments.back().first, segments.back().second,
+        segments.front().first, segments.front().second);
+      continue;
     }
+    if (wrap && s + 1 == segments.size()) {continue;}  // consumed by the splice
+    close_segment(segments[s].first, segments[s].second, 0, 0);
   }
-  close_segment(seg_begin, points.size());
 
   // Cap to the largest clusters so the per-scan cost stays bounded.
   if (clusters.size() > max_clusters) {

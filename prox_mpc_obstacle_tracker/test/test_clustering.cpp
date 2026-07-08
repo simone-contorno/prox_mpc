@@ -106,6 +106,44 @@ TEST(Clustering, CapsToLargestClusters)
   EXPECT_EQ(cl[1].count, 4u);
 }
 
+// An object straddling the +-pi bearing seam arrives as one segment at each end
+// of the sweep; the seam splice must yield a single cluster whose centroid and
+// count span both halves, not two half-arc duplicates.
+TEST(Clustering, MergesClusterAcrossScanSeam)
+{
+  // Disc of ~0.2 m extent centred behind the sensor at (-2, 0): returns appear
+  // at the start (bearing ~ -pi side) and end (~ +pi side) of the sweep.
+  std::vector<Point2> pts;
+  pts.push_back(pt(-2.0, -0.10));   // leading half (start of sweep)
+  pts.push_back(pt(-2.0, -0.05));
+  pts.push_back(pt(-2.0, 0.00));
+  append_run(pts, 1.0, 0.0, 4);     // unrelated mid-sweep cluster
+  pts.push_back(pt(-2.0, 0.10));    // trailing half (end of sweep)
+  pts.push_back(pt(-2.0, 0.05));    // last return is 0.05 m from the first: seam-adjacent
+
+  const auto cl = cluster_points(pts, 0.3, 3, 20);
+  ASSERT_EQ(cl.size(), 2u);
+  const Cluster & seam = cl[0].count == 5u ? cl[0] : cl[1];
+  const Cluster & mid = cl[0].count == 5u ? cl[1] : cl[0];
+  EXPECT_EQ(seam.count, 5u);                // both halves merged
+  EXPECT_NEAR(seam.x, -2.0, kTol);
+  EXPECT_NEAR(seam.y, 0.0, kTol);           // centroid spans the seam
+  EXPECT_NEAR(seam.radius, 0.10, kTol);
+  EXPECT_EQ(mid.count, 4u);
+}
+
+// Distant first/last returns must not trigger the seam splice.
+TEST(Clustering, NoSeamMergeWhenEndsApart)
+{
+  std::vector<Point2> pts;
+  append_run(pts, 0.0, 0.0, 4);
+  append_run(pts, 5.0, 0.0, 4);
+  const auto cl = cluster_points(pts, 0.3, 3, 20);
+  ASSERT_EQ(cl.size(), 2u);
+  EXPECT_EQ(cl[0].count, 4u);
+  EXPECT_EQ(cl[1].count, 4u);
+}
+
 // max_radius rejects extended clusters (walls) whose enclosing radius is large,
 // while keeping compact obstacles.
 TEST(Clustering, RejectsOversizedClusters)
