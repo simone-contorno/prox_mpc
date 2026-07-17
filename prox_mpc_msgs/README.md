@@ -96,7 +96,7 @@ The producer ([prox_mpc_obstacle_tracker](../prox_mpc_obstacle_tracker)) publish
 The consumer ([prox_mpc_controller](../prox_mpc_controller)) subscribes when `predict_obstacles` is enabled (reliable, depth 5).
 It uses `header.stamp` to age the prediction, `header.frame_id` to transform the obstacles into the costmap global frame, and the `radius` to size the keep-out clearance.
 When `predicted_positions` is non-empty and valid (`prediction_dt` finite and positive, all samples finite), the controller interpolates the sampled polyline at its horizon times (extrapolating along the last segment beyond the span); otherwise it falls back to the straight constant-velocity ray `position + velocity * t`.
-See the controller's [control-law.md](../prox_mpc_controller/docs/control-law.md) for how the fields drive predictive avoidance.
+See the controller's [control-law.md](../prox_mpc_controller/doc/control-law.md) for how the fields drive predictive avoidance.
 
 `SolverDiagnostics` is published by the controller on `<plugin>/diagnostics` (for example `FollowPath/diagnostics`, reliable, depth 10) when `publish_diagnostics` is set, and is consumed by the benchmarking tooling rather than by the control loop.
 

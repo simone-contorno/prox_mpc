@@ -3,14 +3,24 @@
 This document is the system-level overview of the ProxMPC workspace: how the
 packages depend on and communicate with each other, and the runtime data flow for
 each way the stack is run.
-Per-package design lives in each package's own `docs/`; this document ties them
+Per-package design lives in each package's own `doc/`; this document ties them
 together.
 
-- Engine: [prox_mpc_core/docs/architecture.md](../prox_mpc_core/docs/architecture.md)
-- Controller: [prox_mpc_controller/docs/architecture.md](../prox_mpc_controller/docs/architecture.md)
-- Obstacle tracker: [prox_mpc_obstacle_tracker/docs/architecture.md](../prox_mpc_obstacle_tracker/docs/architecture.md)
-- Demos: [prox_mpc_demo/docs/simulation.md](../prox_mpc_demo/docs/simulation.md),
-  [prox_mpc_demo/docs/nav2-simulation.md](../prox_mpc_demo/docs/nav2-simulation.md)
+- Engine: [prox_mpc_core/doc/architecture.md](../prox_mpc_core/doc/architecture.md)
+- Controller: [prox_mpc_controller/doc/architecture.md](../prox_mpc_controller/doc/architecture.md)
+- Obstacle tracker: [prox_mpc_obstacle_tracker/doc/architecture.md](../prox_mpc_obstacle_tracker/doc/architecture.md)
+- Demos: [prox_mpc_demo/doc/simulation.md](../prox_mpc_demo/doc/simulation.md),
+  [prox_mpc_demo/doc/nav2-simulation.md](../prox_mpc_demo/doc/nav2-simulation.md)
+
+## Table of Contents
+
+- [Packages at a glance](#packages-at-a-glance)
+- [Build and plugin dependencies](#build-and-plugin-dependencies)
+- [Runtime: standalone simulation](#runtime-standalone-simulation)
+- [Runtime: Nav2 + Gazebo](#runtime-nav2--gazebo)
+- [Runtime: predictive (dynamic) obstacle avoidance](#runtime-predictive-dynamic-obstacle-avoidance)
+- [Cross-cutting conventions](#cross-cutting-conventions)
+- [License](#license)
 
 ## Packages at a glance
 
@@ -19,7 +29,7 @@ together.
 | `prox_mpc_core` | C++ library + `Model` plugins | The SQP/QP NMPC engine and the vehicle-model interface. No ROS node. |
 | `prox_mpc_msgs` | `rosidl` interfaces | `Obstacle` / `ObstacleArray` contract between tracker and controller. |
 | `prox_mpc_controller` | Nav2 controller plugin | Wraps the engine behind `nav2_core::Controller`. |
-| `prox_mpc_obstacle_tracker` | Lifecycle node + ROS-free core | 2D-lidar dynamic-obstacle detector and Kalman tracker. |
+| `prox_mpc_obstacle_tracker` | Lifecycle node + ROS-free core | 2D-lidar dynamic-obstacle detector and IMM (CV+CTRV) tracker. |
 | `prox_mpc_demo` | Executables + launch/config/assets | Standalone benchmark and Nav2 + Gazebo bring-up. |
 | `prox_mpc_test_models` | `Model` plugins | Fault-injection models for controller tests. |
 | `prox_mpc_benchmark` | Metrics node + Python tooling + kinematic plant + scan simulator | Measures accuracy / precision / real-time across the scenario × model × controller × mode matrix; hosts the mode (b2) Nav2 plant and a scan simulator so every controller (DWB, MPPI, RPP, Graceful, ProxMPC) perceives the scenario obstacles through the same costmap. See [prox_mpc_benchmark/README.md](../prox_mpc_benchmark/README.md) and the [comparison results](controller-comparison-results.md). |
@@ -70,7 +80,7 @@ prediction each step.
 flowchart LR
   subgraph sim[prox_mpc_simulation node]
     mpc[prox_mpc::MPC]
-    model[Model bike / r2d2]
+    model[Model bicycle / unicycle]
     mpc --> model
   end
   model -- /robot/cmd_vel Twist --> rviz[RViz]
@@ -80,7 +90,7 @@ flowchart LR
   model -- predicted next state --> mpc
 ```
 
-Details and parameters: [prox_mpc_demo/docs/simulation.md](../prox_mpc_demo/docs/simulation.md).
+Details and parameters: [prox_mpc_demo/doc/simulation.md](../prox_mpc_demo/doc/simulation.md).
 
 ## Runtime: Nav2 + Gazebo
 
@@ -113,21 +123,22 @@ The baseline configuration runs the in-loop obstacle term off
 (`max_obstacles: 0`) and delegates avoidance to Nav2's planner and costmaps; the
 controller tracks the rerouted collision-free path.
 Scenarios, configuration rationale, and verified results are in
-[prox_mpc_demo/docs/nav2-simulation.md](../prox_mpc_demo/docs/nav2-simulation.md).
+[prox_mpc_demo/doc/nav2-simulation.md](../prox_mpc_demo/doc/nav2-simulation.md).
 
 ## Runtime: predictive (dynamic) obstacle avoidance
 
 The opt-in predictive mode adds the obstacle tracker and turns on the controller's
 in-loop obstacle term.
-The tracker clusters the lidar, runs a constant-velocity Kalman filter per object,
-and publishes confirmed tracks; the controller propagates each over the horizon and
-binds it to a constraint slot, filling the rest from the costmap (hybrid).
+The tracker clusters the lidar, runs an IMM (CV+CTRV) filter per object, and
+publishes confirmed tracks with sampled predicted positions; the controller follows
+each track's predicted trajectory over the horizon and binds it to a constraint
+slot, filling the rest from the costmap (hybrid).
 
 ```mermaid
 flowchart LR
   gz[(Gazebo)] -- /scan LaserScan --> trk
   subgraph trk[prox_mpc_obstacle_tracker]
-    clus[cluster_points] --> kf[Tracker<br/>const-velocity Kalman]
+    clus[cluster_points] --> kf[Tracker<br/>IMM CV+CTRV]
   end
   trk -- tracked_obstacles ObstacleArray --> ctrl
   cm[local costmap] -- occupied cells + footprint --> ctrl
@@ -155,3 +166,7 @@ costmap-only fill, so the feature is a clean enable/disable switch.
 - **Types.** All MPC quantities are `double`; ROS parameters are `double` / `int`
   / `bool` / `string` only.
 - **License.** Apache-2.0 across the workspace, with a short SPDX header per file.
+
+## License
+
+[Apache-2.0](../LICENSE).

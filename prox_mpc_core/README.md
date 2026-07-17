@@ -27,7 +27,7 @@ This package contains **no ROS node**: it is the reusable library that [prox_mpc
 The core owns the SQP/QP assembly, the tracking cost, the state/control/rate constraints, the disc-based obstacle math, and the `prox_mpc::Model` vehicle interface.
 It never needs editing to gain a new vehicle model: a model is a `pluginlib` plugin loaded by name.
 
-See [docs/architecture.md](docs/architecture.md) for the design overview, [docs/nmpc.md](docs/nmpc.md) for the NMPC/SQP/QP math, and [docs/obstacle-avoidance.md](docs/obstacle-avoidance.md) for the obstacle constraints.
+See [doc/architecture.md](doc/architecture.md) for the design overview, [doc/nmpc.md](doc/nmpc.md) for the NMPC/SQP/QP math, and [doc/obstacle-avoidance.md](doc/obstacle-avoidance.md) for the obstacle constraints.
 
 ## Public API
 
@@ -40,7 +40,7 @@ Everything lives in the `prox_mpc` C++ namespace.
 | `prox_mpc/proxqp.hpp` | `ProxQP`: QP assembly and solve wrapper |
 | `prox_mpc/mpc.hpp` | `MPC`: SQP driver and configuration |
 | `prox_mpc/utils.hpp` | free functions (`normalizeAngle`, `optimPath`), Eigen/ROS aliases |
-| `prox_mpc/models/bike.hpp`, `prox_mpc/models/r2d2.hpp` | reference kinematic models |
+| `prox_mpc/models/bicycle.hpp`, `prox_mpc/models/unicycle.hpp` | reference kinematic models |
 
 ## Models
 
@@ -109,13 +109,13 @@ flowchart LR
 ```
 
 The only ROS-coupled function is `optimPath()`, which converts an optimal state trajectory into a `nav_msgs/msg/Path` for visualization.
-The full class diagram, the mathematical formulation, and the solve data flow are in [docs/architecture.md](docs/architecture.md) and [docs/nmpc.md](docs/nmpc.md).
+The full class diagram, the mathematical formulation, and the solve data flow are in [doc/architecture.md](doc/architecture.md) and [doc/nmpc.md](doc/nmpc.md).
 
 ## Project Structure
 
 ```text
 prox_mpc_core/
-├── docs/
+├── doc/
 │   ├── architecture.md
 │   ├── nmpc.md
 │   └── obstacle-avoidance.md
@@ -126,8 +126,8 @@ prox_mpc_core/
 │   ├── structs.hpp
 │   ├── utils.hpp
 │   └── models/
-│       ├── bike.hpp
-│       └── r2d2.hpp
+│       ├── bicycle.hpp
+│       └── unicycle.hpp
 ├── src/
 │   ├── model.cpp
 │   ├── mpc.cpp
@@ -172,7 +172,7 @@ The package also enables `ament_lint_common` (uncrustify, cppcheck, lint_cmake, 
 
 - **A model is not found by `pluginlib::ClassLoader`:** the overlay is not sourced, or the models library was not built; confirm the plugin appears in `ros2 plugin list --package prox_mpc_core`.
 - **`proxsuite` not found at configure:** install `ros-jazzy-proxsuite` (or build proxsuite from source) and re-source the overlay.
-- **The QP does not converge within the iteration caps:** the horizon, weights, or step (`dt`) make the sub-problem stiff; review the solver limits in [docs/nmpc.md](docs/nmpc.md).
+- **The QP does not converge within the iteration caps:** the horizon, weights, or step (`dt`) make the sub-problem stiff; review the solver limits in [doc/nmpc.md](doc/nmpc.md).
 
 ## License
 

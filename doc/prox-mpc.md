@@ -37,8 +37,8 @@ Safety is split into two layers that recur throughout the stack: a **fast, conve
 
 The full derivation — cost function, the Euler linearisation, the KKT/QP assembly, convergence, and the obstacle constraints — is in the engine's own docs:
 
-- [`prox_mpc_core/docs/nmpc.md`](../prox_mpc_core/docs/nmpc.md) — the NMPC/SQP/QP math.
-- [`prox_mpc_core/docs/obstacle-avoidance.md`](../prox_mpc_core/docs/obstacle-avoidance.md) — the in-loop disc constraint and the discrete-time control-barrier coupling.
+- [`prox_mpc_core/doc/nmpc.md`](../prox_mpc_core/doc/nmpc.md) — the NMPC/SQP/QP math.
+- [`prox_mpc_core/doc/obstacle-avoidance.md`](../prox_mpc_core/doc/obstacle-avoidance.md) — the in-loop disc constraint and the discrete-time control-barrier coupling.
 
 ## 2. `prox_mpc_core` — the engine
 
@@ -62,7 +62,7 @@ Construct an `MPC`, set the horizons/weights/obstacle capacity, `init()` it with
 The engine takes no safety action of its own — convergence and finiteness gating belong to the caller (the controller and the demo both do this).
 
 **Read more.**
-[`prox_mpc_core/README.md`](../prox_mpc_core/README.md) (public API table, build/test) and [`prox_mpc_core/docs/architecture.md`](../prox_mpc_core/docs/architecture.md) (design).
+[`prox_mpc_core/README.md`](../prox_mpc_core/README.md) (public API table, build/test) and [`prox_mpc_core/doc/architecture.md`](../prox_mpc_core/doc/architecture.md) (design).
 
 ## 3. `prox_mpc_msgs` — the obstacle contract
 
@@ -109,11 +109,11 @@ controller_server:
       plugin: "prox_mpc_controller::ProxMpcController"
       model_plugin: "prox_mpc_core/Unicycle"   # or prox_mpc_core/Bicycle
       # horizons, weights, solver limits, obstacle settings:
-      # see config/prox_mpc_controller.yaml and docs/architecture.md
+      # see config/prox_mpc_controller.yaml and doc/architecture.md
 ```
 
 **Read more.**
-[`prox_mpc_controller/README.md`](../prox_mpc_controller/README.md) (features, build, troubleshooting), [`prox_mpc_controller/docs/architecture.md`](../prox_mpc_controller/docs/architecture.md) (lifecycle, interfaces/QoS, the full parameter reference, the two safety layers), and [`prox_mpc_controller/docs/control-law.md`](../prox_mpc_controller/docs/control-law.md) (the controller-side math).
+[`prox_mpc_controller/README.md`](../prox_mpc_controller/README.md) (features, build, troubleshooting), [`prox_mpc_controller/doc/architecture.md`](../prox_mpc_controller/doc/architecture.md) (lifecycle, interfaces/QoS, the full parameter reference, the two safety layers), and [`prox_mpc_controller/doc/control-law.md`](../prox_mpc_controller/doc/control-law.md) (the controller-side math).
 
 ## 5. `prox_mpc_obstacle_tracker` — dynamic-obstacle perception
 
@@ -121,7 +121,7 @@ controller_server:
 A managed lifecycle node that turns a 2D lidar scan into confirmed dynamic-obstacle tracks, written from scratch on Eigen (no third-party tracker), so it is license-clean and unit-testable without ROS.
 
 **How it works.**
-The pipeline is `LaserScan → planar points → adjacency clusters → tracking-frame centroids → constant-velocity Kalman tracks`, with gated greedy nearest-neighbour association, one Kalman filter per object, a birth/confirm/death lifecycle, and a cluster-radius cap that rejects extended structure (walls) so they are not tracked as phantom fast movers.
+The pipeline is `LaserScan → planar points → adjacency clusters → tracking-frame centroids → IMM (CV+CTRV) tracks`, with gated greedy nearest-neighbour association, one IMM filter per object (a constant-velocity Kalman filter and a constant-turn-rate-and-velocity EKF run in parallel, blended by model probability; `imm_enabled: false` restores a legacy single-CV path), a birth/confirm/death lifecycle, and a cluster-radius cap that rejects extended structure (walls) so they are not tracked as phantom fast movers.
 Confirmed tracks are published as a [`prox_mpc_msgs/ObstacleArray`](#3-prox_mpc_msgs--the-obstacle-contract) on `tracked_obstacles`, which the controller consumes for predictive avoidance.
 
 **How to use it.**
@@ -135,7 +135,7 @@ ros2 topic echo /tracked_obstacles
 ```
 
 **Read more.**
-[`prox_mpc_obstacle_tracker/README.md`](../prox_mpc_obstacle_tracker/README.md) (interfaces, run, test) and [`prox_mpc_obstacle_tracker/docs/architecture.md`](../prox_mpc_obstacle_tracker/docs/architecture.md) (algorithm, parameters, lifecycle).
+[`prox_mpc_obstacle_tracker/README.md`](../prox_mpc_obstacle_tracker/README.md) (interfaces, run, test) and [`prox_mpc_obstacle_tracker/doc/architecture.md`](../prox_mpc_obstacle_tracker/doc/architecture.md) (algorithm, parameters, lifecycle).
 
 ## 6. `prox_mpc_demo` — runnable demonstrations
 
@@ -160,7 +160,7 @@ ros2 launch prox_mpc_demo nav2_simulation.launch.py predictive:=True
 ```
 
 **Read more.**
-[`prox_mpc_demo/README.md`](../prox_mpc_demo/README.md), [`prox_mpc_demo/docs/simulation.md`](../prox_mpc_demo/docs/simulation.md) (standalone parameters), and [`prox_mpc_demo/docs/nav2-simulation.md`](../prox_mpc_demo/docs/nav2-simulation.md) (the Gazebo + Nav2 guide and configuration rationale).
+[`prox_mpc_demo/README.md`](../prox_mpc_demo/README.md), [`prox_mpc_demo/doc/simulation.md`](../prox_mpc_demo/doc/simulation.md) (standalone parameters), and [`prox_mpc_demo/doc/nav2-simulation.md`](../prox_mpc_demo/doc/nav2-simulation.md) (the Gazebo + Nav2 guide and configuration rationale).
 
 ## 7. `prox_mpc_test_models` — fault-injection fixtures
 
@@ -192,7 +192,7 @@ On that comparison a **resource sampler** records the `controller_server` proces
 
 ```bash
 # one standalone (b1) cell, reproducibly
-ros2 run prox_mpc_benchmark run_matrix.py --modes b1 --scenarios static_box --models bike
+ros2 run prox_mpc_benchmark run_matrix.py --modes b1 --scenarios static_box --models bicycle
 # the cross-controller comparison on the open-world cell (mode b2, no Gazebo)
 ros2 run prox_mpc_benchmark run_nav2.py --controllers proxmpc,dwb,mppi,regulated_pure_pursuit
 # render the result tables into the package README
@@ -210,9 +210,9 @@ The same controller is exercised three ways, in increasing fidelity and cost:
 
 | Mode | Plant | Localization | Use it for | Where |
 | --- | --- | --- | --- | --- |
-| **b1** standalone | the engine's own model rollout | exact (closed on the model) | deterministic regression of the engine; solve-time profiling | [`prox_mpc_demo` standalone](../prox_mpc_demo/docs/simulation.md) |
+| **b1** standalone | the engine's own model rollout | exact (closed on the model) | deterministic regression of the engine; solve-time profiling | [`prox_mpc_demo` standalone](../prox_mpc_demo/doc/simulation.md) |
 | **b2** Nav2, no Gazebo | the [kinematic plant](#8-prox_mpc_benchmark--the-measurement-harness) | exact (static `map → odom`) | controller-agnostic comparison under the real Nav2 loop without physics cost | [`prox_mpc_benchmark`](../prox_mpc_benchmark/README.md) |
-| **a** Nav2 + Gazebo | Gazebo Harmonic physics | AMCL | the real-behaviour gate (sensors, costmaps, full velocity chain) | [`prox_mpc_demo` Nav2 guide](../prox_mpc_demo/docs/nav2-simulation.md) |
+| **a** Nav2 + Gazebo | Gazebo Harmonic physics | AMCL | the real-behaviour gate (sensors, costmaps, full velocity chain) | [`prox_mpc_demo` Nav2 guide](../prox_mpc_demo/doc/nav2-simulation.md) |
 
 The [architecture overview](architecture.md) draws the runtime data flow for each, and the [comparison results](controller-comparison-results.md) report what each measured.
 
@@ -224,7 +224,7 @@ The `prox_mpc::Model` interface is the one seam you extend to support a new vehi
 2. Register it as a `pluginlib` plugin against the `prox_mpc::Model` base (as `prox_mpc_core` does for `Bicycle`/`Unicycle` and `prox_mpc_test_models` does for its fixture).
 3. Select it by name (`model_plugin`) in the controller or the demo — no consumer code changes.
 
-The model interface details are in [`prox_mpc_core/README.md`](../prox_mpc_core/README.md) and [`prox_mpc_core/docs/architecture.md`](../prox_mpc_core/docs/architecture.md); `prox_mpc_test_models` is a minimal worked example of a third-party model registered against the core base.
+The model interface details are in [`prox_mpc_core/README.md`](../prox_mpc_core/README.md) and [`prox_mpc_core/doc/architecture.md`](../prox_mpc_core/doc/architecture.md); `prox_mpc_test_models` is a minimal worked example of a third-party model registered against the core base.
 
 ## 11. Cross-cutting conventions
 
@@ -235,3 +235,7 @@ These hold across the workspace and are documented once in the [architecture ove
 - **Types** — all MPC quantities are `double`; ROS parameters are `double` / `int` / `bool` / `string` only.
 - **Build** — `Release` (`-O3 -DNDEBUG`) by default behind an `if(NOT CMAKE_BUILD_TYPE)` guard; never `-Ofast` / `-ffast-math` for the solver (it breaks the IEEE-754 semantics the convergence and finiteness guards rely on); per-board CPU tuning stays out of the source.
 - **License** — Apache-2.0 across the workspace, with a short `SPDX-License-Identifier` header per file and the full text in `LICENSE`.
+
+## License
+
+[Apache-2.0](../LICENSE).

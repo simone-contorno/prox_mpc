@@ -34,7 +34,7 @@ prox_mpc_core/include/prox_mpc/
   proxqp.hpp   ProxQP: QP assembly and solve wrapper
   mpc.hpp      MPC: SQP driver and configuration
   utils.hpp    free functions, Eigen/ROS aliases
-  models/      Bicycle (bike) and Unicycle (r2d2) reference kinematic models
+  models/      Bicycle and Unicycle reference kinematic models
 prox_mpc_core/src/
   model.cpp    Model getters/setters
   mpc.cpp      MPC::init, MPC::solve (SQP loop), configuration

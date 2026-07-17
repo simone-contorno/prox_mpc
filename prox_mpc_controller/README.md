@@ -14,7 +14,7 @@ The engine math is unchanged and lives in the core.
 
 This plugin is verified in simulation: it runs inside a live `controller_server`
 driving a TurtleBot3 waffle under a full Nav2 stack in Gazebo Harmonic (see
-[prox_mpc_demo/docs/nav2-simulation.md](../prox_mpc_demo/docs/nav2-simulation.md)).
+[prox_mpc_demo/doc/nav2-simulation.md](../prox_mpc_demo/doc/nav2-simulation.md)).
 
 ## Table of Contents
 
@@ -29,14 +29,14 @@ driving a TurtleBot3 waffle under a full Nav2 stack in Gazebo Harmonic (see
 
 ## Documentation
 
-- [docs/architecture.md](docs/architecture.md) — the Nav2 integration design:
+- [doc/architecture.md](doc/architecture.md) — the Nav2 integration design:
   responsibility split, the controller lifecycle, the per-cycle data flow, the
   interfaces and QoS, the full parameter reference, and the two safety layers.
-- [docs/control-law.md](docs/control-law.md) — the controller-side math:
+- [doc/control-law.md](doc/control-law.md) — the controller-side math:
   reference construction, costmap reduction, predictive obstacle propagation,
   the deceleration fallback, speed limits, and the discrete-time CBF coupling.
-- Engine math is in the core: [NMPC/SQP/QP](../prox_mpc_core/docs/nmpc.md) and
-  [obstacle avoidance](../prox_mpc_core/docs/obstacle-avoidance.md).
+- Engine math is in the core: [NMPC/SQP/QP](../prox_mpc_core/doc/nmpc.md) and
+  [obstacle avoidance](../prox_mpc_core/doc/obstacle-avoidance.md).
 
 ## Key Features
 
@@ -53,7 +53,8 @@ driving a TurtleBot3 waffle under a full Nav2 stack in Gazebo Harmonic (see
   local costmap (clustered, windowed scan) shapes the trajectory, and an exact
   polygon-footprint check vetoes any command that would collide.
 - **Predictive (dynamic) obstacle avoidance (opt-in):** consumes tracked
-  obstacles, propagates each over the horizon at constant velocity, binds it to a
+  obstacles, follows each track's tracker-sampled predicted trajectory over the
+  horizon (a constant-velocity ray when no samples are provided), binds it to a
   fixed constraint slot, and fills the remaining slots from the costmap (hybrid);
   off by default, reproducing the costmap-only behavior bit-for-bit.
 - **Safe failure handling:** a non-converged or non-finite solve decelerates the
@@ -105,17 +106,17 @@ controller_server:
     FollowPath:
       plugin: "prox_mpc_controller::ProxMpcController"
       # model, horizons, weights, solver limits, and obstacle settings:
-      # see config/prox_mpc_controller.yaml and docs/architecture.md.
+      # see config/prox_mpc_controller.yaml and doc/architecture.md.
 ```
 
 The plugin class is exported to `nav2_core` through
 [prox_mpc_controller_plugin.xml](prox_mpc_controller_plugin.xml).
 The full parameter and interface reference is in
-[docs/architecture.md](docs/architecture.md).
+[doc/architecture.md](doc/architecture.md).
 
 For an end-to-end, runnable Gazebo + Nav2 bring-up (baseline and predictive),
 see [prox_mpc_demo](../prox_mpc_demo) and its
-[Nav2 simulation guide](../prox_mpc_demo/docs/nav2-simulation.md).
+[Nav2 simulation guide](../prox_mpc_demo/doc/nav2-simulation.md).
 
 ## Testing
 
@@ -146,9 +147,9 @@ disabled (single formatter, and a short SPDX header per file with the full text 
 - **Robot rotates in place instead of translating:** the cruise speed samples the
   reference too close to the robot; raise `desired_linear_vel` toward the model's
   speed bound (see the config notes in the
-  [Nav2 simulation guide](../prox_mpc_demo/docs/nav2-simulation.md)).
+  [Nav2 simulation guide](../prox_mpc_demo/doc/nav2-simulation.md)).
 - **`NoValidControl` recoveries:** the QP is not converging within the configured
-  iteration caps for the horizon and weights; review `docs/control-law.md`.
+  iteration caps for the horizon and weights; review `doc/control-law.md`.
 
 ## License
 

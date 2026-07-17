@@ -6,12 +6,12 @@ This document describes the design of `prox_mpc_controller`, the
 The controller-side math (reference construction, costmap reduction, predictive
 propagation, and the failure fallback) is in [control-law.md](control-law.md).
 The engine's math is in the core documents:
-[NMPC/SQP/QP](../../prox_mpc_core/docs/nmpc.md) and
-[obstacle avoidance](../../prox_mpc_core/docs/obstacle-avoidance.md).
+[NMPC/SQP/QP](../../prox_mpc_core/doc/nmpc.md) and
+[obstacle avoidance](../../prox_mpc_core/doc/obstacle-avoidance.md).
 
 The plugin is verified in simulation under a live Nav2 stack in Gazebo Harmonic;
 the scenarios and results are in
-[../../prox_mpc_demo/docs/nav2-simulation.md](../../prox_mpc_demo/docs/nav2-simulation.md).
+[../../prox_mpc_demo/doc/nav2-simulation.md](../../prox_mpc_demo/doc/nav2-simulation.md).
 
 ## Responsibility split
 
@@ -122,7 +122,7 @@ sequenceDiagram
       Ctrl->>Ctrl: decelerate toward zero
     end
   else not solved / non-finite
-    Ctrl->>Ctrl: decelerate; escalate after N failures
+    Ctrl->>Ctrl: decelerate then escalate after N failures
   end
   Ctrl-->>Nav2: TwistStamped (base frame)
 ```
@@ -132,7 +132,7 @@ sequenceDiagram
 Obstacle avoidance is split across two layers.
 The engine keeps a fast, convex, disc-based margin inside the optimization, which
 shapes the trajectory away from obstacles
-(see [obstacle avoidance](../../prox_mpc_core/docs/obstacle-avoidance.md)).
+(see [obstacle avoidance](../../prox_mpc_core/doc/obstacle-avoidance.md)).
 A separate exact polygon-footprint check, evaluated on the pose one step ahead
 with `nav2_costmap_2d::FootprintCollisionChecker`, is the conservative last line
 of defense: if that pose's footprint reaches an inscribed-inflated cost, the
@@ -159,8 +159,10 @@ When `predict_obstacles` is set, the controller subscribes to a
 [prox_mpc_obstacle_tracker](../../prox_mpc_obstacle_tracker)).
 Each cycle it snapshots the latest message under a mutex, and if the message is
 fresh (within `obstacle_timeout`) it propagates every moving track over the
-horizon at constant velocity, binds each to a fixed obstacle slot across nodes,
-and fills the remaining slots from the costmap (hybrid).
+horizon along its tracker-sampled predicted trajectory — falling back to a
+constant-velocity ray when the message carries no prediction samples — binds each
+to a fixed obstacle slot across nodes, and fills the remaining slots from the
+costmap (hybrid).
 A stale or missing message, or a missing transform, degrades to the costmap-only
 fill for that cycle, so the feature is a clean enable/disable switch.
 The propagation and the wall-rejection guard are derived in

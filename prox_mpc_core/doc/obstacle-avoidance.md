@@ -243,15 +243,17 @@ Two fills exist on the controller side, both writing the same `setObs` contract:
   local costmap around the robot's *reference* position and emits the nearest
   occupied cells. The obstacle position varies across nodes only because the robot
   moves, so the term constrains the robot against where obstacles are *now*.
-- **predictive (tracked obstacles)** — opt-in. A dynamic track is propagated with
-  a constant-velocity model, $o_{k,j} = p_j + v_j\,\Delta t_k$, and bound to the
-  same slot $j$ for every node, so the half-planes track one physical object
-  across the horizon; $d_\text{safe}$ may grow with $\Delta t_k$ as the prediction
-  ages. Remaining slots are filled by the static scan (a hybrid fill).
+- **predictive (tracked obstacles)** — opt-in. A dynamic track is propagated
+  along its tracker-sampled predicted trajectory (the IMM CV+CTRV forward
+  prediction), or a constant-velocity ray $o_{k,j} = p_j + v_j\,\Delta t_k$ as the
+  fallback when the track carries no samples, and bound to the same slot $j$ for
+  every node, so the half-planes track one physical object across the horizon;
+  $d_\text{safe}$ may grow with $\Delta t_k$ as the prediction ages. Remaining
+  slots are filled by the static scan (a hybrid fill).
 
 Because both fills produce identical `(node, slot)` triples, the CBF coupling and
 the rest of this derivation are unchanged. The predictive fill is specified in the
-controller's [control-law.md](../../prox_mpc_controller/docs/control-law.md).
+controller's [control-law.md](../../prox_mpc_controller/doc/control-law.md).
 
 ## Footprint: disc here, exact polygon elsewhere
 

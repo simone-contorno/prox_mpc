@@ -1,5 +1,7 @@
 # ProxMPC
 
+[![ROS 2 Jazzy](https://img.shields.io/badge/ROS_2-Jazzy-blue.svg)](https://docs.ros.org/en/jazzy/)
+
 Nonlinear Model Predictive Control for ROS 2, packaged as a reusable core and a
 [Nav2](https://docs.nav2.org/) controller plugin.
 
@@ -10,13 +12,121 @@ using Eigen for linear algebra.
 The same engine handles linear models for free: with linear dynamics the SQP
 converges in a single QP solve.
 
+## Table of Contents
+
+- [Demonstration](#demonstration)
+- [Where it stands](#where-it-stands)
+  - [Strengths](#strengths)
+  - [Limitations](#limitations)
+- [Packages](#packages)
+- [Architecture and docs](#architecture-and-docs)
+  - [Per-cycle control loop](#per-cycle-control-loop)
+- [Requirements](#requirements)
+- [Build](#build)
+  - [Target tuning (packaging)](#target-tuning-packaging)
+- [Test and lint](#test-and-lint)
+- [Provenance](#provenance)
+- [License](#license)
+
+## Demonstration
+
+[![ProxMPC demo — no-obstacle, static, dynamic-line, and dynamic-circle scenarios](doc/media/prox_mpc_demo_grid.gif)](doc/media/prox_mpc_demo_grid.mp4)
+
+The predictive ProxMPC controller reaching the goal in the four benchmark scenarios
+(no obstacle, static box, dynamic line, dynamic circle) on the kinematic plant,
+shown in RViz. Each obstacle is drawn as a ground-truth body (the orange cylinder)
+next to its costmap footprint. The GIF loops inline; **click it** for the
+full-resolution mp4.
+
+Regenerate it — the per-scenario clips land in `prox_mpc_benchmark/results/`
+(gitignored), and the combiner writes the committed grid mp4 + inline GIF to
+`doc/media/` (see [prox_mpc_benchmark/doc/videos.md](prox_mpc_benchmark/doc/videos.md)
+for the Xvfb/display note on Wayland and every parameter):
+
+```bash
+ros2 run prox_mpc_benchmark record_scenarios.py
+ros2 run prox_mpc_benchmark combine_grid.sh --output doc/media/prox_mpc_demo_grid.mp4
+```
+
+## Where it stands
+
+ProxMPC is benchmarked head-to-head against the four stock Nav2 Jazzy local
+controllers — DWB, MPPI, Regulated Pure Pursuit, and Graceful — plus Vector
+Pursuit, the one external community controller included as a fair peer
+(Apache-2.0). Every controller drives the same plant from the same start to the
+same goal, at a matched 0.5 m/s speed cap and a shared 2.0 s prediction horizon,
+and perceives obstacles through the same costmaps. The full method and every
+number are in [doc/controller-comparison-results.md](doc/controller-comparison-results.md);
+the summary is below.
+
+> These are **simulation** results on a kinematic plant, measured on an x86-64
+> dev host (Intel Core i7-10750H, 6 cores / 12 threads, 31 GiB RAM,
+> Ubuntu 24.04.4) — **not** on physical robot hardware and not contact-dynamics.
+> A collision is a *would-be* overlap of the robot and obstacle discs, scored
+> identically for every controller. Gazebo validation is a single open-cell run;
+> full Gazebo and hardware validation remain open.
+
+| Controller | Tracking RMS (open) | Compute p50 / p95 (open) | Static clearance | Multi-obstacle collisions |
+| --- | --- | --- | --- | --- |
+| **ProxMPC** | 0.0004 m | **0.65 / 1.11 ms** | **+0.346 m** | 11/30 · 9/30 predictive |
+| DWB | 0.0001 m | 2.54 / 2.91 ms | +0.093 m | 8/30 |
+| MPPI | 0.0029 m | 2.74 / 3.16 ms | +0.206 m | 26/60 |
+| Regulated Pure Pursuit | 0.0000 m | 0.21 / 0.25 ms | +0.213 m | 10/30 |
+| Vector Pursuit | 0.0000 m | 0.21 / 0.25 ms | +0.165 m (stops short) | 11/30 |
+| Graceful | 0.0000 m | 0.15 / 0.21 ms | +0.208 m | 17/30 |
+
+Multi-obstacle collisions are the aggregate over six two-mover cells (30 runs per
+controller, 60 for MPPI's 10 repeats). The numbers are restated from
+[doc/controller-comparison-results.md](doc/controller-comparison-results.md)
+Sections 3, 4, and 6; that document is the source of truth.
+
+### Strengths
+
+- **Tracking on par with the best.** Sub-millimetre cross-track on an empty
+  straight traverse (0.0004 m RMS, 5/5 success).
+- **Lightest of the optimising controllers.** ~0.65 ms median per cycle,
+  **~3.9–4.2× lighter than DWB and MPPI** at equal tracking accuracy and
+  **~1.7–2× lighter on every obstacle cell**, at 5–8 % CPU against their
+  8.6–9.6 %, with 0 % deadline-miss and 0 % infeasible across every run mode. The
+  geometric pursuit controllers are lighter still; ProxMPC's premium over them is
+  ~1–4 % of one core for a full constrained optimisation each cycle.
+- **The largest static-obstacle margin.** It reaches the goal *and* holds
+  **+0.35 m clearance** around a static box, the widest of the field — ahead of
+  MPPI (+0.21 m) and DWB (+0.09 m) among the optimising controllers, and of RPP
+  and Graceful (~+0.21 m) among the geometric ones.
+- **Strong moving-obstacle avoidance.** It clears the single crossing and
+  orbiting obstacles reactively, including the orbit that DWB (5/5) and Graceful
+  (3/5) collide on. On simultaneous two-mover cells it leads its sampling peer
+  MPPI (26/60) and Graceful (17/30) and matches DWB (8/30) and RPP (10/30), with
+  its obstacle tracker (an IMM filter combining constant-velocity and
+  constant-turn-rate models) adding a further edge.
+- **Deterministic and model-agnostic.** Reproducible given the plant (unlike
+  MPPI, which is stochastic with no exposed seed), and the same plugin drives a
+  unicycle and a bicycle by configuration alone.
+
+### Where it is weaker
+
+- On the tightest simultaneous two-mover cell (`blind_multi_0`) ProxMPC is the
+  field's weakest, colliding on every run where DWB, Graceful, and Vector Pursuit
+  clip it on two of five: two close movers force a non-convex "which side of each
+  obstacle" choice that the linearised keep-out constraint cannot represent, and
+  prediction does not resolve it. Where it fails, it stalls rather than driving
+  through.
+
+**In short:** ProxMPC delivers constrained, model-agnostic, deterministic optimal
+control that tracks as well as the best of the field, runs a fraction of the
+sampling controllers' per-cycle cost, holds the largest static-obstacle margin,
+and avoids single and simultaneous moving obstacles competitively with the best of
+the field — with predictive avoidance, driven by its own dynamic-obstacle tracker,
+that the geometric and sampling controllers have no mechanism to match.
+
 ## Packages
 
 | Package | What it is |
 | --- | --- |
 | [prox_mpc_core](prox_mpc_core) | The math core (`prox_mpc::MPC` / `ProxQP` / `Model`) — the reusable SQP/QP library, no ROS node. |
 | [prox_mpc_controller](prox_mpc_controller) | A Nav2 `nav2_core::Controller` plugin built on the core, verified in simulation under a full Nav2 stack. |
-| [prox_mpc_obstacle_tracker](prox_mpc_obstacle_tracker) | An in-house 2D-lidar dynamic-obstacle detector and Kalman tracker; feeds the controller's predictive avoidance. |
+| [prox_mpc_obstacle_tracker](prox_mpc_obstacle_tracker) | An in-house 2D-lidar dynamic-obstacle detector and IMM (CV+CTRV) tracker; feeds the controller's predictive avoidance. |
 | [prox_mpc_msgs](prox_mpc_msgs) | The `Obstacle` / `ObstacleArray` message contract between the tracker and the controller (interface-only). |
 | [prox_mpc_demo](prox_mpc_demo) | Runnable demos: a standalone closed-loop simulation and a full Nav2 + Gazebo Harmonic bring-up. |
 | [prox_mpc_test_models](prox_mpc_test_models) | Fault-injection `prox_mpc::Model` plugins for the controller's tests (not for production). |
@@ -24,25 +134,68 @@ converges in a single QP solve.
 
 ## Architecture and docs
 
-[docs/architecture.md](docs/architecture.md) is the full-stack overview: how the
+[doc/architecture.md](doc/architecture.md) is the full-stack overview: how the
 packages depend on and communicate with each other, and the runtime data flow for
 the standalone, Nav2, and predictive paths.
 
-Each package keeps its own `docs/`:
+Each package keeps its own `doc/`:
 
-- core: [architecture](prox_mpc_core/docs/architecture.md),
-  [NMPC/SQP/QP math](prox_mpc_core/docs/nmpc.md), and
-  [obstacle avoidance](prox_mpc_core/docs/obstacle-avoidance.md);
-- controller: [architecture](prox_mpc_controller/docs/architecture.md) and
-  [control law](prox_mpc_controller/docs/control-law.md);
-- obstacle tracker: [architecture](prox_mpc_obstacle_tracker/docs/architecture.md);
-- demo: [standalone simulation](prox_mpc_demo/docs/simulation.md) and the
-  [Nav2 + Gazebo guide](prox_mpc_demo/docs/nav2-simulation.md);
+- core: [architecture](prox_mpc_core/doc/architecture.md),
+  [NMPC/SQP/QP math](prox_mpc_core/doc/nmpc.md), and
+  [obstacle avoidance](prox_mpc_core/doc/obstacle-avoidance.md);
+- controller: [architecture](prox_mpc_controller/doc/architecture.md) and
+  [control law](prox_mpc_controller/doc/control-law.md);
+- obstacle tracker: [architecture](prox_mpc_obstacle_tracker/doc/architecture.md);
+- demo: [standalone simulation](prox_mpc_demo/doc/simulation.md) and the
+  [Nav2 + Gazebo guide](prox_mpc_demo/doc/nav2-simulation.md);
 - benchmark: [harness README](prox_mpc_benchmark/README.md) and the
-  [controller-comparison results](docs/controller-comparison-results.md).
+  [controller-comparison results](doc/controller-comparison-results.md).
 
 A single top-to-bottom reading path across every package is in
-[docs/prox-mpc.md](docs/prox-mpc.md).
+[doc/prox-mpc.md](doc/prox-mpc.md).
+
+### Per-cycle control loop
+
+[doc/architecture.md](doc/architecture.md) stays the canonical, full-stack
+diagram (package dependencies and runtime data flow); the diagram below is a
+distinct, narrower illustration of what happens inside a single control cycle,
+from the current state to the command that is actually applied:
+
+```mermaid
+flowchart TD
+  A[Current state] --> B[Future reference]
+  B --> C[Nonlinear MPC problem]
+  C --> D[Linearized dynamics]
+  D --> E[Convex QP]
+
+  I[Obstacles] --> J[Obstacle keep-out constraints]
+  J --> E
+
+  N[Object tracking] --> O["IMM tracker<br/>(CV + CTRV)"]
+  O --> J
+
+  E --> T[ProxQP solve]
+  T --> U[Control sequence]
+  U --> V[Apply first command]
+```
+
+Essential formulas of the full loop:
+
+$$
+x_{k+1} \approx A_k x_k + B_k u_k + c_k
+$$
+
+$$
+\min_z \; \frac{1}{2} z^\top H z + c^\top z
+$$
+
+$$
+x_{k|k-1} = F x_{k-1|k-1} + B u_k
+$$
+
+$$
+\hat{x}_k = \sum_i \mu_k^{(i)} \hat{x}_k^{(i)}
+$$
 
 ## Requirements
 
@@ -61,8 +214,11 @@ Build in an overlay workspace, never inside the package source tree.
 colcon build --symlink-install --packages-select prox_mpc_msgs prox_mpc_core prox_mpc_demo
 source install/setup.bash
 
-# run the bundled simulation
+# default: bicycle model, no RViz
 ros2 launch prox_mpc_demo simulation.launch.py
+
+# unicycle model with RViz
+ros2 launch prox_mpc_demo simulation.launch.py model:=unicycle rviz:=true
 ```
 
 Building `prox_mpc_controller` (and, for predictive avoidance, the obstacle
@@ -72,21 +228,31 @@ tracker) additionally requires Nav2:
 colcon build --symlink-install --packages-select \
   prox_mpc_msgs prox_mpc_core prox_mpc_controller prox_mpc_obstacle_tracker prox_mpc_demo
 source install/setup.bash
+
+# baseline, headless (no Gazebo GUI, no RViz)
+ros2 launch prox_mpc_demo nav2_simulation.launch.py
+
+# Gazebo GUI + RViz + predictive path
+ros2 launch prox_mpc_demo nav2_simulation.launch.py predictive:=True headless:=False use_rviz:=True
+
+# send a goal into the running demo
+ros2 run prox_mpc_benchmark goal_sender.py --points 2.0,-0.5,0.0 --timeout 120
 ```
 
-See each package README and [docs/architecture.md](docs/architecture.md) for the
+See each package README and [doc/architecture.md](doc/architecture.md) for the
 dependency graph.
 
-### Target tuning (Jetson / packaging)
+### Target tuning (packaging)
 
 The portable high-optimization default is `CMAKE_BUILD_TYPE=Release` (GCC `-O3
 -DNDEBUG`), set in each package behind an `if(NOT CMAKE_BUILD_TYPE)` guard, plus
 `EIGEN_NO_DEBUG`. Keep architecture and link-time tuning **out of the source** and
-apply it at build/packaging time so the tree stays portable across x86 CI and the
-Orin/Thor boards:
+apply it at build/packaging time so the tree stays portable across x86 CI and
+your deployment hardware:
 
-- Per-board CPU tuning via a CMake toolchain file or `--cmake-args`, e.g.
-  `-DCMAKE_CXX_FLAGS_RELEASE="-O3 -DNDEBUG -mcpu=cortex-a78ae"` (Orin) or the
+- Per-CPU tuning via a CMake toolchain file or `--cmake-args`, e.g. an explicit
+  `-mcpu=<cpu-name>` flag,
+  `-DCMAKE_CXX_FLAGS_RELEASE="-O3 -DNDEBUG -mcpu=<cpu-name>"`, or the
   bloom/debian `rules` flags. Never hardcode `-march=native` / `-mcpu=native`
   (it bakes the build host CPU into the binary and breaks cross/CI builds).
 - LTO via `-DCMAKE_INTERPROCEDURAL_OPTIMIZATION=ON`, guarded by
@@ -94,8 +260,8 @@ Orin/Thor boards:
 - **Never** `-Ofast` / `-ffast-math` for the solver: it breaks the IEEE-754
   semantics the SQP/QP convergence and the NaN / `isfinite` guards rely on.
 
-Verify the loop meets `1/dt` on the actual Jetson with the demo's solve-time
-logger and `tegrastats`.
+Verify the loop meets `1/dt` on your deployment hardware with the demo's
+solve-time logger.
 
 ## Test and lint
 
@@ -137,5 +303,17 @@ Apache-2.0) and its explicit patent grant. Each source file carries a short
   year   = {2026},
   note   = {Core from the MyNMPC master thesis},
   url    = {https://github.com/simone-contorno/mynmpc}
+}
+```
+
+This package also uses the ProxQP solver from ProxSuite; if you use it, please
+also cite:
+
+```bibtex
+@inproceedings{bambade2022proxqp,
+  title     = {ProxQP: Yet another Quadratic Programming Solver for Robotics and beyond},
+  author    = {Bambade, Antoine and El-Kazdadi, Sarah and Taylor, Adrien and Carpentier, Justin},
+  booktitle = {Robotics: Science and Systems (RSS)},
+  year      = {2022}
 }
 ```

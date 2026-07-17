@@ -6,11 +6,9 @@ The `prox_mpc_controller` package is already scaffolded as a Nav2 controller plu
 The class `prox_mpc_controller::ProxMpcController` already derives from `nav2_core::Controller`, overrides all seven pure-virtual methods, exports itself through `PLUGINLIB_EXPORT_CLASS`, ships a valid plugin-description XML, and constructs a `prox_mpc::MPC` in `configure()`.
 What is missing is the control law: `computeVelocityCommands()` is a stub that logs a throttled warning and returns a zero `TwistStamped`, and `configure()` does not yet read parameters, load a model, or size the solver.
 
-The intended design is already written down in [docs/architecture.md](docs/architecture.md) and [docs/control-law.md](docs/control-law.md).
+The intended design is already written down in [doc/architecture.md](doc/architecture.md) and [doc/control-law.md](doc/control-law.md).
 This plan turns that design into a concrete, verifiable implementation task list, grounded in the actual code on disk and the actual Jazzy `nav2_core` headers, and flags every detail that must be confirmed during implementation rather than assumed now.
-
-This plan was produced by reading files only.
-All interface signatures below were read from the installed Jazzy headers, not from memory.
+The interface signatures below are taken from the installed Jazzy `nav2_core` headers.
 
 ## Verified current state
 
@@ -30,7 +28,7 @@ The work is therefore "complete the skeleton," and most of the build-system and 
 
 ## 1. Wrapping the NMPC core behind `nav2_core::Controller`
 
-The split follows the responsibility split in [docs/architecture.md](docs/architecture.md): the engine stays frozen, the plugin owns the ROS integration.
+The split follows the responsibility split in [doc/architecture.md](doc/architecture.md): the engine stays frozen, the plugin owns the ROS integration.
 
 Reused as-is, no edits to `prox_mpc_core`:
 
@@ -61,7 +59,7 @@ No file in `prox_mpc_core` is modified by this conversion.
 | `deactivate()` | logs only | deactivate debug publishers; stop processing |
 | `cleanup()` | resets `mpc_`, `costmap_ros_`, `tf_` | also reset the model handle, the class loader, and publishers |
 | `setPlan(path)` | stores `global_plan_` | keep storing; reset the plan-projection index / pruning state for the new plan |
-| `computeVelocityCommands(pose, velocity, goal_checker)` | returns zero `TwistStamped` | full control law (Section 6 and the cycle in [docs/architecture.md](docs/architecture.md): build reference, reduce costmap, set pose/goals/obstacles, `solve()`, check `qp_info.status`, map first control or brake, footprint-check) |
+| `computeVelocityCommands(pose, velocity, goal_checker)` | returns zero `TwistStamped` | full control law (Section 6 and the cycle in [doc/architecture.md](doc/architecture.md): build reference, reduce costmap, set pose/goals/obstacles, `solve()`, check `qp_info.status`, map first control or brake, footprint-check) |
 | `setSpeedLimit(limit, percentage)` | caches the value | convert percentage to absolute (fraction of the model maximum) and apply with `model->updateIneq("u", 0, -v_lim, v_lim)` so the next solve respects it without rebuilding the problem |
 
 Optional methods — recommended to override both for production-grade behaviour:
@@ -141,9 +139,9 @@ controller_server:
 ```
 
 Cruise-speed parameter (resolved).
-The "configured cruise speed" that [docs/control-law.md](docs/control-law.md) needs for the reference is now declared as `desired_linear_vel` (double, m/s) in [config/prox_mpc_controller.yaml](config/prox_mpc_controller.yaml), defaulting to 1.0 m/s.
+The "configured cruise speed" that [doc/control-law.md](doc/control-law.md) needs for the reference is declared as `desired_linear_vel` (double, m/s) in [config/prox_mpc_controller.yaml](config/prox_mpc_controller.yaml), defaulting to 1.0 m/s.
 It drives the arc-length sampling `s_k = s_0 + desired_linear_vel * k * dt` and the speed channel of `goal_u`, is reduced near high-curvature segments, and is clamped by any active speed limit.
-The default sits well below the bundled models' speed bound (`v_max = 3.0 m/s`, [../prox_mpc_core/include/prox_mpc/models/bike.hpp:39](../prox_mpc_core/include/prox_mpc/models/bike.hpp#L39)); `configure()` should validate `0 < desired_linear_vel <= v_max` and clamp with a warning otherwise.
+The default sits well below the bundled models' speed bound (`v_max = 3.0 m/s`, [../prox_mpc_core/include/prox_mpc/models/bicycle.hpp:39](../prox_mpc_core/include/prox_mpc/models/bicycle.hpp#L39)); `configure()` should validate `0 < desired_linear_vel <= v_max` and clamp with a warning otherwise.
 
 `log_level` handling (verified against the in-tree Nav2 controllers).
 The in-tree Jazzy controllers were checked directly — Regulated Pure Pursuit, MPPI, Graceful, DWB, and `nav2_controller` — and none of them exposes a `log_level` parameter or calls a logging-level setter, so a per-plugin `log_level` is not a Nav2 convention.
@@ -153,7 +151,7 @@ Verbosity is then controlled by the standard ROS 2 mechanism — `--ros-args --l
 There are two consequences for this plugin.
 
 - Keep the scoped logger and drop the override. The header already declares `logger_{rclcpp::get_logger("ProxMpcController")}` ([include/prox_mpc_controller/prox_mpc_controller.hpp:72](include/prox_mpc_controller/prox_mpc_controller.hpp#L72)), which matches the Nav2 standard, but `configure()` currently overwrites it with `logger_ = node->get_logger();` ([src/prox_mpc_controller.cpp:27](src/prox_mpc_controller.cpp#L27)). That reassignment makes the plugin log under the `controller_server` logger name, so a `--log-level controller_server:=debug` would also raise the verbosity of the server and every sibling plugin. Remove the reassignment so the plugin keeps its own `ProxMpcController` logger.
-- Honour the project `log_level` key as the source of truth. This project's `CLAUDE.md` mandates a `log_level` YAML key, whose launch-file mechanism (`--log-level <node>:=<level>`) does not apply to a plugin that has no node and no launch file. The faithful adaptation is to read `log_level` in `configure()` and apply it to the plugin's own logger programmatically with the idiomatic rclcpp call `logger_.set_level(rclcpp::Logger::Level::<...>)` (`rclcpp/logger.hpp:169`, `enum class Level` at `:96`; the C-level `rcutils_logging_set_logger_level(name, level)` at `rcutils/logging.h:392` is the same mechanism one layer down).
+- Honour the project `log_level` key as the source of truth. The project's coding conventions mandate a `log_level` YAML key, whose launch-file mechanism (`--log-level <node>:=<level>`) does not apply to a plugin that has no node and no launch file. The faithful adaptation is to read `log_level` in `configure()` and apply it to the plugin's own logger programmatically with the idiomatic rclcpp call `logger_.set_level(rclcpp::Logger::Level::<...>)` (`rclcpp/logger.hpp:169`, `enum class Level` at `:96`; the C-level `rcutils_logging_set_logger_level(name, level)` at `rcutils/logging.h:392` is the same mechanism one layer down).
 
 Net: this is a superset of the Nav2 norm, not a replacement for it.
 The standard `--log-level` / `set_logger_levels` path keeps working on the `ProxMpcController` logger, and the project's YAML key additionally seeds that logger's level at configure time, scoped to this plugin only, with no global or RMW change.
@@ -183,13 +181,13 @@ The accessors below were read from the installed headers `/opt/ros/jazzy/include
 - An occupied cell is `getCost(mx, my) >= costmap_cost_threshold` (200). The reference cost values are in `cost_values.hpp`: `LETHAL_OBSTACLE = 254`, `INSCRIBED_INFLATED_OBSTACLE = 253`, `MAX_NON_OBSTACLE = 252`, `NO_INFORMATION = 255`, `FREE_SPACE = 0`. The 200 threshold captures lethal, inscribed, and strongly inflated cells; `NO_INFORMATION` (255) also clears the threshold, so the reduction should exclude unknown cells unless unknown space is intended to block (see Section 11).
 
 For each predicted node, select the nearest occupied cells or clusters (merged within `obstacle_cluster_radius`) and emit at most `K` `(o_x, o_y, d_safe)` triples with `d_safe = robot_radius + inflation + safety_margin`.
-The local costmap ships no distance-transform / ESDF layer, so the implementation uses a bounded windowed scan around each predicted position (window sized from `getResolution()` and the obstacle search radius); this keeps the per-cycle cost at roughly `O(window_cells * Np)`, which must stay bounded for the Jetson budget.
+The local costmap ships no distance-transform / ESDF layer, so the implementation uses a bounded windowed scan around each predicted position (window sized from `getResolution()` and the obstacle search radius); this keeps the per-cycle cost at roughly `O(window_cells * Np)`, which must stay bounded within the real-time control budget.
 Empty slots are filled with `MPC::kObsFarSentinel` so a fixed `K` degrades cleanly.
 Pass the `(Np*K) x 3` matrix with `mpc_->setObs(...)` after `mpc_->setMaxObs(K)` was set in `configure()`.
 
 Global plan.
 `setPlan()` already stores `global_plan_`.
-Per cycle, transform the relevant plan poses into the costmap global frame (`costmap_ros_->getGlobalFrameID()`, `costmap_2d_ros.hpp:243`) with `tf_`, prune already-passed poses, project the current pose onto the plan to get `s_0`, then sample at `s_k = s_0 + desired_linear_vel * k * dt` to build `goal_x` (`(Np+1) x n`) and `goal_u` (`Nc x m`), with heading from the path tangent and, for the bicycle, reference steering `delta_k = atan(L * kappa_k)`, as specified in [docs/control-law.md](docs/control-law.md).
+Per cycle, transform the relevant plan poses into the costmap global frame (`costmap_ros_->getGlobalFrameID()`, `costmap_2d_ros.hpp:243`) with `tf_`, prune already-passed poses, project the current pose onto the plan to get `s_0`, then sample at `s_k = s_0 + desired_linear_vel * k * dt` to build `goal_x` (`(Np+1) x n`) and `goal_u` (`Nc x m`), with heading from the path tangent and, for the bicycle, reference steering `delta_k = atan(L * kappa_k)`, as specified in [doc/control-law.md](doc/control-law.md).
 The current pose can come straight from the `pose` argument of `computeVelocityCommands`, or from `costmap_ros_->getRobotPose(global_pose)` (`costmap_2d_ros.hpp:205`); single-pose frame conversions can reuse `costmap_ros_->transformPoseToGlobalFrame(in, out)` (`:213`).
 The bicycle steering angle `delta` is not in the Nav2 pose, so the controller tracks it (integrating `delta += dt * delta_dot` from the previous command, or from a steering sensor) and feeds the full state to `setPose`.
 
@@ -210,7 +208,7 @@ Success is `status == proxsuite::proxqp::QPSolverOutput::PROXQP_SOLVED`; any oth
 
 - Empty or unset plan (`global_plan_.poses.empty()`, or zero usable poses after transform and prune): treat it as a structural fault and throw `nav2_core::InvalidPath` immediately. This is the production-grade behaviour and matches the in-tree Nav2 controllers (Regulated Pure Pursuit, for example, throws `InvalidPath("Received plan with zero length")` from its plan transform): `controller_server` catches the `ControllerException`, the `FollowPath` BT action returns failure, and the recovery / contingency subtree replans or aborts cleanly. Commanding zero velocity indefinitely is rejected because it masks the fault — the robot sits still while the behaviour tree believes control is progressing and no recovery ever fires. The deceleration ramp is reserved for transient faults (a single non-converged solve); a missing or empty plan is not transient, so it escalates on the first cycle rather than crawling.
 - Short plan (fewer poses than the horizon): clamp sampling and hold the final pose as the reference for the remaining nodes (goal-hold), tapering `v_ref` to zero near the end.
-- Solver failure (`qp_info.status != proxsuite::proxqp::QPSolverOutput::PROXQP_SOLVED`): do not command a hard zero. Ramp the last command toward zero at the robot deceleration limit `a_dec = |lower du bound on speed|`, read from the model with `model->getIneq("du", 0)` (the bundled models default this bound to 0.5 m/s^2, [../prox_mpc_core/include/prox_mpc/models/bike.hpp:41](../prox_mpc_core/include/prox_mpc/models/bike.hpp#L41)); `v_cmd = max(0, v_prev - a_dec * dt)`, with the yaw/steering channel ramped likewise. Increment a consecutive-failure counter; once it exceeds `max_solver_failures`, throw `nav2_core::NoValidControl` so the behaviour tree replans. Reset the counter on any converged solve.
+- Solver failure (`qp_info.status != proxsuite::proxqp::QPSolverOutput::PROXQP_SOLVED`): do not command a hard zero. Ramp the last command toward zero at the robot deceleration limit `a_dec = |lower du bound on speed|`, read from the model with `model->getIneq("du", 0)` (the bundled models default this bound to 0.5 m/s^2, [../prox_mpc_core/include/prox_mpc/models/bicycle.hpp:41](../prox_mpc_core/include/prox_mpc/models/bicycle.hpp#L41)); `v_cmd = max(0, v_prev - a_dec * dt)`, with the yaw/steering channel ramped likewise. Increment a consecutive-failure counter; once it exceeds `max_solver_failures`, throw `nav2_core::NoValidControl` so the behaviour tree replans. Reset the counter on any converged solve.
 - Infeasible or invalid state (non-finite pose, NaN in the solved control, current cell in collision): guard before mapping `toTwist`; on a non-finite solution treat the cycle as a solver failure (decelerate). For TF failures while transforming the plan or pose, throw `nav2_core::ControllerTFError`.
 - Footprint veto: after a converged solve, run an exact polygon-footprint collision check with `nav2_costmap_2d::FootprintCollisionChecker<nav2_costmap_2d::Costmap2D *>` (template class in `/opt/ros/jazzy/include/nav2_costmap_2d/nav2_costmap_2d/footprint_collision_checker.hpp`). Construct or `setCostmap(...)` it over `costmap_ros_->getCostmap()`, take the footprint from `costmap_ros_->getRobotFootprint()` (the padded footprint, a `std::vector<geometry_msgs::msg::Point>` aliased as `nav2_costmap_2d::Footprint`, `costmap_2d_ros.hpp:279`), and call `footprintCostAtPose(x, y, theta, footprint)` at the pose the first optimal control would reach one step ahead. Treat a returned cost of `LETHAL_OBSTACLE` (254) or `NO_INFORMATION` (255) — or `>= INSCRIBED_INFLATED_OBSTACLE` (253) for a conservative check — as a collision and veto the command, decelerating instead. The cost constants are in `cost_values.hpp`.
 - Speed limit edge values: `setSpeedLimit` with `percentage = true` converts to a fraction of the model maximum; a limit of zero clamps the applied bound to zero.
@@ -223,7 +221,7 @@ Success is `status == proxsuite::proxqp::QPSolverOutput::PROXQP_SOLVED`; any oth
 - A bespoke velocity smoother; the deceleration fallback is self-contained and does not assume one downstream.
 - Multi-robot, 3D/SE(3), or non-planar costmaps.
 - A dedicated launch file or bringup for a full Nav2 stack beyond the controller_server snippet needed for verification.
-- Performance tuning and Jetson profiling beyond keeping the costmap scan bounded; a dedicated optimization pass is separate follow-up.
+- Performance tuning and deployment-hardware profiling beyond keeping the costmap scan bounded; a dedicated optimization pass is separate follow-up.
 - Unit/integration test authoring is acknowledged as required follow-up but is not specified in detail by this conversion plan.
 
 ## 9. Verification
@@ -240,7 +238,7 @@ Each verification step is gated on explicit confirmation of the build/run comman
 
 ## 10. Resolved decisions
 
-The questions raised by the first draft are now resolved against the code and the installed headers:
+These decisions are resolved against the code and the installed headers:
 
 - Cruise speed: added as `desired_linear_vel` (double, default 1.0 m/s) in [config/prox_mpc_controller.yaml](config/prox_mpc_controller.yaml); validated against the model `v_max` (Section 4).
 - `log_level`: verified that no in-tree Nav2 controller uses a `log_level` param; keep the fixed `ProxMpcController` named logger (drop the `node->get_logger()` override) and seed its level from the param via `logger_.set_level(...)`, while the standard `--log-level` / `set_logger_levels` path stays the primary mechanism (Section 4).

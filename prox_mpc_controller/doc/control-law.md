@@ -6,8 +6,8 @@ propagating tracked dynamic obstacles, tracking the model state, and the failure
 fallback.
 The engine itself (the SQP loop, the QP, and the obstacle half-planes) is
 documented in the core:
-[NMPC/SQP/QP](../../prox_mpc_core/docs/nmpc.md) and
-[obstacle avoidance](../../prox_mpc_core/docs/obstacle-avoidance.md).
+[NMPC/SQP/QP](../../prox_mpc_core/doc/nmpc.md) and
+[obstacle avoidance](../../prox_mpc_core/doc/obstacle-avoidance.md).
 For how these pieces fit into the Nav2 lifecycle and the full parameter reference,
 see [architecture.md](architecture.md).
 
@@ -65,7 +65,7 @@ zero elsewhere.
 
 The engine consumes obstacles as up to $K$ triples $(o_x, o_y, d_\text{safe})$ per
 predicted node (see the core
-[obstacle document](../../prox_mpc_core/docs/obstacle-avoidance.md)).
+[obstacle document](../../prox_mpc_core/doc/obstacle-avoidance.md)).
 The controller produces them from the local costmap.
 
 Every slot is first defaulted to the far sentinel `MPC::kObsFarSentinel`, which
@@ -93,7 +93,7 @@ and re-linearizes the half-plane each iteration.
 
 When `predict_obstacles` is set and a tracked-obstacle message is fresh (its stamp
 within `obstacle_timeout` of the command stamp), the controller augments the
-costmap fill with constant-velocity predictions.
+costmap fill with predicted-trajectory obstacles.
 Obstacles are transformed into the costmap global frame; a missing transform
 degrades to costmap-only for that cycle.
 
@@ -107,16 +107,28 @@ Candidates are ranked by their closest approach to the reference trajectory over
 the horizon, and the nearest $\min(K, \text{max\_dynamic\_obstacles})$ are kept.
 
 Each selected obstacle $j$ is propagated to every node and bound to slot $j$ for
-the whole horizon (so the half-planes track one object across nodes):
+the whole horizon (so the half-planes track one object across nodes).
+When the message carries prediction samples (`prediction_dt > 0` and a non-empty,
+finite `predicted_positions` polyline — the tracker's IMM CV+CTRV forward
+prediction), the controller follows that sampled trajectory at each horizon time
+$k\,\Delta t + \text{age}$: piecewise-linear interpolation inside the sampled span,
+and straight-line extrapolation along the last segment beyond it.
+When no samples are provided (the legacy single-CV tracker path, or an empty or
+ill-formed sample set), it falls back to the straight constant-velocity ray
 
 $$
-p_k = p_0 + v\,(k\,\Delta t + \text{age}), \qquad
+p_k = p_0 + v\,(k\,\Delta t + \text{age}).
+$$
+
+Either way the clearance for the slot grows with prediction time,
+
+$$
 d_\text{safe} = r_\text{robot} + r_\text{obs} + m_\text{margin}
   + \text{prediction\_uncertainty\_growth}\cdot(k\,\Delta t + \text{age}),
 $$
 
-where $\text{age}$ is the message age, so the clearance grows as the
-constant-velocity assumption ages.
+where $\text{age}$ is the message age, so the keep-out widens to cover the growing
+prediction error as the prediction ages.
 The remaining slots are filled from the costmap (hybrid), excluding cells inside
 each dynamic obstacle's **current** footprint (its radius plus the cluster radius)
 so the moving object is not counted twice.
@@ -155,7 +167,7 @@ A limit received before the model is loaded is cached and re-applied in
 ## Failure fallback (braking)
 
 `MPC::solve` reports convergence through `qp_info.status` and takes no safety
-action on failure (see the [NMPC document](../../prox_mpc_core/docs/nmpc.md)).
+action on failure (see the [NMPC document](../../prox_mpc_core/doc/nmpc.md)).
 The controller owns the reaction so the policy stays decoupled from the engine.
 
 On a non-converged cycle the controller does **not** command a hard zero, which
@@ -190,4 +202,4 @@ the horizon.
 lets the safety margin decay gradually, which makes a dense obstacle field viable
 where the pointwise term would stall the robot (see the verified predictive
 configuration in
-[../../prox_mpc_demo/docs/nav2-simulation.md](../../prox_mpc_demo/docs/nav2-simulation.md)).
+[../../prox_mpc_demo/doc/nav2-simulation.md](../../prox_mpc_demo/doc/nav2-simulation.md)).
