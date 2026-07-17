@@ -4,7 +4,7 @@
 
 // Self-contained closed-loop NMPC simulation node.
 //
-// It drives one of the bundled kinematic models (bike / r2d2) toward a goal (or a
+// It drives one of the bundled kinematic models (bicycle / unicycle) toward a goal (or a
 // waypoint set) with no external simulator: each cycle it solves the MPC,
 // publishes the first control on /robot/cmd_vel and the predicted trajectory on
 // /prox_mpc/path, then advances the simulated pose to the model's own predicted
@@ -35,8 +35,8 @@
 #include <tf2_ros/transform_broadcaster.h>
 
 #include <prox_mpc/mpc.hpp>
-#include <prox_mpc/models/bike.hpp>
-#include <prox_mpc/models/r2d2.hpp>
+#include <prox_mpc/models/bicycle.hpp>
+#include <prox_mpc/models/unicycle.hpp>
 
 #include <algorithm>
 #include <chrono>
@@ -56,7 +56,7 @@ public:
   : Node("prox_mpc_simulation", options)
   {
     /* Parameters (defaults let the node run without a YAML). */
-    model_name_ = declare_parameter<std::string>("model", "bike");
+    model_name_ = declare_parameter<std::string>("model", "bicycle");
     // Validate sizing before the size_t cast: a negative np/nc would wrap to an
     // astronomical allocation, and dt <= 0 divides by zero in the solver.
     const int np_param = declare_parameter<int>("np", 20);
@@ -116,7 +116,7 @@ public:
     k_obs_ = avoidance_on ? std::max(max_obstacles_, obs_count) : 0;
 
     /* Model. The handle is retained so the node can map controls to a twist. */
-    if (model_name_ == "r2d2") {model_ = std::make_shared<Unicycle>();} else {
+    if (model_name_ == "unicycle") {model_ = std::make_shared<Unicycle>();} else {
       model_ = std::make_shared<Bicycle>();
     }
     n_ = model_->getN();

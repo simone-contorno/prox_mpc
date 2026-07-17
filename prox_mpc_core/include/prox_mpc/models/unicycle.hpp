@@ -1,8 +1,8 @@
 // Copyright 2026 Simone Contorno
 // SPDX-License-Identifier: Apache-2.0
 
-#ifndef PROX_MPC__MODELS__R2D2_HPP_
-#define PROX_MPC__MODELS__R2D2_HPP_
+#ifndef PROX_MPC__MODELS__UNICYCLE_HPP_
+#define PROX_MPC__MODELS__UNICYCLE_HPP_
 
 #include <map>
 #include <string>
@@ -21,7 +21,7 @@ class Unicycle : public Model
 public:
   Unicycle()
   {
-    setName("r2d2");
+    setName("unicycle");
 
     setN(3);  // state: [x, y, theta]
     setM(2);  // control: [v, omega]
@@ -81,4 +81,4 @@ public:
 
 }  // namespace prox_mpc
 
-#endif  // PROX_MPC__MODELS__R2D2_HPP_
+#endif  // PROX_MPC__MODELS__UNICYCLE_HPP_

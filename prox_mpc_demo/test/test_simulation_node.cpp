@@ -35,7 +35,7 @@ std::shared_ptr<TestableSimulationNode> makeNode(
   const std::vector<rclcpp::Parameter> & overrides = {})
 {
   std::vector<rclcpp::Parameter> params{
-    rclcpp::Parameter("model", std::string("bike")),
+    rclcpp::Parameter("model", std::string("bicycle")),
     rclcpp::Parameter("np", 10),
     rclcpp::Parameter("nc", 10),
     rclcpp::Parameter("dt", 0.1),
@@ -69,10 +69,10 @@ TEST(SimulationNode, StepAdvancesPoseTowardGoal)
   EXPECT_NEAR(node->pose()(1), 0.0, 0.5);
 }
 
-// The unicycle (r2d2, 3-state) model also steps forward without going non-finite.
+// The unicycle (unicycle, 3-state) model also steps forward without going non-finite.
 TEST(SimulationNode, UnicycleModelSteps)
 {
-  auto node = makeNode({rclcpp::Parameter("model", std::string("r2d2"))});
+  auto node = makeNode({rclcpp::Parameter("model", std::string("unicycle"))});
   for (int i = 0; i < 30; ++i) {
     node->step();
   }

@@ -1,8 +1,8 @@
 // Copyright 2026 Simone Contorno
 // SPDX-License-Identifier: Apache-2.0
 
-#ifndef PROX_MPC__MODELS__BIKE_HPP_
-#define PROX_MPC__MODELS__BIKE_HPP_
+#ifndef PROX_MPC__MODELS__BICYCLE_HPP_
+#define PROX_MPC__MODELS__BICYCLE_HPP_
 
 #include <map>
 #include <string>
@@ -21,7 +21,7 @@ class Bicycle : public Model
 public:
   Bicycle()
   {
-    setName("bike");
+    setName("bicycle");
 
     setN(4);  // state: [x, y, theta, delta]
     setM(2);  // control: [v, delta_dot]
@@ -108,4 +108,4 @@ public:
 
 }  // namespace prox_mpc
 
-#endif  // PROX_MPC__MODELS__BIKE_HPP_
+#endif  // PROX_MPC__MODELS__BICYCLE_HPP_

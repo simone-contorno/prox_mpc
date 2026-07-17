@@ -21,8 +21,8 @@
 #include <gtest/gtest.h>
 
 #include <prox_mpc/mpc.hpp>
-#include <prox_mpc/models/bike.hpp>
-#include <prox_mpc/models/r2d2.hpp>
+#include <prox_mpc/models/bicycle.hpp>
+#include <prox_mpc/models/unicycle.hpp>
 #include <prox_mpc/proxqp.hpp>
 
 using prox_mpc::Bicycle;

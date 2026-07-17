@@ -13,8 +13,8 @@
 #include <gtest/gtest.h>
 
 #include <prox_mpc/model.hpp>
-#include <prox_mpc/models/bike.hpp>
-#include <prox_mpc/models/r2d2.hpp>
+#include <prox_mpc/models/bicycle.hpp>
+#include <prox_mpc/models/unicycle.hpp>
 
 using prox_mpc::Bicycle;
 using prox_mpc::Unicycle;
@@ -42,7 +42,7 @@ void getBound(Model & model, const std::string & var, size_t idx, double & low, 
 TEST(ModelInterface, BicycleIdentityAndBounds)
 {
   Bicycle model;
-  EXPECT_EQ(model.getName(), "bike");
+  EXPECT_EQ(model.getName(), "bicycle");
   EXPECT_EQ(model.getN(), 4u);
   EXPECT_EQ(model.getM(), 2u);
   EXPECT_NEAR(model.getParams()(0), 1.6, kTol);  // wheelbase L
@@ -69,7 +69,7 @@ TEST(ModelInterface, BicycleIdentityAndBounds)
 TEST(ModelInterface, UnicycleIdentityAndBounds)
 {
   Unicycle model;
-  EXPECT_EQ(model.getName(), "r2d2");
+  EXPECT_EQ(model.getName(), "unicycle");
   EXPECT_EQ(model.getN(), 3u);
   EXPECT_EQ(model.getM(), 2u);
 
@@ -234,15 +234,15 @@ TEST(ModelInterface, ToTwistSemantics)
   EXPECT_NEAR(tw_u.linear.x, 0.7, kTol);
   EXPECT_NEAR(tw_u.angular.z, 0.3, kTol);
 
-  Bicycle bike;
+  Bicycle bicycle;
   const double L = 1.6;
   const double delta = 0.2;
   VectorXd xb(4);
   xb << 0.0, 0.0, 0.0, delta;
-  bike.setX(xb);
+  bicycle.setX(xb);
   VectorXd ub(2);
   ub << 0.7, 0.1;                 // [v, delta_dot]; omega = v sin(delta)/L
-  auto tw_b = bike.toTwist(ub);
+  auto tw_b = bicycle.toTwist(ub);
   EXPECT_NEAR(tw_b.linear.x, 0.7, kTol);
   EXPECT_NEAR(tw_b.angular.z, 0.7 * std::sin(delta) / L, kTol);
 }

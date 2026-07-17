@@ -15,7 +15,7 @@
 #include <proxsuite/proxqp/status.hpp>
 
 #include <prox_mpc/mpc.hpp>
-#include <prox_mpc/models/bike.hpp>
+#include <prox_mpc/models/bicycle.hpp>
 
 using prox_mpc::Bicycle;
 using prox_mpc::MPC;
