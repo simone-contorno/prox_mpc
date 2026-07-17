@@ -1,6 +1,6 @@
-# Benchmark metric set, pass thresholds, and repeat count (SIM_SPEC sections 6, 8).
+# Benchmark metric set, pass thresholds, and repeat count.
 # The orchestrator records every metric; thresholds classify a run as pass/fail and
-# the aggregator reports mean +/- std over `repeats` (the precision signal, D9).
+# the aggregator reports mean +/- std over `repeats` (the precision signal).
 
 repeats: 5
 

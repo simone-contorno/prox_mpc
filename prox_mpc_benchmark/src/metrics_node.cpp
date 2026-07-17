@@ -7,7 +7,7 @@
 // It measures the accuracy class (cross-track error vs a reference polyline and
 // goal error) from generic signals — the robot pose (TF map -> base_link, or a
 // bridged ground-truth pose in Gazebo) plus the scenario reference — so every
-// controller under test is measured identically (SIM_SPEC D4). It also taps the
+// controller under test is measured identically. It also taps the
 // SolverDiagnostics stream for the real-time / feasibility class. Live cross-track
 // and goal-distance are published as std_msgs/Float64 for inspection/recording,
 // and a per-run summary JSON is written at shutdown (summary_json param) so the
@@ -101,8 +101,8 @@ public:
     // simulator latches on, so the scored obstacle trajectory is phase-identical
     // to the one ray-cast into /scan. The TF-displacement latch in sample() is
     // kept only as a fallback for setups without this odom topic; the two clocks
-    // were measured desynced by seconds in both directions under load
-    // (collision-fix-b2-log.md, 2026-07-04), which mis-scores collisions.
+    // can drift by seconds in both directions under load, which mis-scores
+    // collisions.
     const std::string odom_topic = declare_parameter<std::string>("odom_topic", "odom");
     if (!obstacles_.empty()) {
       odom_sub_ = create_subscription<nav_msgs::msg::Odometry>(

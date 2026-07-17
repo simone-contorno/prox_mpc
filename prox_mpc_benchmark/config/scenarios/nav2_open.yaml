@@ -1,6 +1,6 @@
 scenario:
   name: nav2_open
-  description: "Open 7x7 m room, straight traverse. The controller-agnostic cell for the cross-controller comparison (D2), run on the mode (b2) kinematic plant so every controller drives the identical deterministic plant."
+  description: "Open 7x7 m room, straight traverse. The controller-agnostic cell for the cross-controller comparison, run on the mode (b2) kinematic plant so every controller drives the identical deterministic plant."
   map:
     base: prox_mpc_open       # reuse prox_mpc_demo/maps/prox_mpc_open.{yaml,pgm}
     yaml: prox_mpc_open.yaml
@@ -12,6 +12,6 @@ scenario:
   goals:
     - {x: 2.5, y: 0.0, yaw: 0.0}
   obstacles: []
-  models: [r2d2]                                                        # diff-drive waffle / Unicycle
-  controllers: [proxmpc, dwb, mppi, regulated_pure_pursuit, graceful]   # D2 cross-controller set
+  models: [unicycle]                                                        # diff-drive waffle / Unicycle
+  controllers: [proxmpc, dwb, mppi, regulated_pure_pursuit, graceful, vector_pursuit]   # cross-controller set
   run: {repeats: 5, timeout_s: 60, seed: 0}

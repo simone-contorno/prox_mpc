@@ -4,11 +4,8 @@
 # starts prox_mpc_obstacle_tracker on the simulated /scan) and the obstacle slack
 # penalty w_weight is hardened (see below). Keeping max_obstacles 4 /
 # cbf_gamma 1.0 identical to the reactive preset isolates the effect of
-# prediction (the demo's dense-field tuning, cbf_gamma 0.3 / max_obstacles 2,
-# over-committed on these single-obstacle cells and stalled the robot ~1.7 m
-# short of the obstacle). A confirmed *moving* track is propagated over the
-# horizon and bound to a dynamic slot; the static box/walls still come from the
-# costmap (hybrid).
+# prediction. A confirmed *moving* track is propagated over the horizon and bound
+# to a dynamic slot; the static box/walls still come from the costmap (hybrid).
 FollowPath:
   plugin: "prox_mpc_controller::ProxMpcController"
   np: 20
@@ -19,14 +16,9 @@ FollowPath:
   q_theta: 1.0
   s_factor: 2.0
   r_weight: 0.1
-  # Obstacle keep-out slack penalty (quadratic). At 100 the solver settled at
-  # ~0.58 m of bought violation on the orbiting cell (marginal slack cost
-  # 2*W*s ~ 116 balanced the tracking benefit of cutting through) and collided;
-  # at 5000 the keep-out became so hard the goal-approach corridor (0.7 m
-  # physical clearance at the worst orbit phase vs the ~0.65-0.87 m inflated
-  # margin) starved and runs timed out. 1000 settles the same trade-off at
-  # ~0.06 m: small violations of the INFLATED margin stay cheap enough to close
-  # the goal, while cutting into the physical keep-out stays uneconomical.
+  # Obstacle keep-out slack penalty (quadratic). At 1000, small violations of the
+  # inflated margin stay cheap enough to close the goal while cutting into the
+  # physical keep-out stays uneconomical.
   w_weight: 1000.0
   max_int_iter_qp: 1500
   max_ext_iter_qp: 10000
@@ -41,10 +33,8 @@ FollowPath:
   # 253 (inscribed + lethal only, not the reactive preset's 200): the static
   # fill adds robot_radius + safety_margin around every cell it ingests, so
   # feeding it the inflation ring (cost 200+ extends ~0.5 m past the obstacle)
-  # double-counts the robot radius. Measured on dynamic_circle: the orbiting
-  # obstacle's inflation sweep turned the goal region into a phantom no-go zone
-  # and the robot hovered at 0.29-0.78 m from the goal until timeout even with
-  # the obstacle 2+ m away.
+  # double-counts the robot radius and can turn the goal region into a phantom
+  # no-go zone that stalls the robot short of the goal.
   costmap_cost_threshold: 253
   obstacle_cluster_radius: 0.3
   # Predictive (dynamic) obstacle avoidance ENABLED. Consumes the tracker's
@@ -54,15 +44,12 @@ FollowPath:
   obstacle_topic: "tracked_obstacles"
   obstacle_timeout: 0.5
   dynamic_speed_threshold: 0.2
-  # Small hedge (m/s) against residual prediction error as the sample ages.
-  # Halved from 0.1 once the tracker's centroid->centre correction landed: with
-  # accurate tracking the larger hedge double-counted and starved the passage
-  # windows on the orbiting cell (ttg grew to 27-60 s).
+  # Small hedge [m/s] against residual prediction error as the sample ages.
   prediction_uncertainty_growth: 0.05
   # 2 (not 1): after an association break (obstacle direction reversal) the old
   # track coasts as a phantom for drop_count scans while the real obstacle is
   # re-acquired as a new track; with a single slot the phantom can outrank the
-  # real track and the solver goes blind to it (measured 2026-07-04).
+  # real track and the solver goes blind to it.
   max_dynamic_obstacles: 2
   max_dynamic_obstacle_radius: 0.5
   # Opt-in per-cycle SolverDiagnostics; only-when-subscribed so the metrics node

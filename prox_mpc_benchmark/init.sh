@@ -5,15 +5,15 @@
 # Reproducible build + single-scenario run for the ProxMPC benchmark (mode b1).
 # Builds the affected packages in ~/ros2_ws, sources the overlay, and runs one
 # scenario x model through the standalone sim + metrics node, printing the
-# per-run summary JSON. No git operations (D7).
+# per-run summary JSON. No git operations.
 #
 # Usage: ./init.sh [scenario] [model]
 #   scenario: static_box | dynamic_circle | dynamic_line_forward | dynamic_line_backward
-#   model:    r2d2 | bike
+#   model:    unicycle | bicycle
 set -euo pipefail
 
 SCENARIO="${1:-static_box}"
-MODEL="${2:-bike}"
+MODEL="${2:-bicycle}"
 WS="${ROS2_WS:-$HOME/ros2_ws}"
 PKGS="prox_mpc_msgs prox_mpc_core prox_mpc_controller prox_mpc_demo prox_mpc_benchmark"
 

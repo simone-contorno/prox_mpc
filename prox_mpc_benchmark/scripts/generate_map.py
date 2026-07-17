@@ -5,9 +5,8 @@
 """
 Generate a Nav2 occupancy map (PGM + YAML) from a room extent and obstacles.
 
-The world and the map are produced from one source and cannot drift out of sync
-(SIM_SPEC section 3). The matching world xacro takes the same room_x / room_y;
-presets are 7 / 15 / 30 m (D10).
+The world and the map are produced from one source and cannot drift out of sync.
+The matching world xacro takes the same room_x / room_y; presets are 7 / 15 / 30 m.
 
 Occupancy convention (map_server default, negate=0): 0 = occupied (walls,
 obstacles), 254 = free, 205 = unknown.

@@ -11,7 +11,7 @@ scenario:
     - {x: 2.5, y: 0.0, yaw: 0.0}
   obstacles:
     # Patrol from (0,-2) to (0,2) and back; +speed = forward leg first. Crosses y=0 at x=0.
-    - {type: dynamic, motion: line, from: {x: 0.0, y: -2.0}, to: {x: 0.0, y: 2.0}, speed: 0.6, clearance: 0.6}
-  models: [r2d2, bike]
-  controllers: [proxmpc, dwb, mppi, regulated_pure_pursuit, graceful]   # D2 cross-controller set (b2)
+    - {type: dynamic, motion: line, from: {x: 0.0, y: -2.0}, to: {x: 0.0, y: 2.0}, speed: 0.6, clearance: 0.45}
+  models: [unicycle, bicycle]
+  controllers: [proxmpc, dwb, mppi, regulated_pure_pursuit, graceful, vector_pursuit]   # cross-controller set (b2)
   run: {repeats: 5, timeout_s: 60, seed: 0}

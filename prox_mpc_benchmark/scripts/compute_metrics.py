@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-Reduce a recorded rosbag2 to one per-run metrics JSON (SIM_SPEC section 7).
+Reduce a recorded rosbag2 to one per-run metrics JSON.
 
 The bag-based path for modes (a) Gazebo+Nav2 and (b2) Nav2-without-Gazebo, where a
 run is recorded rather than measured live. It reads the SolverDiagnostics stream

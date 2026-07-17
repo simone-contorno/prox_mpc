@@ -1,7 +1,7 @@
 <?xml version="1.0"?>
 <!--
-  Minimal Ackermann (car-like) robot for the benchmark's mode (a) Bicycle wiring
-  (SIM_SPEC D3). A controller's body Twist on cmd_vel is converted to steering by
+  Minimal Ackermann (car-like) robot for the benchmark's mode (a) Bicycle wiring.
+  A controller's body Twist on cmd_vel is converted to steering by
   the gz-sim AckermannSteering system (the "ros_gz Ackermann steering bridge"):
   it consumes linear.x (speed) + angular.z (yaw rate), applies the bicycle
   geometry (wheelbase L = 1.0 m, must match robots/ackermann.yaml model_params.L),
@@ -9,7 +9,7 @@
 
   A 2D lidar feeds AMCL / the Nav2 costmaps. Spawn with ros_gz_sim `create`, then
   bridge /cmd_vel (Twist) and /scan (LaserScan); ground truth is taken from the
-  pose-publisher (SIM_SPEC D6).
+  pose-publisher.
 -->
 <sdf version="1.9">
   <model name="ackermann_robot">
@@ -123,7 +123,7 @@
       <odom_publish_frequency>30</odom_publish_frequency>
     </plugin>
 
-    <!-- Ground-truth pose for the accuracy reference (SIM_SPEC D6). -->
+    <!-- Ground-truth pose for the accuracy reference. -->
     <plugin filename="gz-sim-pose-publisher-system"
             name="gz::sim::systems::PosePublisher">
       <publish_link_pose>false</publish_link_pose>

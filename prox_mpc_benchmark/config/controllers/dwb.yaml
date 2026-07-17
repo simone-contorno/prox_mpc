@@ -1,10 +1,10 @@
-# DWB local planner preset (FollowPath block) for cross-controller comparison (D2).
+# DWB local planner preset (FollowPath block) for cross-controller comparison.
 # Stock nav2_dwb_controller params trimmed to the diff-drive case; the Ackermann
 # robot receives the same Twist converted to steering by the steering bridge.
-# Obstacle avoidance is the BaseObstacle critic (scale 0.02 — the nav2_bringup
-# default, calibrated to that critic's raw costmap-cost magnitude, not a hobbling)
-# fed the same costmap + inflation as every other controller; the path/goal critic
-# scales are the nav2_bringup values and are on a different numeric footing.
+# Obstacle avoidance is the BaseObstacle critic (scale 0.02, the nav2_bringup
+# default, calibrated to that critic's raw costmap-cost magnitude) fed the same
+# costmap + inflation as every other controller; the path/goal critic scales are
+# the nav2_bringup values and are on a different numeric footing.
 FollowPath:
   plugin: "dwb_core::DWBLocalPlanner"
   debug_trajectory_details: True
@@ -26,19 +26,10 @@ FollowPath:
   transform_tolerance: 0.2
   xy_goal_tolerance: 0.24  # match the shared general_goal_checker (nav2_b2_base.yaml)
   critics: ["RotateToGoal", "Oscillation", "BaseObstacle", "GoalAlign", "PathAlign", "PathDist", "GoalDist"]
-  # Fair-tuning pass (2026-07-04, fair-comparison-log.md): at the bringup
-  # default 0.02 DWB rode the obstacles at exactly zero clearance (measured
-  # gap 0.00 on every obstacle cell) and clipped the movers; 0.1 (iteration 1)
-  # still grazed 5/5 on the orbiting cell — BaseObstacle scores only the
-  # trajectory endpoint, so it needs to rival the 24-32 path/goal scales
-  # before near-obstacle endpoints actually lose.
-  # Fair-tuning sweep (2026-07-04, fair-comparison-log.md): 0.02 / 0.1 / 1.0 /
-  # 2.0. NONE is a net win — 0.02-0.1 graze the fast crossers, and >=1.0
-  # over-avoids the map-boundary inflation so the robot crawls even on the
-  # empty cell (nav2_open 54 s vs 12 s) and never reaches the goal past the
-  # static box (0/5). BaseObstacle scores only the trajectory endpoint, so
-  # there is no scale that both clears the movers and stays fast. Kept at the
-  # nav2_bringup default, which is DWB's best overall operating point here.
+  # BaseObstacle scores only the trajectory endpoint, so no single scale both
+  # clears the movers and stays fast: lower grazes the fast crossers, higher
+  # over-avoids the map-boundary inflation and stalls the robot. Kept at the
+  # nav2_bringup default, DWB's best overall operating point here.
   BaseObstacle.scale: 0.02
   PathAlign.scale: 32.0
   GoalAlign.scale: 24.0

@@ -1,6 +1,6 @@
 <?xml version="1.0"?>
 <!--
-  Scalable open-room world for the benchmark (SIM_SPEC section 3 / D10).
+  Scalable open-room world for the benchmark.
 
   A room_x by room_y room centred on the origin; the four perimeter walls are
   computed from room_x / room_y so the world matches a map produced by
@@ -8,7 +8,7 @@
   map are therefore generated from one source and cannot drift out of sync.
 
   Args:
-    room_x, room_y : room extent [m] (presets 7 / 15 / 30, D10).
+    room_x, room_y : room extent [m] (presets 7 / 15 / 30).
     headless       : drop the SceneBroadcaster when true (default true).
 -->
 <sdf version="1.6" xmlns:xacro="http://www.ros.org/wiki/xacro">

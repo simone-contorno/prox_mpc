@@ -1,4 +1,4 @@
-# Graceful Controller preset (FollowPath block) for cross-controller comparison (D2).
+# Graceful Controller preset (FollowPath block) for cross-controller comparison.
 # nav2_graceful_controller (new in Jazzy): a differential-drive pose-following
 # control law (Park & Kuipers), not a cost-function avoider. It has no prediction
 # horizon (it is geometric, like Regulated Pure Pursuit) and no obstacle critics;
@@ -10,21 +10,19 @@ FollowPath:
   plugin: "nav2_graceful_controller::GracefulController"
   transform_tolerance: 0.1
   max_lookahead: 0.9
-  # Fair-tuning pass (2026-07-04, fair-comparison-log.md): every failed run
-  # across nav2_open / line_backward / static_box stalled at min_goal
-  # 0.2500-0.2726 — a completion deadlock just OUTSIDE the goal checker's
-  # strict < 0.25, not an avoidance failure. Target closer to the plan end and
-  # keep speed up through the boundary (min_lookahead 0.05, v_linear_min 0.2,
+  # Graceful tends to park just outside the strict < 0.25 goal tolerance — a
+  # completion deadlock, not an avoidance failure. Target closer to the plan end
+  # and keep speed up through the boundary (min_lookahead 0.05, v_linear_min 0.2,
   # slowdown_radius 0.1).
   min_lookahead: 0.05
   initial_rotation: true
   initial_rotation_tolerance: 0.75
-  # Goal-approach tuning (good-faith, not an avoidance advantage): drive straight
-  # into the goal point rather than rotating in place near it, and slow down only
-  # within 0.2 m. Graceful's pose-following law still decelerates asymptotically
-  # into the goal and tends to park right at the 0.25 m tolerance boundary on a
-  # dead-straight approach, so it can register as not-reached on the open cell even
-  # though its tracking is exact — a known completion trait of this controller.
+  # Goal-approach tuning: drive straight into the goal point rather than rotating
+  # in place near it, and slow down only within 0.2 m. Graceful's pose-following
+  # law still decelerates asymptotically into the goal and tends to park right at
+  # the 0.25 m tolerance boundary on a dead-straight approach, so it can register
+  # as not-reached on the open cell even though its tracking is exact — a known
+  # completion trait of this controller.
   prefer_final_rotation: false
   k_phi: 2.0
   k_delta: 1.0

@@ -6,9 +6,9 @@ Launch one benchmark cell (scenario x model x mode), headless.
 
 Mode (b1) — the deterministic standalone core sim — is launched here directly:
 the prox_mpc_demo simulation node and the prox_mpc_benchmark metrics node are
-brought up against the same scenario geometry (this is the path SIM_SPEC section 8
-verifies). Modes (a) Gazebo+Nav2 and (b2) Nav2-without-Gazebo are heavier and are
-driven by run_matrix.py / the demo bringup; see the package README for status.
+brought up against the same scenario geometry. Modes (a) Gazebo+Nav2 and (b2)
+Nav2-without-Gazebo are heavier and are driven by run_matrix.py / the demo
+bringup; see the package README for status.
 """
 
 import os
@@ -118,7 +118,7 @@ def _setup(context, *args, **kwargs):
 def generate_launch_description():
     return LaunchDescription([
         DeclareLaunchArgument('scenario', default_value='static_box'),
-        DeclareLaunchArgument('model', default_value='bike'),
+        DeclareLaunchArgument('model', default_value='bicycle'),
         DeclareLaunchArgument('mode', default_value='b1'),
         DeclareLaunchArgument('summary_json', default_value=''),
         OpaqueFunction(function=_setup),

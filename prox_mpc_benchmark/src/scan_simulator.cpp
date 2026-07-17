@@ -26,6 +26,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <limits>
 #include <memory>
 #include <random>
 #include <string>
@@ -132,10 +133,16 @@ private:
     scan.angle_increment = static_cast<float>(2.0 * M_PI / static_cast<double>(num_beams_));
     scan.range_min = static_cast<float>(range_min_);
     scan.range_max = static_cast<float>(range_max_);
-    scan.ranges.assign(static_cast<std::size_t>(num_beams_), static_cast<float>(range_max_));
+    // Clear beams are published as +inf, not range_max: the costmap's laser
+    // projection drops readings at range_max, so a finite range_max beam yields no
+    // clearing ray and a moving obstacle's vacated cells never clear (they pile up
+    // into a trail). +inf, with the obstacle_layer's inf_is_valid, is treated as a
+    // max-range clearing ray, so empty directions are swept free every scan.
+    const float clear = std::numeric_limits<float>::infinity();
+    scan.ranges.assign(static_cast<std::size_t>(num_beams_), clear);
 
     if (obstacles_.empty()) {
-      scan_pub_->publish(scan);  // empty world: all-max clearing beams
+      scan_pub_->publish(scan);  // empty world: all-clear (inf) sweeping beams
       return;
     }
 
@@ -157,7 +164,11 @@ private:
         std::normal_distribution<double> noise(0.0, range_noise_std_);
         best = std::clamp(best + noise(rng_), range_min_, range_max_);
       }
-      scan.ranges[static_cast<std::size_t>(i)] = static_cast<float>(best);
+      // A real hit is finite and marks; otherwise leave the beam at +inf so it
+      // clears the ray instead of marking a phantom obstacle at range_max.
+      if (best < range_max_) {
+        scan.ranges[static_cast<std::size_t>(i)] = static_cast<float>(best);
+      }
     }
     scan_pub_->publish(scan);
   }

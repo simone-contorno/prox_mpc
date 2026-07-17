@@ -118,11 +118,14 @@ install(PROGRAMS
   scripts/gen_blind_multi.py
   scripts/gt_obstacle_publisher.py
   scripts/space_time_feasible.py
+  scripts/record_scenarios.py
+  scripts/obstacle_markers.py
+  scripts/combine_grid.sh
   DESTINATION lib/${PROJECT_NAME}
 )
 
-# Launch + config + scalable world / Ackermann model (mode a, section 3 / D3).
-install(DIRECTORY launch config worlds models
+# Launch + config + scalable world / Ackermann model (mode a).
+install(DIRECTORY launch config worlds models rviz
   DESTINATION share/${PROJECT_NAME}
 )
 

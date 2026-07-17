@@ -1,9 +1,9 @@
-# Diff-drive TurtleBot3 waffle paired with the ProxMPC Unicycle model (D3).
+# Diff-drive TurtleBot3 waffle paired with the ProxMPC Unicycle model.
 # Used by mode (a) Gazebo and as the kinematic plant in mode (b2). For the
 # standalone mode (b1) only `model` is relevant.
 robot:
   name: waffle
-  model: r2d2                      # prox_mpc Unicycle (3-state [x, y, theta])
+  model: unicycle                      # prox_mpc Unicycle (3-state [x, y, theta])
   model_plugin: prox_mpc_core/Unicycle
   drive: diff
   wheelbase: 0.0                  # unused by the unicycle

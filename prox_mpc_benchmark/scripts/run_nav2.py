@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-Orchestrate the mode (b2) cross-controller comparison (SIM_SPEC D2, no Gazebo).
+Orchestrate the mode (b2) cross-controller comparison, no Gazebo.
 
 For each controller it brings up benchmark_nav2.launch.py (Nav2 stack + kinematic
 plant), starts the live metrics node, sends the scenario goal with goal_sender,
@@ -15,7 +15,7 @@ the only controller that publishes SolverDiagnostics.
 
 Per-run JSONs land in <results>/runs/ and are merged into <results>/scenarios.json
 under mode 'b2'. The environment must already be sourced (see init.sh). No git
-operations (D7).
+operations.
 """
 
 import argparse
@@ -30,7 +30,9 @@ import time
 import yaml
 
 PKG = 'prox_mpc_benchmark'
-DEFAULT_CONTROLLERS = ['proxmpc', 'dwb', 'mppi', 'regulated_pure_pursuit', 'graceful']
+DEFAULT_CONTROLLERS = [
+    'proxmpc', 'dwb', 'mppi', 'regulated_pure_pursuit', 'graceful', 'vector_pursuit',
+]
 
 # Shared robot radius (nav2_b2_base costmap) and ProxMPC safety margin. The physical
 # obstacle radius is back-computed so that this robot inflation plus the marked
@@ -94,7 +96,8 @@ def obstacle_arrays(scn: dict):
 
 
 def write_scan_params(path: Path, scn: dict, repeat: int = 0):
-    """Write the scan-simulator params (obstacle field + scan geometry).
+    """
+    Write the scan-simulator params (obstacle field + scan geometry).
 
     An optional scenario `sensor.range_noise_std` [m] enables a realistic
     Gaussian range-noise model on obstacle returns; the seed is varied per
@@ -125,8 +128,12 @@ def write_scan_params(path: Path, scn: dict, repeat: int = 0):
 
 
 def write_gt_params(path: Path, scn: dict):
-    """Write ground-truth obstacle-publisher (oracle) params: the same obstacle
-    field as the scan simulator, republished as perfect /tracked_obstacles."""
+    """
+    Write the ground-truth obstacle-publisher (oracle) params.
+
+    Uses the same obstacle field as the scan simulator, republished as perfect
+    /tracked_obstacles.
+    """
     motion, cx, cy, ex, ey, radius, speed, body = obstacle_arrays(scn)
     params = {'odom_topic': 'odom', 'tracking_frame': 'odom', 'rate_hz': 20.0}
     if motion:
@@ -168,7 +175,7 @@ def write_metrics_params(path: Path, scn: dict, control: dict, controller: str,
         'diagnostics_topic': diag_topic,
         'summary_json': str(summary_json),
         'scenario': scn['name'],
-        'model': scn.get('models', ['r2d2'])[0],
+        'model': scn.get('models', ['unicycle'])[0],
         'mode': 'b2',
         'controller': controller,
         'repeat': int(repeat),
@@ -238,7 +245,7 @@ def run_cell(scn, controller, repeat, control, results_dir, robot, map_yaml,
              warmup_s, timeout_s, oracle=False):
     runs_dir = results_dir / 'runs'
     runs_dir.mkdir(parents=True, exist_ok=True)
-    tag = f"{scn['name']}__{scn.get('models', ['r2d2'])[0]}__b2__{controller}__r{repeat}"
+    tag = f"{scn['name']}__{scn.get('models', ['unicycle'])[0]}__b2__{controller}__r{repeat}"
     predictive = controller == 'proxmpc_pred'
     # Oracle mode: feed proxmpc_pred perfect obstacle knowledge (ground-truth
     # publisher) instead of the IMM tracker, for the feasibility gate.
@@ -365,7 +372,7 @@ def run_cell(scn, controller, repeat, control, results_dir, robot, map_yaml,
                 pass
         return rec
     return {
-        'scenario': scn['name'], 'model': scn.get('models', ['r2d2'])[0],
+        'scenario': scn['name'], 'model': scn.get('models', ['unicycle'])[0],
         'mode': 'b2', 'controller': controller, 'repeat': repeat,
         'status': 'no_summary', 'success': False,
     }

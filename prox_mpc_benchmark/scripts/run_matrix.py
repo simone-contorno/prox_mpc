@@ -15,7 +15,7 @@ structured index is written to <results>/scenarios.json.
 Modes (a) Gazebo+Nav2 and (b2) Nav2-without-Gazebo are delegated to
 benchmark.launch.py (heavier; see the package README for status).
 
-The environment must already be sourced (see init.sh). No git operations (D7).
+The environment must already be sourced (see init.sh). No git operations.
 """
 
 import argparse
@@ -36,7 +36,7 @@ SCENARIO_NAMES = [
     'dynamic_line_forward',
     'dynamic_line_backward',
 ]
-MODELS = ['r2d2', 'bike']
+MODELS = ['unicycle', 'bicycle']
 
 
 def share_dir() -> Path:
@@ -231,7 +231,7 @@ def main() -> int:
     ap.add_argument('--scenarios', default='all',
                     help="comma-separated scenario names or 'all'")
     ap.add_argument('--models', default=','.join(MODELS),
-                    help='comma-separated models (r2d2,bike)')
+                    help='comma-separated models (unicycle,bicycle)')
     ap.add_argument('--modes', default='b1',
                     help='comma-separated run modes (b1 supported here; a,b2 via launch)')
     ap.add_argument('--controller', default='proxmpc')

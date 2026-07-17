@@ -1,5 +1,5 @@
 # Nav2 base parameters for mode (b2): controller_server + planner + BT driving a
-# kinematic plant, no Gazebo (SIM_SPEC mode b2 / cross-controller comparison D2).
+# kinematic plant, no Gazebo. Cross-controller comparison harness.
 #
 # Trimmed from the stock nav2_params for a Gazebo-free, laser-free open world:
 #   - No amcl: localization is exact (the plant publishes odom -> base_link and a
@@ -59,9 +59,8 @@ controller_server:
       # Strictly inside the scored success tolerance (0.25, metrics goal_tol):
       # with the two equal, a controller that stops the moment ITS OWN distance
       # reads inside tolerance can park at metric-0.2500 exactly and deadlock —
-      # Nav2's strict '< 0.25' never fires and the run is scored failed
-      # (measured on graceful: every failed run at min_goal 0.2500-0.2726;
-      # fair-comparison-log.md 2026-07-04). Applies to every controller alike.
+      # Nav2's strict '< 0.25' never fires and the run is scored failed. Applies
+      # to every controller alike.
       xy_goal_tolerance: 0.24
       yaw_goal_tolerance: 0.25
     # FollowPath is injected at launch from the controller preset.
@@ -96,11 +95,14 @@ local_costmap:
           max_obstacle_height: 2.0
           obstacle_max_range: 3.0
           raytrace_max_range: 3.5
-          inf_is_valid: false
+          # Clear (no-hit) beams arrive as +inf; treat them as valid max-range
+          # readings so empty directions ray-trace-clear every scan. Without this a
+          # moving obstacle's vacated cells never clear and pile up into a trail.
+          inf_is_valid: true
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
         cost_scaling_factor: 3.0
-        inflation_radius: 0.70
+        inflation_radius: 0.4
       always_send_full_costmap: True
 
 global_costmap:
@@ -113,14 +115,32 @@ global_costmap:
       robot_radius: 0.22
       resolution: 0.05
       track_unknown_space: false
-      plugins: ["static_layer", "inflation_layer"]
+      plugins: ["static_layer", "obstacle_layer", "inflation_layer"]
       static_layer:
         plugin: "nav2_costmap_2d::StaticLayer"
         map_subscribe_transient_local: True
+      # Global obstacle awareness: the planner sees the scenario obstacle and routes
+      # around it instead of straight through, so a central obstacle does not hand
+      # the local controller a symmetric no-lateral-preference problem.
+      obstacle_layer:
+        plugin: "nav2_costmap_2d::ObstacleLayer"
+        enabled: True
+        observation_sources: scan
+        scan:
+          topic: /scan
+          sensor_frame: base_link
+          data_type: "LaserScan"
+          marking: True
+          clearing: True
+          min_obstacle_height: -0.1
+          max_obstacle_height: 2.0
+          obstacle_max_range: 3.0
+          raytrace_max_range: 3.5
+          inf_is_valid: true
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
         cost_scaling_factor: 3.0
-        inflation_radius: 0.7
+        inflation_radius: 0.4
       always_send_full_costmap: True
 
 planner_server:

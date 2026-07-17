@@ -10,7 +10,7 @@
     controller x mode matrix, compute per-run metrics, and aggregate them. Reuses
     the demo worlds/maps/models; owns the result artifacts (gitignored).
   </description>
-  <maintainer email="simone.contorno.2000@gmail.com">Simone Contorno</maintainer>
+  <maintainer email="simone.contorno@outlook.it">Simone Contorno</maintainer>
   <license>Apache-2.0</license>
 
   <buildtool_depend>ament_cmake</buildtool_depend>
@@ -51,7 +51,7 @@
   <exec_depend>ros_gz_bridge</exec_depend>
   <exec_depend>xacro</exec_depend>
 
-  <!-- Mode (b2) Nav2 servers and the cross-controller set (D2) the launch starts. -->
+  <!-- Mode (b2) Nav2 servers and the cross-controller set the launch starts. -->
   <exec_depend>nav2_map_server</exec_depend>
   <exec_depend>nav2_planner</exec_depend>
   <exec_depend>nav2_controller</exec_depend>
@@ -62,6 +62,20 @@
   <exec_depend>nav2_mppi_controller</exec_depend>
   <exec_depend>nav2_regulated_pure_pursuit_controller</exec_depend>
   <exec_depend>nav2_graceful_controller</exec_depend>
+  <!-- External fair peer: Apache-2.0, apt ros-jazzy-vector-pursuit-controller v2.0.0;
+       a runtime pluginlib plugin (loaded, not linked). License-reviewed in
+       THIRD_PARTY_LICENSES.md. -->
+  <exec_depend>vector_pursuit_controller</exec_depend>
+
+  <!-- Demo-video capture (record_scenarios.py / combine_grid.sh): the RViz view,
+       the path-corrected waffle RobotModel (URDF from nav2_minimal_tb3_sim), and
+       ffmpeg as the x11grab recorder + xstack grid combiner. -->
+  <exec_depend>robot_state_publisher</exec_depend>
+  <exec_depend>joint_state_publisher</exec_depend>
+  <exec_depend>visualization_msgs</exec_depend>
+  <exec_depend>rviz2</exec_depend>
+  <exec_depend>nav2_minimal_tb3_sim</exec_depend>
+  <exec_depend>ffmpeg</exec_depend>
 
   <test_depend>ament_lint_auto</test_depend>
   <test_depend>ament_lint_common</test_depend>

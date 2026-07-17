@@ -6,8 +6,8 @@
 Auto-send a scenario's goal(s) to Nav2, replacing the manual action call.
 
 A single goal uses NavigateToPose; a waypoint set uses NavigateThroughPoses
-(SIM_SPEC mode a / b2 step 4). Exits 0 on SUCCEEDED, non-zero otherwise, so the
-orchestrator can record the action result.
+(modes a / b2). Exits 0 on SUCCEEDED, non-zero otherwise, so the orchestrator can
+record the action result.
 """
 
 import argparse

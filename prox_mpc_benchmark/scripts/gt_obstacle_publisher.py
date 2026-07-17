@@ -25,14 +25,13 @@ scan_simulator / metrics_node, so the phase matches the driven trajectory.
 
 import math
 
+from geometry_msgs.msg import Point, Vector3
+from nav_msgs.msg import Odometry
+from prox_mpc_msgs.msg import Obstacle, ObstacleArray
+from rcl_interfaces.msg import ParameterDescriptor
 import rclpy
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy
-
-from rcl_interfaces.msg import ParameterDescriptor
-from nav_msgs.msg import Odometry
-from geometry_msgs.msg import Point, Vector3
-from prox_mpc_msgs.msg import Obstacle, ObstacleArray
 
 
 def center_at(motion, cx, cy, ex, ey, radius, speed, t):

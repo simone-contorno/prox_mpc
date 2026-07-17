@@ -2,13 +2,23 @@
 Changelog for package prox_mpc_benchmark
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
+Forthcoming
+-----------
+* Added ``vector_pursuit_controller`` (apt ``ros-jazzy-vector-pursuit-controller``
+  v2.0.0, Apache-2.0) as the cross-controller comparison's single external fair
+  peer: a new ``config/controllers/vector_pursuit.yaml`` preset, the
+  ``exec_depend`` in ``package.xml``, and the controller added to
+  ``DEFAULT_CONTROLLERS`` in ``run_nav2.py`` and to every scenario's
+  ``controllers:`` list.
+* Contributors: Simone Contorno
+
 1.0.0 (2026-07-01)
 ------------------
 * Initial release: scenario-driven benchmarking harness with the standalone
-  matrix (mode a/b1, four scenarios x bike/r2d2 models) and the Nav2
+  matrix (mode a/b1, four scenarios x bicycle/unicycle models) and the Nav2
   cross-controller comparison (mode b2) against DWB, MPPI, and Regulated Pure
   Pursuit, reusing the ``prox_mpc_demo`` simulation node and ``prox_mpc_open``
-  map and the shared bike/r2d2/waffle robots, and shipping its own scalable
+  map and the shared bicycle/unicycle/waffle robots, and shipping its own scalable
   world and Ackermann robot model.
 * Live C++ metrics node tapping cross-track/goal error and
   ``SolverDiagnostics``, plus installed Python tooling for orchestration, map

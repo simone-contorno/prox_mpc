@@ -4,7 +4,7 @@
 """
 Bring up the mode (b2) Nav2 stack against the kinematic plant, no Gazebo.
 
-This is the controller-agnostic comparison harness (SIM_SPEC mode b2 / D2): it
+This is the controller-agnostic comparison harness (mode b2): it
 loads the trimmed base params (config/nav2_b2_base.yaml), injects the selected
 controller's FollowPath block from config/controllers/<controller>.yaml (and, for
 ProxMPC, the robot's model pairing from config/robots/<robot>.yaml), and starts
