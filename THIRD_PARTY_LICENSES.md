@@ -21,15 +21,16 @@ obligation reduces to preserving the notice (done below).
 | Library | Used as | License | Notes |
 | --- | --- | --- | --- |
 | Eigen3 | C++ headers (`<Eigen/Dense>`, `<Eigen/Sparse>`) | MPL-2.0 (with BSD-3 files) | Header-only, unmodified. Only the Dense and Sparse modules are included; **no LGPL module** (`SparseCholesky` non-impl, `SuperLU`, `UmfPack`, `Cholmod`, `Pardiso`, `SPQR`) is included or linked. |
-| ProxSuite | Linked QP solver (`proxsuite::proxsuite`) | BSD-2-Clause | See the canonical version note in [prox_mpc_core's NMPC doc](prox_mpc_core/docs/nmpc.md) and the proxsuite provisioning note below. |
+| ProxSuite | Linked QP solver (`proxsuite::proxsuite`) | BSD-2-Clause | See the canonical version note in [prox_mpc_core's NMPC doc](prox_mpc_core/doc/nmpc.md) and the proxsuite provisioning note below. |
 | SIMDe | Transitive (vendored inside ProxSuite for portable SIMD) | MIT | Pulled in via ProxSuite headers; not used directly. |
-| ROS 2 client/message/Nav2 libraries (`rclcpp`, `rclcpp_lifecycle`, `rclcpp_components`, `tf2`, `tf2_ros`, `pluginlib`, `nav2_core`, `nav2_costmap_2d`, `geometry_msgs`, `nav_msgs`, `sensor_msgs`, `lifecycle_msgs`) | Linked / message generation | Apache-2.0 or BSD-3-Clause | The ROS 2 Jazzy core permissive set. |
+| ROS 2 client/message/Nav2 libraries (`rclcpp`, `rclcpp_lifecycle`, `rclcpp_components`, `tf2`, `tf2_ros`, `pluginlib`, `nav2_core`, `nav2_costmap_2d`, `geometry_msgs`, `nav_msgs`, `sensor_msgs`, `lifecycle_msgs`, `visualization_msgs`) | Linked / message generation | Apache-2.0 or BSD-3-Clause | The ROS 2 Jazzy core permissive set. |
+| `vector_pursuit_controller` (apt `ros-jazzy-vector-pursuit-controller` v2.0.0, maintained by Black Coffee Robotics) | Installed `nav2_core::Controller` plugin (pluginlib-loaded at runtime, not linked) | Apache-2.0 | `prox_mpc_benchmark`'s single external fair peer for the cross-controller comparison; a runtime `exec_depend`, not a build/link dependency. |
 
 ## ProxSuite — canonical version
 
 The reproducible, rosdep-provisioned dependency is the apt key
-`ros-jazzy-proxsuite` (a clean CI runner or flashed Jetson installs it via
-`rosdep install`).
+`ros-jazzy-proxsuite` (a clean CI runner or a provisioned deployment host installs
+it via `rosdep install`).
 The packages pin it as the floor with `version_gte="0.6.5"` in their
 `package.xml`.
 The bit-exact regression baseline in
