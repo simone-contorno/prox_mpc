@@ -24,18 +24,15 @@ prox_mpc_obstacle_tracker:
     # obstacle (person/box) is well under this, a wall well over it.
     max_cluster_radius: 0.6    # [m] drop clusters whose enclosing radius exceeds this
     min_detection_range: 0.0   # [m] lower range cutoff (0 -> use the scan range_min)
-    # Upper range cutoff. Matches the costmap obstacle_max_range so the tracker
+    # Upper range cutoff [m]. Matches the costmap obstacle_max_range so the tracker
     # sees exactly as far as every costmap-driven controller (equal perception).
-    # 2.5 caused track churn: an orbiting obstacle drifted in/out of range, each
-    # re-birth reset the turn-rate estimate. Wall rejection is max_cluster_radius's
-    # job, not this cutoff's.
+    # Wall rejection is max_cluster_radius's job, not this cutoff's.
     max_detection_range: 3.0   # [m] upper range cutoff (0 -> use the scan range_max)
     # Arc-centroid -> disc-centre correction. A lidar sees only the near arc of
-    # a compact obstacle, so the raw cluster centroid is biased toward the
-    # sensor and SLIDES around the disc as the robot passes — measured
-    # 2026-07-04 as ~0.3 m position error plus fake tangential velocity that
-    # cancelled the true motion during close passes (collision-fix-b2-log.md).
-    # The centroid is pushed away from the sensor along its ray by this fraction
+    # a compact obstacle, so the raw cluster centroid is biased toward the sensor
+    # and SLIDES around the disc as the robot passes, producing position error
+    # plus a fake tangential velocity that cancels the true motion during close
+    # passes. The centroid is pushed away from the sensor along its ray by this fraction
     # of the enclosing cluster radius (0.5 ~ exact for the close-range half-disc
     # arc; under-corrects thin far arcs, which stays conservative). 0 disables.
     cluster_center_offset_gain: 0.5   # [0..1] fraction of the cluster radius
@@ -46,20 +43,16 @@ prox_mpc_obstacle_tracker:
 
     # Constant-velocity model (IMM model 1; also the legacy single-CV filter).
     process_noise: 0.1              # accel spectral density q [m^2/s^4]
-    # Position measurement variance, calibrated to the actual centroid noise of
-    # the benchmark scan simulator (~2-4 cm quantization jitter -> ~0.002 m^2).
-    # The previous 0.01 (0.1 m std) over-stated it 5x, so the filter trusted its
-    # own motion model over the data: after an obstacle direction reversal the
-    # tracked position lagged the true one by ~0.4 m for ~1 s (measured 2026-07-04,
-    # collision-fix-b2-log.md) and the velocity converged only after ~1 s at birth.
+    # Position measurement variance [m^2], calibrated to the centroid noise of the
+    # benchmark scan simulator (~2-4 cm quantization jitter -> ~0.002 m^2).
     # Re-calibrate per sensor on real hardware.
     measurement_noise: 0.002        # position measurement variance [m^2]
     initial_velocity_variance: 1.0  # initial vx/vy variance [m^2/s^2]
 
     # IMM (CV + CTRV). imm_enabled: false restores the legacy single-CV path
     # without a rebuild. CV stay 0.95 gives a ~20-scan expected mode dwell at
-    # 10 Hz; CTRV stay 0.99 keeps the turning model sticky on sustained
-    # orbits (b2 tuning, 2026-07-03). Both must lie in (0.0, 1.0) exclusive.
+    # 10 Hz; CTRV stay 0.99 keeps the turning model sticky on sustained orbits.
+    # Both must lie in (0.0, 1.0) exclusive.
     imm_enabled: true
     imm_p_cv_stay: 0.95               # Markov P(CV -> CV); off-diagonal is 1 - this
     imm_p_ctrv_stay: 0.99             # Markov P(CTRV -> CTRV); off-diagonal is 1 - this
@@ -79,8 +72,8 @@ prox_mpc_obstacle_tracker:
     # Track lifecycle. drop_count stays small on purpose: a long-coasting track
     # turns into a published phantom after an association break (e.g. an obstacle
     # direction reversal), which competes with the re-acquired real track for the
-    # controller's dynamic slots (measured 2026-07-04). Track continuity through
-    # range dropouts is owned by max_detection_range, not by coasting.
+    # controller's dynamic slots. Track continuity through range dropouts is owned
+    # by max_detection_range, not by coasting.
     confirm_count: 3   # consecutive hits before a track is published
     drop_count: 3      # consecutive misses tolerated before a track is dropped
     max_tracks: 10     # cap on simultaneously held tracks

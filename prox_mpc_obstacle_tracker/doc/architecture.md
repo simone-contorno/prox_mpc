@@ -13,7 +13,7 @@ The package is split into a ROS-free core and a thin ROS node, so the algorithms
 are unit-testable without a running graph.
 
 - `prox_mpc_obstacle_tracker_core` — an Eigen-only library: `clustering`
-  (scan → points → clusters) and `Tracker` (the constant-velocity multi-object
+  (scan → points → clusters) and `Tracker` (the IMM (CV+CTRV) multi-object
   filter). No ROS dependency.
 - `prox_mpc_obstacle_tracker_component` — the `ObstacleTrackerNode` lifecycle
   node, registered as an `rclcpp_components` node so it can be loaded into a
@@ -28,7 +28,7 @@ flowchart LR
   scan["/scan<br/>sensor_msgs/LaserScan"] --> pts[scan_to_points]
   pts --> clus[cluster_points]
   clus --> tf["transform centroids<br/>scan frame -> tracking frame"]
-  tf --> trk["Tracker.update<br/>constant-velocity Kalman"]
+  tf --> trk["Tracker.update<br/>IMM CV+CTRV"]
   trk --> pub["/tracked_obstacles<br/>prox_mpc_msgs/ObstacleArray"]
 ```
 
@@ -68,19 +68,35 @@ splits into two clusters — conservative for avoidance.
 
 ## Tracking
 
-`Tracker` is a constant-velocity multi-object Kalman filter over the state
-$[x, y, v_x, v_y]$ in the tracking frame, with one filter per object.
+`Tracker` is a multi-object filter with one estimator per object, all running in
+the tracking frame. By default (`imm_enabled: true`) each track is an
+**Interacting Multiple Model (IMM)** estimator that runs two motion models in
+parallel and blends them each cycle by model probability: a **constant-velocity
+(CV)** linear Kalman filter over the state $[x, y, v_x, v_y]$ and a
+**constant-turn-rate-and-velocity (CTRV)** EKF over the state
+$[x, y, v, \theta, \omega]$. The combined output is moment-matched into CV space,
+so association gating and the published position/velocity/covariance fields read
+the same whichever model dominates. Setting `imm_enabled: false` selects a legacy
+single-CV Kalman path (a single-switch rollback, no rebuild) — the only purely
+constant-velocity configuration.
 
-- **Predict.** Every track advances by the time since the previous scan with the
-  constant-velocity transition and a discrete white-noise-acceleration process
-  covariance scaled by the spectral density `process_noise`. Non-monotonic stamps
-  hold the position with no prediction.
+- **Predict.** Every track advances by the time since the previous scan. On the
+  IMM path the cycle mixes the two model states (a Markov transition set by
+  `imm_p_cv_stay` / `imm_p_ctrv_stay`, with moment-matched mixed priors) and then
+  runs both model predicts: the CV model uses a discrete white-noise-acceleration
+  process covariance scaled by the spectral density `process_noise`, and the CTRV
+  EKF uses its closed-form turn transition with linear- and yaw-acceleration
+  process noise (`ctrv_process_noise_accel`, `ctrv_process_noise_yaw_accel`). The
+  legacy path runs the CV transition alone. Non-monotonic stamps hold the position
+  with no prediction.
 - **Associate.** Gated greedy nearest-neighbour: all track–measurement pairs
   within `association_gate` are formed and assigned closest-first, one
   measurement per track.
-- **Update.** Matched tracks take a linear Kalman position update with
-  measurement variance `measurement_noise`; the radius is smoothed
-  (`0.5·old + 0.5·new`).
+- **Update.** Matched tracks take a linear position update with measurement
+  variance `measurement_noise`. On the IMM path both models are updated and the
+  model probabilities are refreshed from their Gaussian measurement likelihoods; a
+  missed scan is a predict-only cycle that leaves the probabilities unchanged. The
+  radius is smoothed (`0.5·old + 0.5·new`).
 - **Birth / confirm / death.** An unmatched measurement spawns a tentative track
   (initial velocity variance `initial_velocity_variance`, up to `max_tracks`); a
   track is confirmed and published after `confirm_count` consecutive hits, and
@@ -89,8 +105,12 @@ $[x, y, v_x, v_y]$ in the tracking frame, with one filter per object.
 
 Only confirmed tracks are published.
 Each published `Obstacle` carries the track id, the estimated position and
-velocity, the smoothed radius, and the 2×2 position and velocity covariance blocks
-read from the filter covariance.
+velocity, the smoothed radius, the 2×2 position and velocity covariance blocks
+read from the filter covariance, and `prediction_steps` sampled predicted
+positions at `prediction_dt` spacing along the track's estimated path — the
+model-probability-weighted CV+CTRV blend on the IMM path (a curved arc for a
+turning object), or a straight constant-velocity ray on the legacy path — which
+the controller follows for predictive avoidance.
 
 ## Interfaces
 
@@ -122,8 +142,8 @@ handler, cancels the spin, and runs a single checked finalize ladder
 
 ## Parameters
 
-All parameters are `double`, `int`, or `string` per the project type rules and
-mirror [../config/obstacle_tracker.yaml](../config/obstacle_tracker.yaml).
+All parameters are `double`, `int`, `bool`, or `string` per the project type rules
+and mirror [../config/obstacle_tracker.yaml](../config/obstacle_tracker.yaml).
 The defaults below are the values declared in the node; the shipped config sets
 operational values for some of them (noted).
 
@@ -153,7 +173,7 @@ operational values for some of them (noted).
 | `min_detection_range` | double | 0.0 | m | Lower range cutoff (0 uses the scan `range_min`). |
 | `max_detection_range` | double | 0.0 (`2.5` in config) | m | Upper range cutoff (0 uses the scan `range_max`). |
 
-### Association and Kalman filter
+### Association and filter
 
 | Parameter | Type | Default | Unit | Description |
 | --- | --- | --- | --- | --- |
@@ -161,6 +181,19 @@ operational values for some of them (noted).
 | `process_noise` | double | 1.0 | m²/s⁴ | Acceleration spectral density. |
 | `measurement_noise` | double | 0.01 | m² | Position measurement variance. |
 | `initial_velocity_variance` | double | 1.0 | m²/s² | Initial vx/vy variance for a new track. |
+
+### IMM and prediction
+
+| Parameter | Type | Default | Unit | Description |
+| --- | --- | --- | --- | --- |
+| `imm_enabled` | bool | true | — | Run the IMM (CV+CTRV) filter; `false` selects the legacy single-CV Kalman path (single-switch rollback, no rebuild). |
+| `imm_p_cv_stay` | double | 0.95 | — | Markov `P(CV → CV)` on `(0, 1)`; the off-diagonal is `1 −` this. |
+| `imm_p_ctrv_stay` | double | 0.95 | — | Markov `P(CTRV → CTRV)` on `(0, 1)`; the off-diagonal is `1 −` this. |
+| `ctrv_process_noise_accel` | double | 1.0 | m²/s⁴ | CTRV linear-acceleration noise variance `σ_a²` (discrete white-noise form). |
+| `ctrv_process_noise_yaw_accel` | double | 1.0 | rad²/s⁴ | CTRV yaw-acceleration noise variance `σ_ω̇²` (drives the `ω` random walk). |
+| `ctrv_init_omega_variance` | double | 1.0 | rad²/s² | `ω` variance at track birth and in the CV → CTRV mixing conversion. |
+| `prediction_steps` | int | 25 | count | Sampled predicted positions published per track; `0` publishes none (the controller falls back to a straight constant-velocity ray). |
+| `prediction_dt` | double | 0.1 | s | Spacing between predicted samples. |
 
 ### Track lifecycle
 

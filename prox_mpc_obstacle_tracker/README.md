@@ -14,7 +14,7 @@ The detection and tracking math is written from scratch (Eigen only, no
 third-party tracker), so the package is license-clean and unit-testable without
 ROS.
 The design, algorithm, parameters, and interfaces are documented in
-[docs/architecture.md](docs/architecture.md).
+[doc/architecture.md](doc/architecture.md).
 
 ## Table of Contents
 
@@ -95,7 +95,7 @@ ros2 topic echo /tracked_obstacles
 
 In simulation the tracker is started automatically by the demo's Nav2 launch with
 `predictive:=True` (see
-[prox_mpc_demo/docs/nav2-simulation.md](../prox_mpc_demo/docs/nav2-simulation.md)).
+[prox_mpc_demo/doc/nav2-simulation.md](../prox_mpc_demo/doc/nav2-simulation.md)).
 
 ## Interfaces
 
@@ -107,7 +107,7 @@ In simulation the tracker is started automatically by the demo's Nav2 launch wit
 The node also requires the TF `tracking_frame ← scan_frame` to place the obstacles
 in the tracking frame.
 The full parameter and lifecycle reference is in
-[docs/architecture.md](docs/architecture.md).
+[doc/architecture.md](doc/architecture.md).
 
 ### IMM and prediction parameters
 
@@ -162,7 +162,7 @@ buffer/listener, and the publisher; `on_activate` resets the tracker and creates
 the scan subscription so processing begins; `on_deactivate` drops the subscription
 and stops output; `on_cleanup` and `on_shutdown` release resources through one
 idempotent teardown path.
-Per-transition detail is in [docs/architecture.md](docs/architecture.md).
+Per-transition detail is in [doc/architecture.md](doc/architecture.md).
 
 ## Composition
 

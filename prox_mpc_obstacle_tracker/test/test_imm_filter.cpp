@@ -41,8 +41,8 @@ Eigen::Vector2d orbit_pos(double t)
     kOrbitCy + kOrbitR * std::sin(kOrbitOmega * t)};
 }
 
-// Filter tuning that meets the Section-6 orbit targets (the config defaults
-// are stickier on CV and only reach mu_ctrv ~ 0.5 on this orbit).
+// Filter tuning that tracks the CTRV orbit (the config defaults are stickier on
+// CV and only reach mu_ctrv ~ 0.5 on this orbit).
 ImmFilter::Params orbitParams()
 {
   ImmFilter::Params p;

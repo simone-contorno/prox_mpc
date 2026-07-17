@@ -222,10 +222,9 @@ TEST(ObstacleTrackerNode, CentroidOffsetPushesPositionAwayFromSensor)
   node->shutdown();
 }
 
-// Every out-of-range IMM/prediction parameter fails on_configure (fail-closed,
-// Section-4 ranges: stay probabilities strictly inside (0, 1), non-negative
-// CTRV noise, positive omega variance, prediction_steps in [0, 100], positive
-// prediction_dt).
+// Every out-of-range IMM/prediction parameter fails on_configure (fail-closed):
+// stay probabilities strictly inside (0, 1), non-negative CTRV noise, positive
+// omega variance, prediction_steps in [0, 100], positive prediction_dt.
 TEST(ObstacleTrackerNode, ConfigureFailsOnOutOfRangeImmParameters)
 {
   const std::vector<rclcpp::Parameter> bad{
