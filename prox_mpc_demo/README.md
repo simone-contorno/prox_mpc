@@ -8,8 +8,9 @@ bring-up of the [prox_mpc_controller](../prox_mpc_controller) plugin.
 
 - [Overview](#overview)
 - [Prerequisites](#prerequisites)
-- [Two ways to run](#two-ways-to-run)
+- [Three ways to run](#three-ways-to-run)
   - [Standalone simulation](#standalone-simulation)
+  - [Interactive Nav2 (kinematic plant, no Gazebo)](#interactive-nav2-kinematic-plant-no-gazebo)
   - [Nav2 + Gazebo Harmonic simulation](#nav2--gazebo-harmonic-simulation)
 - [Project structure](#project-structure)
 - [License](#license)
@@ -37,7 +38,7 @@ ROS dependencies are declared in `package.xml` and resolved by `rosdep install`.
 Third-party assets are attributed in
 [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md).
 
-## Two ways to run
+## Three ways to run
 
 ### Standalone simulation
 
@@ -45,20 +46,43 @@ A self-contained, closed-loop driver for the engine with no external simulator: 
 drives a bundled kinematic model toward a goal, publishes the command and predicted
 path, broadcasts the pose, and logs the solve time.
 Use it to run, visualize, and profile the controller without Nav2.
-See [docs/simulation.md](docs/simulation.md) for the full parameter and interface
+See [doc/simulation.md](doc/simulation.md) for the full parameter and interface
 reference.
 
 ```bash
 colcon build --symlink-install --packages-select prox_mpc_msgs prox_mpc_core prox_mpc_demo
 source install/setup.bash
-ros2 launch prox_mpc_demo simulation.launch.py
 ```
 
-Select the model with the `model` launch argument (`bike` or `r2d2`) and add
+Select the model with the `model` launch argument (`bicycle` or `unicycle`) and add
 `rviz:=true` to visualize the robot:
 
 ```bash
-ros2 launch prox_mpc_demo simulation.launch.py model:=r2d2 rviz:=true
+# default: bicycle model, no RViz
+ros2 launch prox_mpc_demo simulation.launch.py
+
+# unicycle model with RViz
+ros2 launch prox_mpc_demo simulation.launch.py model:=unicycle rviz:=true
+```
+
+### Interactive Nav2 (kinematic plant, no Gazebo)
+
+Drive a kinematic model under a full Nav2 stack — global planner, the ProxMPC
+`controller_server`, and costmaps — and send goals by clicking **Nav2 Goal** in the
+RViz toolbar, with no Gazebo. The model's body (the R2D2 unicycle or the blue
+bicycle) moves to each clicked goal. This launch lives in `prox_mpc_benchmark`,
+which owns the kinematic plant and the Nav2 base config:
+
+```bash
+colcon build --symlink-install --packages-select \
+  prox_mpc_msgs prox_mpc_core prox_mpc_controller prox_mpc_benchmark prox_mpc_demo
+source install/setup.bash
+
+# unicycle (R2D2 body) — default
+ros2 launch prox_mpc_benchmark interactive.launch.py
+
+# bicycle (blue bike body)
+ros2 launch prox_mpc_benchmark interactive.launch.py model:=bicycle
 ```
 
 ### Nav2 + Gazebo Harmonic simulation
@@ -66,15 +90,22 @@ ros2 launch prox_mpc_demo simulation.launch.py model:=r2d2 rviz:=true
 The real-behaviour gate for the controller plugin: it runs the plugin inside a
 live `controller_server` driving a TurtleBot3 waffle under a full Nav2 stack, with
 an opt-in predictive obstacle-avoidance mode.
-See [docs/nav2-simulation.md](docs/nav2-simulation.md) for the scenarios,
+See [doc/nav2-simulation.md](doc/nav2-simulation.md) for the scenarios,
 configuration rationale, and verified results.
 
 ```bash
 colcon build --symlink-install \
   --packages-select prox_mpc_msgs prox_mpc_core prox_mpc_controller prox_mpc_demo
 source install/setup.bash
-ros2 launch prox_mpc_demo nav2_simulation.launch.py                 # baseline
-ros2 launch prox_mpc_demo nav2_simulation.launch.py predictive:=True
+
+# baseline, headless (no Gazebo GUI, no RViz)
+ros2 launch prox_mpc_demo nav2_simulation.launch.py
+
+# Gazebo GUI + RViz + predictive path
+ros2 launch prox_mpc_demo nav2_simulation.launch.py predictive:=True headless:=False use_rviz:=True
+
+# send a goal into the running demo
+ros2 run prox_mpc_benchmark goal_sender.py --points 2.0,-0.5,0.0 --timeout 120
 ```
 
 The predictive mode additionally needs `prox_mpc_obstacle_tracker` built, since
@@ -93,7 +124,7 @@ obstacle term.
 | `worlds/` | Gazebo worlds `prox_mpc_open.sdf.xacro` (open room) and `prox_mpc_world.sdf.xacro` (tb3 pillar maze). |
 | `maps/` | Occupancy map `prox_mpc_open.{pgm,yaml}` for the open world. |
 | `models/` | The `prox_mpc_static_box` and `prox_mpc_dynamic_actor` Gazebo models. |
-| `urdf/` | Robot descriptions `bike.urdf` and `r2d2.urdf`. |
+| `urdf/` | Robot descriptions: `bike.urdf` (self-authored blue bicycle) and `r2d2.urdf` (R2D2-derived unicycle body). |
 | `rviz/` | `simulation.rviz` visualization configuration. |
 
 The Nav2 bring-up depends on Nav2, `ros_gz`, and the canonical

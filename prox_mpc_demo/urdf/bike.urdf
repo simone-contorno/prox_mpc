@@ -1,91 +1,126 @@
 <?xml version="1.0"?>
 <!--
-  Minimal car-like body for the kinematic "bike" (Bicycle) model, authored for
-  ProxMPC and covered by the repository LICENSE.
+  Blue single-track bicycle body for the kinematic "bicycle" (Bicycle) model,
+  authored for ProxMPC from primitive shapes and covered by the repository
+  LICENSE (Apache-2.0); no third-party assets.
 
-  Dimensions mirror prox_mpc_core/include/prox_mpc/models/bike.hpp: chassis length 2.7 m, width
-  1.0 m, wheelbase L = 1.6 m (rear axle at x = -0.8, single steered front wheel
-  at x = +0.8). The root link base_link sits on the z = 0 ground plane at the
-  model's (x, y) reference point; all joints are fixed, so no /joint_states are
-  needed. This is a visual approximation, not a physically exact vehicle.
+  A recognisable diamond-frame bicycle: two in-line wheels at the model wheelbase
+  (rear hub x = -0.8, front hub x = +0.8, so L = 1.6 m, matching
+  prox_mpc_core/include/prox_mpc/models/bicycle.hpp), a frame triangle, a fork,
+  and a handlebar. Frame tubes are cylinders positioned between the frame nodes
+  (bottom bracket, seat top, head top, hubs). The root link base_link sits on the
+  z = 0 ground plane at the model's (x, y) reference point; all joints are fixed,
+  so no /joint_states are needed. Visual approximation, not a physical vehicle.
 -->
 <robot name="bike">
 
-  <material name="bike_body">
-    <color rgba="0.20 0.45 0.70 1"/>
+  <material name="bike_frame">
+    <color rgba="0.10 0.35 0.85 1"/>
   </material>
   <material name="bike_wheel">
-    <color rgba="0.05 0.05 0.05 1"/>
+    <color rgba="0.06 0.06 0.06 1"/>
+  </material>
+  <material name="bike_dark">
+    <color rgba="0.15 0.15 0.15 1"/>
   </material>
 
-  <!-- Empty root at ground level; the chassis is lifted onto the wheels. -->
+  <!-- Empty root at ground level; the frame and wheels are placed above it. -->
   <link name="base_link"/>
 
-  <link name="chassis">
+  <!-- Diamond frame + fork + head tube (multiple visual tubes in one link). -->
+  <link name="frame">
+    <!-- Top tube: seat top (-0.45, 0.95) -> head top (0.55, 0.95). -->
     <visual>
-      <geometry>
-        <box size="2.7 1.0 0.4"/>
-      </geometry>
-      <material name="bike_body"/>
+      <origin xyz="0.05 0 0.95" rpy="0 1.5708 0"/>
+      <geometry><cylinder length="1.00" radius="0.035"/></geometry>
+      <material name="bike_frame"/>
+    </visual>
+    <!-- Down tube: bottom bracket (-0.15, 0.32) -> head top (0.55, 0.95). -->
+    <visual>
+      <origin xyz="0.20 0 0.635" rpy="0 0.8380 0"/>
+      <geometry><cylinder length="0.9418" radius="0.035"/></geometry>
+      <material name="bike_frame"/>
+    </visual>
+    <!-- Seat tube: bottom bracket (-0.15, 0.32) -> seat top (-0.45, 0.95). -->
+    <visual>
+      <origin xyz="-0.30 0 0.635" rpy="0 -0.4438 0"/>
+      <geometry><cylinder length="0.6978" radius="0.035"/></geometry>
+      <material name="bike_frame"/>
+    </visual>
+    <!-- Chain stay: bottom bracket (-0.15, 0.32) -> rear hub (-0.8, 0.35). -->
+    <visual>
+      <origin xyz="-0.475 0 0.335" rpy="0 -1.5247 0"/>
+      <geometry><cylinder length="0.6507" radius="0.030"/></geometry>
+      <material name="bike_frame"/>
+    </visual>
+    <!-- Seat stay: seat top (-0.45, 0.95) -> rear hub (-0.8, 0.35). -->
+    <visual>
+      <origin xyz="-0.625 0 0.65" rpy="0 -2.6127 0"/>
+      <geometry><cylinder length="0.6946" radius="0.030"/></geometry>
+      <material name="bike_frame"/>
+    </visual>
+    <!-- Fork: head top (0.55, 0.95) -> front hub (0.8, 0.35). -->
+    <visual>
+      <origin xyz="0.675 0 0.65" rpy="0 2.7468 0"/>
+      <geometry><cylinder length="0.65" radius="0.030"/></geometry>
+      <material name="bike_frame"/>
+    </visual>
+    <!-- Head tube: head top (0.55, 0.95) -> handlebar (0.58, 1.00). -->
+    <visual>
+      <origin xyz="0.565 0 0.975" rpy="0 0.5404 0"/>
+      <geometry><cylinder length="0.058" radius="0.035"/></geometry>
+      <material name="bike_dark"/>
+    </visual>
+    <!-- Saddle on the seat post. -->
+    <visual>
+      <origin xyz="-0.45 0 0.99" rpy="0 0 0"/>
+      <geometry><box size="0.24 0.08 0.04"/></geometry>
+      <material name="bike_dark"/>
     </visual>
   </link>
-
-  <joint name="base_to_chassis" type="fixed">
+  <joint name="base_to_frame" type="fixed">
     <parent link="base_link"/>
-    <child link="chassis"/>
-    <origin xyz="0 0 0.5"/>
+    <child link="frame"/>
+    <origin xyz="0 0 0"/>
   </joint>
 
-  <link name="rear_left_wheel">
+  <!-- Handlebar: a cross tube above the head tube. -->
+  <link name="handlebar">
     <visual>
-      <origin rpy="1.5707963 0 0" xyz="0 0 0"/>
-      <geometry>
-        <cylinder length="0.2" radius="0.3"/>
-      </geometry>
+      <origin xyz="0 0 0" rpy="1.5708 0 0"/>
+      <geometry><cylinder length="0.50" radius="0.025"/></geometry>
+      <material name="bike_dark"/>
+    </visual>
+  </link>
+  <joint name="handlebar_joint" type="fixed">
+    <parent link="frame"/>
+    <child link="handlebar"/>
+    <origin xyz="0.58 0 1.00"/>
+  </joint>
+
+  <link name="rear_wheel">
+    <visual>
+      <origin xyz="0 0 0" rpy="1.5708 0 0"/>
+      <geometry><cylinder length="0.05" radius="0.35"/></geometry>
       <material name="bike_wheel"/>
     </visual>
   </link>
-  <joint name="rear_left_wheel_joint" type="fixed">
+  <joint name="rear_wheel_joint" type="fixed">
     <parent link="base_link"/>
-    <child link="rear_left_wheel"/>
-    <origin xyz="-0.8 0.5 0.3"/>
-  </joint>
-
-  <link name="rear_right_wheel">
-    <visual>
-      <origin rpy="1.5707963 0 0" xyz="0 0 0"/>
-      <geometry>
-        <cylinder length="0.2" radius="0.3"/>
-      </geometry>
-      <material name="bike_wheel"/>
-    </visual>
-  </link>
-  <joint name="rear_right_wheel_joint" type="fixed">
-    <parent link="base_link"/>
-    <child link="rear_right_wheel"/>
-    <origin xyz="-0.8 -0.5 0.3"/>
-  </joint>
-
-  <!-- Single steered front wheel (held at zero steering for visualization). -->
-  <link name="steering_link"/>
-  <joint name="steering_joint" type="fixed">
-    <parent link="base_link"/>
-    <child link="steering_link"/>
-    <origin xyz="0.8 0 0.3"/>
+    <child link="rear_wheel"/>
+    <origin xyz="-0.8 0 0.35"/>
   </joint>
 
   <link name="front_wheel">
     <visual>
-      <origin rpy="1.5707963 0 0" xyz="0 0 0"/>
-      <geometry>
-        <cylinder length="0.2" radius="0.3"/>
-      </geometry>
+      <origin xyz="0 0 0" rpy="1.5708 0 0"/>
+      <geometry><cylinder length="0.05" radius="0.35"/></geometry>
       <material name="bike_wheel"/>
     </visual>
   </link>
   <joint name="front_wheel_joint" type="fixed">
-    <parent link="steering_link"/>
+    <parent link="base_link"/>
     <child link="front_wheel"/>
-    <origin xyz="0 0 0"/>
+    <origin xyz="0.8 0 0.35"/>
   </joint>
 </robot>

@@ -13,7 +13,7 @@
 
   Custom robot models and extra obstacles can also be spawned into the running
   world at runtime with `ros2 run ros_gz_sim create ...` (the UserCommands system
-  below enables runtime insertion). See NAV2_SIMULATION.md.
+  below enables runtime insertion). See doc/nav2-simulation.md.
 
   Args:
     headless   (default true)  : drop the SceneBroadcaster when headless.

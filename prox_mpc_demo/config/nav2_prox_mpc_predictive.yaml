@@ -4,7 +4,7 @@
 # enables the predictive (dynamic) obstacle-avoidance feature (max_obstacles > 0,
 # predict_obstacles: true, with the wall-rejection guards). Selected by the launch
 # `predictive:=True` switch, which also starts the obstacle tracker. The baseline
-# nav2_prox_mpc.yaml keeps the feature off and is the verified normal-nav gate.
+# nav2_prox_mpc.yaml keeps the feature off.
 #
 # This file is a copy of the stock nav2_bringup `nav2_params.yaml` (Jazzy) with
 # exactly two deliberate changes, so the rest of the navigation stack is the
@@ -13,8 +13,7 @@
 #      controller to `prox_mpc_controller::ProxMpcController`, using the Unicycle
 #      model whose body twist [v, omega] matches the diff-drive TurtleBot3 waffle.
 #   2. amcl is seeded with an initial pose so headless runs localize without a
-#      manual "2D Pose Estimate" (the /initialpose path still works; see the
-#      runbook NAV2_SIMULATION.md).
+#      manual "2D Pose Estimate" (the /initialpose path still works).
 # Everything else (planner, costmaps, smoother, collision monitor, BT, behaviors)
 # is unchanged from the stock file. The cmd_vel chain
 # controller_server(cmd_vel_nav) -> velocity_smoother(cmd_vel_smoothed)
@@ -124,22 +123,21 @@ controller_server:
       nc: 20
       dt: 0.1
 
-      # Cruise speed the global plan is sampled at. At the velocity smoother's
-      # 0.5 m/s cap: a slower value samples the reference too close to the robot
-      # (~0.5 m over the horizon), so heading tracking dominates and the MPC spins
-      # to align instead of translating. 0.5 places the reference ~1 m ahead,
-      # making forward motion the optimal action.
+      # Cruise speed [m/s] the global plan is sampled at. Set to the velocity
+      # smoother's 0.5 m/s cap so the reference sits ~1 m ahead over the horizon
+      # and forward motion dominates heading tracking.
       desired_linear_vel: 0.5
 
-      # Cost weights. With the reference placed ~1 m ahead (desired_linear_vel
-      # 0.5) forward motion dominates, so heading tracking is restored to keep the
-      # robot tight on the collision-free global path (q_theta=0 over-swings and
-      # drifts into obstacles).
+      # Cost weights. q_theta keeps the robot tight on the collision-free global
+      # path once forward motion dominates.
       q_pos: 10.0
       q_theta: 1.0
       s_factor: 2.0
       r_weight: 0.1
-      w_weight: 100.0
+      # Obstacle keep-out slack penalty (quadratic). At 1000, small violations of
+      # the inflated margin stay cheap enough to close the goal while cutting into
+      # the physical keep-out stays uneconomical.
+      w_weight: 1000.0
 
       # Solver limits (core defaults).
       max_int_iter_qp: 1500
@@ -150,14 +148,21 @@ controller_server:
       max_solver_failures: 3
 
       # Obstacle avoidance — PREDICTIVE feature ENABLED. The in-loop NMPC obstacle
-      # term runs alongside Nav2 (Nav2 still replans the global path). cbf_gamma<1
-      # couples consecutive nodes so the safety margin decays gradually (cbf_gamma=1
-      # made "stay put" locally optimal near a dense field and stalled the robot).
-      max_obstacles: 2
+      # term runs alongside Nav2 (Nav2 still replans the global path). Tuned for
+      # single-/sparse-obstacle worlds:
+      #  * costmap_cost_threshold 253: ingest only lethal/inscribed cells. A lower
+      #    threshold also ingests the inflation ring, which then adds
+      #    robot_radius + safety_margin around each cell — double-counting the
+      #    robot radius into a phantom keep-out the robot stalls against. 253 adds
+      #    the keep-out exactly once.
+      #  * cbf_gamma 1.0: pointwise keep-out. A dense field may instead prefer a
+      #    lower gamma; this value targets the open-world single/dynamic cells.
+      #  * max_obstacles 4: capture the box plus adjacent wall cells.
+      max_obstacles: 4
       safety_margin: 0.1
       robot_radius: 0.22
-      cbf_gamma: 0.3
-      costmap_cost_threshold: 200
+      cbf_gamma: 1.0
+      costmap_cost_threshold: 253
       obstacle_cluster_radius: 0.3
 
       # Predictive (dynamic) obstacle avoidance. The launch starts the tracker on
@@ -171,8 +176,13 @@ controller_server:
       obstacle_topic: "tracked_obstacles"
       obstacle_timeout: 0.5
       dynamic_speed_threshold: 0.2
-      prediction_uncertainty_growth: 0.0
-      max_dynamic_obstacles: 1
+      # Small hedge (m/s) against residual prediction error as the sample ages.
+      prediction_uncertainty_growth: 0.05
+      # After an association break (obstacle direction reversal) the old track
+      # coasts as a phantom while the real obstacle is re-acquired as a new track;
+      # with a single slot the phantom can outrank the real track and the solver
+      # goes blind to it. Matters for dynamic obstacles, inert for the static box.
+      max_dynamic_obstacles: 2
       max_dynamic_obstacle_radius: 0.5
 
       log_level: "info"

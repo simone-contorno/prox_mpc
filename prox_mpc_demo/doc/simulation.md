@@ -30,7 +30,7 @@ Switch model or tune the run by editing it, or override a parameter on the comma
 line:
 
 ```bash
-ros2 run prox_mpc_demo prox_mpc_simulation --ros-args -p model:=r2d2
+ros2 run prox_mpc_demo prox_mpc_simulation --ros-args -p model:=unicycle
 ```
 
 Add `rviz:=true` to the launch to also start RViz, `robot_state_publisher`, and
@@ -45,7 +45,7 @@ tracking-demo defaults.
 
 | Parameter | Type | Default | Unit | Meaning |
 | --- | --- | --- | --- | --- |
-| `model` | string | `bike` | — | `bike` (bicycle, 4 states) or `r2d2` (unicycle, 3 states). |
+| `model` | string | `bicycle` | — | `bicycle` (4-state) or `unicycle` (3-state). |
 | `np` | int | 20 | nodes | Prediction horizon (must be ≥ 1). |
 | `nc` | int | 20 | nodes | Control horizon (must be ≥ 1). |
 | `dt` | double | 0.1 | s | Step size, also the control period (must be > 0). |

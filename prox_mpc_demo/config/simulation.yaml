@@ -1,7 +1,7 @@
 prox_mpc_simulation:
   ros__parameters:
-    # Model: "bike" (4 states, bicycle) or "r2d2" (3 states, unicycle).
-    model: "bike"
+    # Model: "bicycle" (4-state) or "unicycle" (3-state).
+    model: "bicycle"
 
     # Horizons and step size.
     np: 20            # prediction horizon shooting nodes

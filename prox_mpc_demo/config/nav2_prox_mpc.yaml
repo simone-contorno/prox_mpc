@@ -7,8 +7,7 @@
 #      controller to `prox_mpc_controller::ProxMpcController`, using the Unicycle
 #      model whose body twist [v, omega] matches the diff-drive TurtleBot3 waffle.
 #   2. amcl is seeded with an initial pose so headless runs localize without a
-#      manual "2D Pose Estimate" (the /initialpose path still works; see the
-#      runbook NAV2_SIMULATION.md).
+#      manual "2D Pose Estimate" (the /initialpose path still works).
 # Everything else (planner, costmaps, smoother, collision monitor, BT, behaviors)
 # is unchanged from the stock file. The cmd_vel chain
 # controller_server(cmd_vel_nav) -> velocity_smoother(cmd_vel_smoothed)
@@ -118,17 +117,13 @@ controller_server:
       nc: 20
       dt: 0.1
 
-      # Cruise speed the global plan is sampled at. At the velocity smoother's
-      # 0.5 m/s cap: a slower value samples the reference too close to the robot
-      # (~0.5 m over the horizon), so heading tracking dominates and the MPC spins
-      # to align instead of translating. 0.5 places the reference ~1 m ahead,
-      # making forward motion the optimal action.
+      # Cruise speed [m/s] the global plan is sampled at. Set to the velocity
+      # smoother's 0.5 m/s cap so the reference sits ~1 m ahead over the horizon
+      # and forward motion dominates heading tracking.
       desired_linear_vel: 0.5
 
-      # Cost weights. With the reference placed ~1 m ahead (desired_linear_vel
-      # 0.5) forward motion dominates, so heading tracking is restored to keep the
-      # robot tight on the collision-free global path (q_theta=0 over-swings and
-      # drifts into obstacles).
+      # Cost weights. q_theta keeps the robot tight on the collision-free global
+      # path once forward motion dominates.
       q_pos: 10.0
       q_theta: 1.0
       s_factor: 2.0
@@ -143,14 +138,11 @@ controller_server:
       guess: true
       max_solver_failures: 3
 
-      # Obstacle avoidance. THIS FILE IS THE VERIFIED NORMAL-NAVIGATION BASELINE:
-      # the in-loop NMPC obstacle term is OFF (max_obstacles: 0), so avoidance is
-      # delegated entirely to Nav2's planner + costmaps (global replanning around
-      # marked obstacles) — the standard, verified-SUCCEEDED Nav2 architecture.
-      # The predictive (dynamic) obstacle-avoidance feature is opt-in and lives in
-      # nav2_prox_mpc_predictive.yaml; run it with `predictive:=True` (see
-      # NAV2_SIMULATION.md). Keeping it off here guarantees normal path tracking +
-      # Nav2 replanning behave exactly as before.
+      # Obstacle avoidance. The in-loop NMPC obstacle term is off (max_obstacles: 0),
+      # so avoidance is delegated to Nav2's planner + costmaps (global replanning
+      # around marked obstacles). The predictive (dynamic) obstacle-avoidance
+      # feature is opt-in and lives in nav2_prox_mpc_predictive.yaml; enable it with
+      # `predictive:=True`.
       max_obstacles: 0
       safety_margin: 0.1
       robot_radius: 0.22

@@ -1,6 +1,6 @@
 <?xml version="1.0"?>
 <!--
-  Open-room ProxMPC world for the clean SUCCEEDED gate.
+  Open-room ProxMPC world for open-space navigation.
 
   A 6x6 m room (walls at +/-3.0 m, inner face ~2.95 m) with an empty interior, so
   the controller drives to the goal in open space (its smooth-tracking regime,
