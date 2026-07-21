@@ -24,7 +24,11 @@ find_package(ament_cmake REQUIRED)
 find_package(prox_mpc_core REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(Eigen3 REQUIRED)
-find_package(proxsuite REQUIRED)
+# 0.6.5 is the floor package.xml declares. It matters: 0.6.5 inserted an
+# enumerator into QPSolverOutput, so an older copy on CMAKE_PREFIX_PATH
+# (for example an unmanaged /usr/local install) compiles against a different
+# solver contract than the declared dependency.
+find_package(proxsuite 0.6.5 REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(nav_msgs REQUIRED)
 find_package(prox_mpc_msgs REQUIRED)
@@ -53,8 +57,19 @@ install(
   TARGETS prox_mpc_simulation
   DESTINATION lib/${PROJECT_NAME}
 )
+# Keep byte-compiled launch files out of the install space. Both patterns are
+# needed: plain CMake matches the "__pycache__" directory name, while
+# ament's --symlink-install reimplementation globs files only and needs "*.pyc".
 install(
   DIRECTORY launch config urdf rviz worlds models maps
+  DESTINATION share/${PROJECT_NAME}
+  PATTERN "__pycache__" EXCLUDE
+  PATTERN "*.pyc" EXCLUDE
+)
+# Attribution for the bundled BSD-3-Clause R2D2 URDF and the Apache-2.0-derived
+# worlds ships alongside the assets it covers.
+install(
+  FILES THIRD_PARTY_LICENSES.md
   DESTINATION share/${PROJECT_NAME}
 )
 

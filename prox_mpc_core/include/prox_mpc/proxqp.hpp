@@ -15,7 +15,6 @@
 #include <proxsuite/helpers/optional.hpp>
 #include <proxsuite/proxqp/dense/dense.hpp>
 #include <proxsuite/proxqp/sparse/sparse.hpp>
-#include <proxsuite/proxqp/utils/random_qp_problems.hpp>
 
 namespace prox_mpc
 {
@@ -61,6 +60,9 @@ public:
   void setMaxOutIter(size_t max_out_iter);
   void setQPType(bool qp_type);
   void setGuess(bool guess);
+
+  /// Initial-guess policy handed to proxsuite for each QP sub-problem.
+  proxsuite::proxqp::InitialGuessStatus initialGuessPolicy() const;
   void setCbfGamma(double cbf_gamma);
 
   /* Obstacle avoidance */
@@ -107,8 +109,8 @@ private:
   /* Constraints */
   size_t n_eq;                   // Number of equalities.
   size_t n_ineq;                 // Number of inequalities.
-  std::vector<size_t> eq_idx;    // Equalities indeces.
-  std::vector<size_t> ineq_idx;  // Inequalities indeces.
+  std::vector<size_t> eq_idx;    // Equalities indices.
+  std::vector<size_t> ineq_idx;  // Inequalities indices.
   size_t eq_tot;                 // Total number of equalities.
   size_t ineq_tot;               // Total number of inequalities.
 
@@ -133,8 +135,6 @@ private:
 
   /* Results */
   proxsuite::proxqp::sparse::Vec<double> result_x;       // Optimal decision variables.
-  proxsuite::proxqp::sparse::Vec<double> result_lambda;  // Optimal equality Lagrange multipliers.
-  proxsuite::proxqp::sparse::Vec<double> result_mu;      // Optimal inequality Lagrange multipliers.
   proxsuite::proxqp::Info<double> qp_info;               // QP information.
 
   /* Obstacle avoidance: linearized signed-distance half-plane, K slots per node. */

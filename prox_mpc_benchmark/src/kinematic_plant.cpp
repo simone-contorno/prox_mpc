@@ -8,7 +8,7 @@
 // unicycle (x, y, theta) and publishes the resulting pose as /odom plus the
 // odom -> base_link transform. A separate static map -> odom identity makes the
 // integrated pose the ground truth in the map frame, so the metrics node reads an
-// exact pose with no localization noise — every controller under test drives the
+// exact pose with no localization noise - every controller under test drives the
 // same deterministic plant (mode b2). Because the command is a body twist
 // (v forward, omega yaw), a unicycle integrator is the controller-agnostic plant:
 // diff-drive (DWB / MPPI / RPP / ProxMPC-Unicycle) all map 1:1 onto it.
@@ -16,6 +16,7 @@
 // On command staleness (no /cmd_vel within cmd_timeout) the plant holds zero, so
 // it parks at the goal once the controller stops and never coasts on a lost link.
 
+#include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <memory>

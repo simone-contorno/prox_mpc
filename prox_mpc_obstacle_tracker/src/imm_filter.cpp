@@ -180,8 +180,8 @@ void ImmFilter::predict(double dt)
 {
   if (dt <= 0.0) {
     // No time elapsed: the Markov transition degenerates to the identity, so
-    // mixing is the identity and neither model propagates (legacy guard for
-    // non-monotonic stamps). cbar = mu keeps the update consistent.
+    // mixing is the identity and neither model propagates (this also guards
+    // against a non-monotonic stamp). cbar = mu keeps the update consistent.
     cbar_ = mu_;
     return;
   }
@@ -231,8 +231,8 @@ void ImmFilter::predict(double dt)
     mix(0, 1) * (p_cv_in_ctrv + d_cv_ctrv * d_cv_ctrv.transpose()) +
     mix(1, 1) * (p_ctrv_ + d_ctrv_ctrv * d_ctrv_ctrv.transpose());
 
-  // CV predict: the legacy tracker math (discrete white-noise acceleration,
-  // spectral density q = process_noise), unchanged.
+  // CV predict: discrete white-noise acceleration process model, spectral
+  // density q = process_noise.
   Eigen::Matrix4d f = Eigen::Matrix4d::Identity();
   f(0, 2) = dt;
   f(1, 3) = dt;
@@ -274,7 +274,7 @@ void ImmFilter::update(const Eigen::Vector2d & z)
 {
   const Eigen::Matrix2d r = params_.measurement_noise * Eigen::Matrix2d::Identity();
 
-  // CV update: the legacy tracker math, unchanged.
+  // CV update: linear Kalman update with a position-only measurement model.
   Eigen::Matrix<double, 2, 4> h_cv = Eigen::Matrix<double, 2, 4>::Zero();
   h_cv(0, 0) = 1.0;
   h_cv(1, 1) = 1.0;

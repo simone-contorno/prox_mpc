@@ -5,7 +5,6 @@
 #define PROX_MPC_TEST_MODELS__NON_FINITE_TWIST_MODEL_HPP_
 
 #include <limits>
-#include <map>
 #include <string>
 
 #include <geometry_msgs/msg/twist.hpp>

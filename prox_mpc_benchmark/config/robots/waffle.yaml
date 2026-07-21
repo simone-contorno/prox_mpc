@@ -3,7 +3,7 @@
 # standalone mode (b1) only `model` is relevant.
 robot:
   name: waffle
-  model: unicycle                      # prox_mpc Unicycle (3-state [x, y, theta])
+  model: unicycle                 # prox_mpc Unicycle (3-state [x, y, theta])
   model_plugin: prox_mpc_core/Unicycle
   drive: diff
   wheelbase: 0.0                  # unused by the unicycle

@@ -10,10 +10,12 @@
   in simulation under a full Nav2 stack.</description>
   <maintainer email="simone.contorno@outlook.it">Simone Contorno</maintainer>
   <license>Apache-2.0</license>
+  <url type="repository">https://github.com/simone-contorno/prox_mpc</url>
+  <url type="bugtracker">https://github.com/simone-contorno/prox_mpc/issues</url>
 
   <buildtool_depend>ament_cmake</buildtool_depend>
 
-  <depend>Eigen3</depend>
+  <depend>eigen</depend>
   <depend>geometry_msgs</depend>
   <depend>nav2_core</depend>
   <depend>nav2_costmap_2d</depend>

@@ -1,4 +1,4 @@
-# ProxMpcController — Control Law
+# ProxMpcController - Control Law
 
 This document covers the math the controller adds around the engine: turning the
 global plan into a reference, reducing the costmap into obstacle triples,
@@ -100,7 +100,7 @@ degrades to costmap-only for that cycle.
 Each track with speed above `dynamic_speed_threshold` is a candidate (slower
 tracks are left to the costmap).
 A track whose radius exceeds `max_dynamic_obstacle_radius` (when set) is rejected,
-guarding against extended structure (walls) reported as a moving object — its
+guarding against extended structure (walls) reported as a moving object - its
 centroid drifts at roughly robot speed and would otherwise inflate $d_\text{safe}$
 and erase real costmap cells.
 Candidates are ranked by their closest approach to the reference trajectory over
@@ -109,7 +109,7 @@ the horizon, and the nearest $\min(K, \text{max\_dynamic\_obstacles})$ are kept.
 Each selected obstacle $j$ is propagated to every node and bound to slot $j$ for
 the whole horizon (so the half-planes track one object across nodes).
 When the message carries prediction samples (`prediction_dt > 0` and a non-empty,
-finite `predicted_positions` polyline — the tracker's IMM CV+CTRV forward
+finite `predicted_positions` polyline - the tracker's IMM CV+CTRV forward
 prediction), the controller follows that sampled trajectory at each horizon time
 $k\,\Delta t + \text{age}$: piecewise-linear interpolation inside the sampled span,
 and straight-line extrapolation along the last segment beyond it.

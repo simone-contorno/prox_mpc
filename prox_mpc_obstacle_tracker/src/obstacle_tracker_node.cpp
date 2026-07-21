@@ -74,16 +74,19 @@ ObstacleTrackerNode::CallbackReturn ObstacleTrackerNode::on_configure(
     cluster_gap_ = declare_parameter<double>("cluster_gap", 0.3);
     min_cluster_points_ = declare_parameter<int>("min_cluster_points", 3);
     max_clusters_ = declare_parameter<int>("max_clusters", 20);
-    max_cluster_radius_ = declare_parameter<double>("max_cluster_radius", 0.0);
+    // Defaults mirror config/obstacle_tracker.yaml so an invocation without a
+    // params file still runs wall rejection, the range cap, and the centroid
+    // debias. Zero disables each of the three.
+    max_cluster_radius_ = declare_parameter<double>("max_cluster_radius", 0.6);
     min_detection_range_ = declare_parameter<double>("min_detection_range", 0.0);
-    max_detection_range_ = declare_parameter<double>("max_detection_range", 0.0);
+    max_detection_range_ = declare_parameter<double>("max_detection_range", 3.0);
     cluster_center_offset_gain_ =
-      declare_parameter<double>("cluster_center_offset_gain", 0.0);
+      declare_parameter<double>("cluster_center_offset_gain", 0.5);
     transform_timeout_ = declare_parameter<double>("transform_timeout", 0.1);
 
     Tracker::Params tp;
-    tp.process_noise = declare_parameter<double>("process_noise", 1.0);
-    tp.measurement_noise = declare_parameter<double>("measurement_noise", 0.01);
+    tp.process_noise = declare_parameter<double>("process_noise", 0.1);
+    tp.measurement_noise = declare_parameter<double>("measurement_noise", 0.002);
     tp.association_gate = declare_parameter<double>("association_gate", 0.5);
     tp.initial_velocity_variance =
       declare_parameter<double>("initial_velocity_variance", 1.0);
@@ -93,7 +96,7 @@ ObstacleTrackerNode::CallbackReturn ObstacleTrackerNode::on_configure(
 
     tp.imm_enabled = declare_parameter<bool>("imm_enabled", true);
     tp.imm_p_cv_stay = declare_parameter<double>("imm_p_cv_stay", 0.95);
-    tp.imm_p_ctrv_stay = declare_parameter<double>("imm_p_ctrv_stay", 0.95);
+    tp.imm_p_ctrv_stay = declare_parameter<double>("imm_p_ctrv_stay", 0.99);
     tp.ctrv_process_noise_accel =
       declare_parameter<double>("ctrv_process_noise_accel", 1.0);
     tp.ctrv_process_noise_yaw_accel =

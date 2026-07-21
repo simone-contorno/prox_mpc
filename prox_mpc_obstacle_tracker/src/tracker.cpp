@@ -114,7 +114,8 @@ void Tracker::update(const std::vector<Cluster> & measurements, double stamp)
   }
 
   // Filter update for matched tracks; lifecycle bookkeeping for all. On the
-  // legacy path this is the original inline Kalman update, unchanged.
+  // legacy path this is an inline linear Kalman update with a position-only
+  // measurement model.
   Eigen::Matrix<double, 2, 4> h = Eigen::Matrix<double, 2, 4>::Zero();
   h(0, 0) = 1.0;
   h(1, 1) = 1.0;

@@ -39,11 +39,11 @@ std::vector<Point2> scan_to_points(
 /// than cluster_gap [m] between consecutive points closes the current cluster.
 /// Clusters with fewer than min_points members are dropped, and clusters whose
 /// enclosing radius exceeds max_radius [m] are dropped too (max_radius <= 0
-/// disables this) — this rejects extended structure (walls), whose centroid is
+/// disables this) - this rejects extended structure (walls), whose centroid is
 /// not a stable physical point and drifts as the robot moves, which would
 /// otherwise be tracked as a phantom moving obstacle. The result is capped to the
 /// max_clusters largest clusters (by member count) to bound downstream cost. The
-/// scan seam (last-to-first wrap) IS merged when the sweep's end points are
+/// scan seam (last-to-first wrap) is merged when the sweep's end points are
 /// gap-adjacent: an object straddling +-pi bearing must yield one cluster, not
 /// two half-arc duplicates that spawn a second track with a corrupted centroid.
 std::vector<Cluster> cluster_points(

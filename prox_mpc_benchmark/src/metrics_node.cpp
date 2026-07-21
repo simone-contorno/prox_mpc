@@ -5,8 +5,8 @@
 // Controller-agnostic live benchmark metrics node.
 //
 // It measures the accuracy class (cross-track error vs a reference polyline and
-// goal error) from generic signals — the robot pose (TF map -> base_link, or a
-// bridged ground-truth pose in Gazebo) plus the scenario reference — so every
+// goal error) from generic signals - the robot pose (TF map -> base_link, or a
+// bridged ground-truth pose in Gazebo) plus the scenario reference - so every
 // controller under test is measured identically. It also taps the
 // SolverDiagnostics stream for the real-time / feasibility class. Live cross-track
 // and goal-distance are published as std_msgs/Float64 for inspection/recording,
@@ -18,6 +18,7 @@
 #include <cmath>
 #include <fstream>
 #include <functional>
+#include <future>
 #include <limits>
 #include <memory>
 #include <numeric>
@@ -97,7 +98,7 @@ public:
       diag_topic, rclcpp::QoS(50),
       std::bind(&MetricsNode::onDiag, this, std::placeholders::_1));
 
-    // Obstacle clock anchor: latch on the SAME /odom stream and stamps the scan
+    // Obstacle clock anchor: latch on the same /odom stream and stamps the scan
     // simulator latches on, so the scored obstacle trajectory is phase-identical
     // to the one ray-cast into /scan. The TF-displacement latch in sample() is
     // kept only as a fallback for setups without this odom topic; the two clocks
@@ -123,6 +124,10 @@ public:
   }
 
   // Compute the per-run summary and write it as JSON (called on shutdown).
+  /* Signalled once the run has finished, so main can stop the executor instead
+   * of tearing the context down from inside a callback. */
+  std::shared_future<void> finished() const {return finished_future_;}
+
   void writeSummary()
   {
     if (summary_json_.empty()) {return;}
@@ -296,8 +301,13 @@ private:
     // Self-terminate a short settle after the goal so the orchestrator detects the
     // run finished (the summary is written by main once spin returns).
     if (reached_ && auto_exit_ && (stamp - reach_stamp_).seconds() >= settle_s_) {
-      RCLCPP_INFO(get_logger(), "goal reached; shutting down to write summary.");
-      rclcpp::shutdown();
+      RCLCPP_INFO(get_logger(), "goal reached; stopping to write summary.");
+      // The promise is one-shot; later callbacks may still arrive before the
+      // executor unwinds.
+      if (!finished_signalled_) {
+        finished_signalled_ = true;
+        finished_.set_value();
+      }
       return;
     }
 
@@ -353,13 +363,21 @@ private:
   double sqp_sum_{0.0}, qp_ext_sum_{0.0}, slack_max_{0.0};
   std::vector<double> solve_ms_;
   int recoveries_{0};  // not observable in standalone; bag-based path fills it for mode (a)
+
+  std::promise<void> finished_;
+  std::shared_future<void> finished_future_{finished_.get_future().share()};
+  bool finished_signalled_{false};
 };
 
 int main(int argc, char ** argv)
 {
   rclcpp::init(argc, argv);
   auto node = std::make_shared<MetricsNode>();
-  rclcpp::spin(node);
+  rclcpp::executors::SingleThreadedExecutor exec;
+  exec.add_node(node);
+  // Returns when the node signals completion, or when an external SIGINT
+  // invalidates the context; the summary is written either way.
+  exec.spin_until_future_complete(node->finished());
   node->writeSummary();
   rclcpp::shutdown();
   return 0;

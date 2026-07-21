@@ -2,12 +2,14 @@
 // SPDX-License-Identifier: Apache-2.0
 
 
-// Unit tests for the ObstacleTrackerNode ROS lifecycle wrapper (the algorithm-free
-// integration around the ROS-tested clustering/tracker core). They cover the
-// lifecycle ladder and teardown, the on_configure validation-failure branch, and
-// the end-to-end scan path (publish a synthetic scan in the tracking frame, so no
-// TF is needed, and observe the published ObstacleArray). The clustering and
-// Kalman tracking themselves are covered by test_clustering / test_tracker.
+// Integration tests for the ObstacleTrackerNode ROS lifecycle wrapper (the
+// algorithm-free integration around the ROS-free clustering/tracker core). They
+// cover the lifecycle ladder and teardown, the on_configure validation-failure
+// branch, and the end-to-end scan path (publish a synthetic scan in the tracking
+// frame, so no TF is needed, and observe the published ObstacleArray). The
+// clustering and tracking filters themselves - IMM is the default tracking path,
+// not plain Kalman - are covered by test_clustering / test_imm_filter /
+// test_tracker.
 
 #include <array>
 #include <chrono>

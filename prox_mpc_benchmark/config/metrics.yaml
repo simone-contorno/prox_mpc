@@ -7,7 +7,7 @@ repeats: 5
 # MPC sizing / rate shared by the standalone (b1) and Nav2 modes unless a scenario
 # or controller preset overrides it.
 control:
-  dt: 0.1            # control period [s]; the real-time budget is 1000*dt ms
+  dt: 0.1           # control period [s]; the real-time budget is 1000*dt ms
   np: 20            # prediction horizon nodes
   nc: 20            # control horizon nodes
   v_ref: 1.0        # cruise speed [m/s]

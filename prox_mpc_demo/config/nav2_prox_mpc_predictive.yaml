@@ -1,4 +1,4 @@
-# Nav2 parameters for the ProxMPC controller simulation — PREDICTIVE variant.
+# Nav2 parameters for the ProxMPC controller simulation - predictive variant.
 #
 # Identical to nav2_prox_mpc.yaml except the FollowPath obstacle block, which
 # enables the predictive (dynamic) obstacle-avoidance feature (max_obstacles > 0,
@@ -7,8 +7,8 @@
 # nav2_prox_mpc.yaml keeps the feature off.
 #
 # This file is a copy of the stock nav2_bringup `nav2_params.yaml` (Jazzy) with
-# exactly two deliberate changes, so the rest of the navigation stack is the
-# proven, plugin-agnostic reference:
+# the changes below, so the rest of the navigation stack is the proven,
+# plugin-agnostic reference:
 #   1. controller_server -> FollowPath is repointed from the default MPPI
 #      controller to `prox_mpc_controller::ProxMpcController`, using the Unicycle
 #      model whose body twist [v, omega] matches the diff-drive TurtleBot3 waffle.
@@ -147,12 +147,12 @@ controller_server:
       guess: true
       max_solver_failures: 3
 
-      # Obstacle avoidance — PREDICTIVE feature ENABLED. The in-loop NMPC obstacle
+      # Obstacle avoidance - predictive feature enabled. The in-loop NMPC obstacle
       # term runs alongside Nav2 (Nav2 still replans the global path). Tuned for
       # single-/sparse-obstacle worlds:
       #  * costmap_cost_threshold 253: ingest only lethal/inscribed cells. A lower
       #    threshold also ingests the inflation ring, which then adds
-      #    robot_radius + safety_margin around each cell — double-counting the
+      #    robot_radius + safety_margin around each cell - double-counting the
       #    robot radius into a phantom keep-out the robot stalls against. 253 adds
       #    the keep-out exactly once.
       #  * cbf_gamma 1.0: pointwise keep-out. A dense field may instead prefer a
@@ -170,7 +170,7 @@ controller_server:
       # to a dynamic slot, the static box/walls keep coming from the costmap
       # (hybrid). max_dynamic_obstacle_radius rejects any extended track (a wall
       # mis-reported as moving) from the predictive path so it cannot inflate the
-      # keep-out or erase real costmap cells — the tracker's max_cluster_radius is
+      # keep-out or erase real costmap cells - the tracker's max_cluster_radius is
       # the first line of defense; this is the controller-side backstop.
       predict_obstacles: true
       obstacle_topic: "tracked_obstacles"

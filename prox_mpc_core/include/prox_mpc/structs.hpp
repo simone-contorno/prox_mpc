@@ -18,7 +18,7 @@ struct ProbDim
 {
   size_t dvars{0};   // Number of decision variables.
   size_t Np{0};      // Prediction horizon shooting nodes.
-  size_t Nc{0};      // Control horizon shooting horizon.
+  size_t Nc{0};      // Control horizon shooting nodes.
   size_t n{0};       // State variables number.
   size_t m{0};       // Control variables number.
   double dt{0.0};    // Step size.
@@ -39,7 +39,7 @@ struct MPCParams
   MatrixXd W;   // Slack variables weight matrix.
 };
 
-/* Model informations. */
+/* Model information. */
 struct ModelInfo
 {
   std::string name;  // Model name.

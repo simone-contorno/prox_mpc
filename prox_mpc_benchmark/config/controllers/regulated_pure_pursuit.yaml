@@ -2,9 +2,9 @@
 FollowPath:
   plugin: "nav2_regulated_pure_pursuit_controller::RegulatedPurePursuitController"
   desired_linear_vel: 0.5
-  # Shortened from the 0.6 default: a longer lookahead cuts the carrot across
-  # obstacle inflation and trips the collision-ahead abort; 0.4 keeps the robot
-  # on the replanned detour.
+  # Set below the 0.6 upstream default: at the longer lookahead, the carrot cuts
+  # across obstacle inflation and trips the collision-ahead abort; 0.4 keeps the
+  # robot on the replanned detour.
   lookahead_dist: 0.4
   min_lookahead_dist: 0.3
   max_lookahead_dist: 0.9

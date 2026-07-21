@@ -1,6 +1,8 @@
 # ProxMPC
 
+[![ROS 2 CI](https://github.com/simone-contorno/prox_mpc/actions/workflows/ci.yaml/badge.svg)](https://github.com/simone-contorno/prox_mpc/actions/workflows/ci.yaml)
 [![ROS 2 Jazzy](https://img.shields.io/badge/ROS_2-Jazzy-blue.svg)](https://docs.ros.org/en/jazzy/)
+[![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-green.svg)](LICENSE)
 
 Nonlinear Model Predictive Control for ROS 2, packaged as a reusable core and a
 [Nav2](https://docs.nav2.org/) controller plugin.
@@ -17,7 +19,10 @@ converges in a single QP solve.
 - [Demonstration](#demonstration)
 - [Where it stands](#where-it-stands)
   - [Strengths](#strengths)
-  - [Limitations](#limitations)
+  - [Where it is weaker](#where-it-is-weaker)
+- [Planned work](#planned-work)
+  - [QP warm starting across control cycles](#qp-warm-starting-across-control-cycles)
+  - [Validation beyond the kinematic plant](#validation-beyond-the-kinematic-plant)
 - [Packages](#packages)
 - [Architecture and docs](#architecture-and-docs)
   - [Per-cycle control loop](#per-cycle-control-loop)
@@ -30,7 +35,7 @@ converges in a single QP solve.
 
 ## Demonstration
 
-[![ProxMPC demo — no-obstacle, static, dynamic-line, and dynamic-circle scenarios](doc/media/prox_mpc_demo_grid.gif)](doc/media/prox_mpc_demo_grid.mp4)
+[![ProxMPC demo - no-obstacle, static, dynamic-line, and dynamic-circle scenarios](doc/media/prox_mpc_demo_grid.gif)](doc/media/prox_mpc_demo_grid.mp4)
 
 The predictive ProxMPC controller reaching the goal in the four benchmark scenarios
 (no obstacle, static box, dynamic line, dynamic circle) on the kinematic plant,
@@ -38,7 +43,7 @@ shown in RViz. Each obstacle is drawn as a ground-truth body (the orange cylinde
 next to its costmap footprint. The GIF loops inline; **click it** for the
 full-resolution mp4.
 
-Regenerate it — the per-scenario clips land in `prox_mpc_benchmark/results/`
+Regenerate it - the per-scenario clips land in `prox_mpc_benchmark/results/`
 (gitignored), and the combiner writes the committed grid mp4 + inline GIF to
 `doc/media/` (see [prox_mpc_benchmark/doc/videos.md](prox_mpc_benchmark/doc/videos.md)
 for the Xvfb/display note on Wayland and every parameter):
@@ -51,7 +56,7 @@ ros2 run prox_mpc_benchmark combine_grid.sh --output doc/media/prox_mpc_demo_gri
 ## Where it stands
 
 ProxMPC is benchmarked head-to-head against the four stock Nav2 Jazzy local
-controllers — DWB, MPPI, Regulated Pure Pursuit, and Graceful — plus Vector
+controllers - DWB, MPPI, Regulated Pure Pursuit, and Graceful - plus Vector
 Pursuit, the one external community controller included as a fair peer
 (Apache-2.0). Every controller drives the same plant from the same start to the
 same goal, at a matched 0.5 m/s speed cap and a shared 2.0 s prediction horizon,
@@ -61,76 +66,128 @@ the summary is below.
 
 > These are **simulation** results on a kinematic plant, measured on an x86-64
 > dev host (Intel Core i7-10750H, 6 cores / 12 threads, 31 GiB RAM,
-> Ubuntu 24.04.4) — **not** on physical robot hardware and not contact-dynamics.
+> Ubuntu 24.04.4) - **not** on physical robot hardware and not contact-dynamics.
 > A collision is a *would-be* overlap of the robot and obstacle discs, scored
 > identically for every controller. Gazebo validation is a single open-cell run;
 > full Gazebo and hardware validation remain open.
 
-| Controller | Tracking RMS (open) | Compute p50 / p95 (open) | Static clearance | Multi-obstacle collisions |
+| Controller | Tracking RMS (open) | Compute p50 / p95 (open) | Static clearance | Multi-obstacle margin |
 | --- | --- | --- | --- | --- |
-| **ProxMPC** | 0.0004 m | **0.65 / 1.11 ms** | **+0.346 m** | 11/30 · 9/30 predictive |
-| DWB | 0.0001 m | 2.54 / 2.91 ms | +0.093 m | 8/30 |
-| MPPI | 0.0029 m | 2.74 / 3.16 ms | +0.206 m | 26/60 |
-| Regulated Pure Pursuit | 0.0000 m | 0.21 / 0.25 ms | +0.213 m | 10/30 |
-| Vector Pursuit | 0.0000 m | 0.21 / 0.25 ms | +0.165 m (stops short) | 11/30 |
-| Graceful | 0.0000 m | 0.15 / 0.21 ms | +0.208 m | 17/30 |
+| **ProxMPC** | 0.0004 m | **0.75 / 1.15 ms** | **+0.353 m** | -0.118 m, **+0.190 m predictive** |
+| DWB | 0.0002 m | 2.46 / 2.70 ms | +0.093 m | +0.080 m |
+| MPPI | 0.0029 m | 2.61 / 2.91 ms | +0.206 m | +0.048 m |
+| Regulated Pure Pursuit | 0.0000 m | 0.21 / 0.25 ms | +0.214 m | +0.125 m |
+| Vector Pursuit | 0.0000 m | 0.21 / 0.25 ms | +0.122 m (stops short) | +0.024 m |
+| Graceful | 0.0000 m | 0.15 / 0.20 ms | +0.211 m | -0.013 m |
 
-Multi-obstacle collisions are the aggregate over six two-mover cells (30 runs per
-controller, 60 for MPPI's 10 repeats). The numbers are restated from
-[doc/controller-comparison-results.md](doc/controller-comparison-results.md)
-Sections 3, 4, and 6; that document is the source of truth.
+Multi-obstacle margin is the median closest approach over six two-mover cells (30
+runs per controller, 60 for MPPI's 10 repeats); positive clears the obstacle.
+**The margin is reported instead of a collision count on purpose.** Those cells
+are deliberately marginal, so 40-80 % of runs finish within 0.15 m of the
+threshold and the collision *count* is dominated by scheduling jitter: the same
+cell, with the same binary, returned 1/5, 5/5, and 2/5 collisions on three
+separate runs. The median margin is stable across the same runs and is the
+honest discriminator. Counts are still reported per cell in
+[doc/controller-comparison-results.md](doc/controller-comparison-results.md),
+which is the source of truth.
 
 ### Strengths
 
 - **Tracking on par with the best.** Sub-millimetre cross-track on an empty
   straight traverse (0.0004 m RMS, 5/5 success).
-- **Lightest of the optimising controllers.** ~0.65 ms median per cycle,
-  **~3.9–4.2× lighter than DWB and MPPI** at equal tracking accuracy and
-  **~1.7–2× lighter on every obstacle cell**, at 5–8 % CPU against their
-  8.6–9.6 %, with 0 % deadline-miss and 0 % infeasible across every run mode. The
+- **Lightest of the optimising controllers.** ~0.75 ms median per cycle on the
+  open cell, **~3.3x lighter than DWB and ~3.5x than MPPI** at equal tracking
+  accuracy, and **1.1-2.7x lighter across the obstacle cells** (the margin
+  narrows as the obstacle field tightens and the QP gets harder), at 5.0-9.1 %
+  CPU against their 8.4-9.3 %. Deadline misses and infeasible cycles are zero on
+  431 of 435 runs and peak at 0.6 % on the hardest two-mover cells. The
   geometric pursuit controllers are lighter still; ProxMPC's premium over them is
-  ~1–4 % of one core for a full constrained optimisation each cycle.
+  ~1-4 % of one core for a full constrained optimisation each cycle.
 - **The largest static-obstacle margin.** It reaches the goal *and* holds
-  **+0.35 m clearance** around a static box, the widest of the field — ahead of
+  **+0.35 m clearance** around a static box, the widest of the field - ahead of
   MPPI (+0.21 m) and DWB (+0.09 m) among the optimising controllers, and of RPP
   and Graceful (~+0.21 m) among the geometric ones.
-- **Strong moving-obstacle avoidance.** It clears the single crossing and
-  orbiting obstacles reactively, including the orbit that DWB (5/5) and Graceful
-  (3/5) collide on. On simultaneous two-mover cells it leads its sampling peer
-  MPPI (26/60) and Graceful (17/30) and matches DWB (8/30) and RPP (10/30), with
-  its obstacle tracker (an IMM filter combining constant-velocity and
-  constant-turn-rate models) adding a further edge.
-- **Deterministic and model-agnostic.** Reproducible given the plant (unlike
-  MPPI, which is stochastic with no exposed seed), and the same plugin drives a
+- **Prediction gives the field's widest margin among two simultaneous movers.**
+  With its own obstacle tracker enabled (an IMM filter combining constant-velocity
+  and constant-turn-rate models) ProxMPC holds a **+0.190 m** median closest
+  approach across the six two-mover cells, ahead of every peer - RPP +0.125 m,
+  DWB +0.080 m, MPPI +0.048 m, Vector Pursuit +0.024 m, Graceful -0.013 m - and
+  only 5 of its 30 runs finish inside the 0.15 m marginal band, against 14-24 for
+  the others. It also clears the single crossing and orbiting obstacles
+  reactively (0/5 collisions on the orbit that DWB and Graceful both collide on
+  in 5 runs of 5).
+- **Deterministic and model-agnostic.** The control law is a deterministic
+  function of its inputs, unlike MPPI, which samples and exposes no seed in Nav2
+  Jazzy. Note that this does not make a *closed-loop run* reproducible: control,
+  costmap, and TF timing all vary with real-time scheduling, so trajectories
+  differ between runs for every controller in the field. The same plugin drives a
   unicycle and a bicycle by configuration alone.
 
 ### Where it is weaker
 
-- On the tightest simultaneous two-mover cell (`blind_multi_0`) ProxMPC is the
-  field's weakest, colliding on every run where DWB, Graceful, and Vector Pursuit
-  clip it on two of five: two close movers force a non-convex "which side of each
-  obstacle" choice that the linearised keep-out constraint cannot represent, and
-  prediction does not resolve it. Where it fails, it stalls rather than driving
-  through.
+- On the tightest simultaneous two-mover cell (`blind_multi_0`) reactive ProxMPC
+  is the field's weakest, colliding on all five runs: two close movers force a
+  non-convex "which side of each obstacle" choice that the linearised keep-out
+  constraint cannot represent. Prediction more than halves it (2/5) but does not
+  remove it. Where it fails, it stalls rather than driving through.
+- **Reactive ProxMPC runs closer to the obstacles than its peers** on the
+  two-mover cells (median margin -0.118 m, the field's narrowest). Prediction
+  reverses this completely, so the tracker is not optional if the environment has
+  two or more simultaneous movers.
+- The compute advantage is smallest exactly where compute matters most. On the
+  dense two-mover cells the per-cycle median rises to ~2.3 ms, only ~1.2x lighter
+  than DWB and MPPI, against ~3.5x on the open cell.
 
-**In short:** ProxMPC delivers constrained, model-agnostic, deterministic optimal
-control that tracks as well as the best of the field, runs a fraction of the
-sampling controllers' per-cycle cost, holds the largest static-obstacle margin,
-and avoids single and simultaneous moving obstacles competitively with the best of
-the field — with predictive avoidance, driven by its own dynamic-obstacle tracker,
-that the geometric and sampling controllers have no mechanism to match.
+**In short:** ProxMPC delivers constrained, model-agnostic optimal control that
+tracks as well as the best of the field, runs at roughly a third of the sampling
+controllers' per-cycle cost, and holds the largest margin in the field around
+both a static obstacle and - with its own dynamic-obstacle tracker enabled - two
+simultaneous movers. That predictive path is the configuration to deploy: the
+geometric and sampling controllers have no mechanism to match it, and reactive
+ProxMPC alone runs closer to moving obstacles than its peers do.
+
+## Planned work
+
+Known, scoped improvements with a route already identified. Contributions are
+welcome on any of them.
+
+### QP warm starting across control cycles
+
+The largest known performance win still on the table. Each control cycle
+currently rebuilds the QP sub-problem from scratch, so ProxQP recomputes the
+symbolic factorization every time. Caching it is worth roughly **2-4x in solver
+time** on this class of problem, which is the dominant cost per cycle (see
+[OSQP's measurements](https://arxiv.org/pdf/1711.08013) - the gain comes from
+factorization reuse, not from fewer iterations).
+
+The route is known: build the workspace once and call ProxQP `update()` on later
+cycles so the previous duals carry over, with the sparsity pattern **declared
+rather than inferred**. Pinning the pattern is the crux, because the obstacle
+half-plane normals and the model Jacobians pass through zero as the trajectory
+evolves, which silently drops those entries when the pattern is derived from the
+values. A first attempt held on the single- and static-obstacle cells but not on
+the multi-obstacle equivalence case, so the simpler cold-start path ships in the
+meantime. This is expected to land in a future release.
+
+### Validation beyond the kinematic plant
+
+The reported comparison runs on a kinematic plant. Gazebo Harmonic coverage is a
+single open-world run rather than the full scenario matrix, and there is no
+physical-hardware validation yet. Extending both is planned; hardware results in
+particular would firm up the compute and clearance numbers, which are currently
+x86-64 dev-host measurements.
 
 ## Packages
 
 | Package | What it is |
 | --- | --- |
-| [prox_mpc_core](prox_mpc_core) | The math core (`prox_mpc::MPC` / `ProxQP` / `Model`) — the reusable SQP/QP library, no ROS node. |
+| [prox_mpc_core](prox_mpc_core) | The math core (`prox_mpc::MPC` / `ProxQP` / `Model`) - the reusable SQP/QP library, no ROS node. |
 | [prox_mpc_controller](prox_mpc_controller) | A Nav2 `nav2_core::Controller` plugin built on the core, verified in simulation under a full Nav2 stack. |
 | [prox_mpc_obstacle_tracker](prox_mpc_obstacle_tracker) | An in-house 2D-lidar dynamic-obstacle detector and IMM (CV+CTRV) tracker; feeds the controller's predictive avoidance. |
-| [prox_mpc_msgs](prox_mpc_msgs) | The `Obstacle` / `ObstacleArray` message contract between the tracker and the controller (interface-only). |
+| [prox_mpc_msgs](prox_mpc_msgs) | The three-message interface-only package: the `Obstacle` / `ObstacleArray` contract that carries tracked obstacles from the tracker to the controller, plus `SolverDiagnostics`, the per-control-cycle solver telemetry consumed by the benchmarking tooling. |
 | [prox_mpc_demo](prox_mpc_demo) | Runnable demos: a standalone closed-loop simulation and a full Nav2 + Gazebo Harmonic bring-up. |
 | [prox_mpc_test_models](prox_mpc_test_models) | Fault-injection `prox_mpc::Model` plugins for the controller's tests (not for production). |
-| [prox_mpc_benchmark](prox_mpc_benchmark) | The scenario-driven benchmarking harness that measures accuracy, precision, and real-time behaviour across the scenario × model × controller × mode matrix, and compares ProxMPC against the stock Nav2 controllers. |
+| [prox_mpc_benchmark](prox_mpc_benchmark) | The scenario-driven benchmarking harness that measures accuracy, precision, and real-time behaviour across the scenario x model x controller x mode matrix, and compares ProxMPC against the stock Nav2 controllers. |
 
 ## Architecture and docs
 
@@ -179,23 +236,13 @@ flowchart TD
   U --> V[Apply first command]
 ```
 
-Essential formulas of the full loop:
-
-$$
-x_{k+1} \approx A_k x_k + B_k u_k + c_k
-$$
-
-$$
-\min_z \; \frac{1}{2} z^\top H z + c^\top z
-$$
-
-$$
-x_{k|k-1} = F x_{k-1|k-1} + B u_k
-$$
-
-$$
-\hat{x}_k = \sum_i \mu_k^{(i)} \hat{x}_k^{(i)}
-$$
+The formulation is written out, with every symbol defined, in
+[prox_mpc_core/doc/nmpc.md](prox_mpc_core/doc/nmpc.md) (the linearization and the
+QP the SQP builds each cycle),
+[prox_mpc_core/doc/obstacle-avoidance.md](prox_mpc_core/doc/obstacle-avoidance.md)
+(the signed-distance half-planes and the discrete-time CBF coupling), and
+[prox_mpc_obstacle_tracker/doc/architecture.md](prox_mpc_obstacle_tracker/doc/architecture.md)
+(the IMM filter).
 
 ## Requirements
 
@@ -203,7 +250,7 @@ $$
 - Eigen 3: `sudo apt install libeigen3-dev`.
 - ProxQP / proxsuite: see the
   [proxsuite install guide](https://github.com/Simple-Robotics/proxsuite).
-- Nav2 (`nav2_core`, `nav2_costmap_2d`) — only for `prox_mpc_controller`.
+- Nav2 (`nav2_core`, `nav2_costmap_2d`) - only for `prox_mpc_controller`.
 
 ## Build
 
@@ -256,7 +303,7 @@ your deployment hardware:
   bloom/debian `rules` flags. Never hardcode `-march=native` / `-mcpu=native`
   (it bakes the build host CPU into the binary and breaks cross/CI builds).
 - LTO via `-DCMAKE_INTERPROCEDURAL_OPTIMIZATION=ON`, guarded by
-  `check_ipo_supported()` and measured — not hardcoded.
+  `check_ipo_supported()` and measured - not hardcoded.
 - **Never** `-Ofast` / `-ffast-math` for the solver: it breaks the IEEE-754
   semantics the SQP/QP convergence and the NaN / `isfinite` guards rely on.
 
@@ -272,10 +319,13 @@ colcon test-result --all --verbose
 
 `prox_mpc_core` ships GoogleTest suites that cover the model interface and its
 analytic Jacobians, an obstacle-off regression against recorded reference values,
-a custom model driven through the interface, and the obstacle-avoidance
-constraints. `prox_mpc_controller` drives every `nav2_core::Controller` method and
-fail-safe branch through the plugin's public surface, and
-`prox_mpc_obstacle_tracker` unit-tests its ROS-free clustering and tracking core.
+a custom model driven through the interface, the obstacle-avoidance constraints,
+and the ROS-facing helpers `optimPath` and `normalizeAngle`.
+`prox_mpc_controller` drives every `nav2_core::Controller` method and fail-safe
+branch through the plugin's public surface, and `prox_mpc_obstacle_tracker`
+unit-tests its ROS-free clustering and tracking core and drives its lifecycle
+node - the transition ladder and the scan-to-publish path - through
+`test_obstacle_tracker_node`.
 The C++ style is enforced by `uncrustify` (the ROS 2 default formatter); `cpplint`
 and `ament_copyright` are disabled (single enforced formatter, and a short SPDX
 header per file with the full text in [LICENSE](LICENSE)).
@@ -291,7 +341,7 @@ carried over unchanged from that validated implementation.
 
 ## License
 
-[Apache-2.0](LICENSE) — chosen for ROS 2 ecosystem alignment (ROS 2 and Nav2 are
+[Apache-2.0](LICENSE) - chosen for ROS 2 ecosystem alignment (ROS 2 and Nav2 are
 Apache-2.0) and its explicit patent grant. Each source file carries a short
 `SPDX-License-Identifier: Apache-2.0` header; the full text is in
 [LICENSE](LICENSE) and attribution in [NOTICE](NOTICE). To cite this work:

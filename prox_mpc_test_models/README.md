@@ -5,7 +5,7 @@
 Test-fixture `prox_mpc::Model` plugins for the ProxMPC stack.
 
 These are fault-injection models that exercise controller fail-safe paths the bundled production models cannot reach.
-They are registered against the same `prox_mpc::Model` base as the core models, so [prox_mpc_controller](../prox_mpc_controller) loads them through its ordinary `pluginlib` path during testing — no test-only seam in production code.
+They are registered against the same `prox_mpc::Model` base as the core models, so [prox_mpc_controller](../prox_mpc_controller) loads them through its ordinary `pluginlib` path during testing - no test-only seam in production code.
 
 > **Not for production use.** This package exists only to drive tests.
 

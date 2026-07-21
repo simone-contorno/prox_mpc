@@ -57,8 +57,8 @@ controller_server:
       stateful: True
       plugin: "nav2_controller::SimpleGoalChecker"
       # Strictly inside the scored success tolerance (0.25, metrics goal_tol):
-      # with the two equal, a controller that stops the moment ITS OWN distance
-      # reads inside tolerance can park at metric-0.2500 exactly and deadlock —
+      # with the two equal, a controller that stops the moment its own distance
+      # reads inside tolerance can park at metric-0.2500 exactly and deadlock -
       # Nav2's strict '< 0.25' never fires and the run is scored failed. Applies
       # to every controller alike.
       xy_goal_tolerance: 0.24

@@ -8,8 +8,15 @@ __pycache__/
 *.pyc
 
 # Editor / IDE
+.claude/
 .vscode/
 *.swp
 
 # OS
 .DS_Store
+
+# Debian packages produced by .github/scripts/build_runtime_debs.sh
+debs/
+*.deb
+*.ddeb
+debian/

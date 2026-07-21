@@ -1,10 +1,10 @@
 # Standalone simulation and benchmark
 
 The `prox_mpc_simulation` node is a self-contained, closed-loop driver for the
-[prox_mpc_core](../../prox_mpc_core) engine — no external simulator.
+[prox_mpc_core](../../prox_mpc_core) engine - no external simulator.
 Each control step it solves the MPC, publishes the first control and the predicted
 trajectory, advances the simulated pose to the model's own predicted next state,
-and broadcasts `map → base_link` so RViz tracks the robot.
+and broadcasts `map -> base_link` so RViz tracks the robot.
 It also measures and logs the solve time, and (when `publish_diagnostics` is true)
 publishes one `SolverDiagnostics` per cycle, so the engine's compute cost, control
 rate, and feasibility are observable without Nav2.
@@ -38,32 +38,35 @@ Add `rviz:=true` to the launch to also start RViz, `robot_state_publisher`, and
 
 ## Parameters
 
-Every parameter is declared in the node with the default shown below, so the node
+Every parameter below is declared in the node with the default shown, so the node
 runs without a YAML.
+The one exception is `log_level`, which the node never declares: the launch file
+reads it out of the YAML and turns it into a `--ros-args --log-level` argument, so
+it has no effect when the executable is run directly without the launch file.
 The bundled [../config/simulation.yaml](../config/simulation.yaml) sets the
 tracking-demo defaults.
 
 | Parameter | Type | Default | Unit | Meaning |
 | --- | --- | --- | --- | --- |
-| `model` | string | `bicycle` | — | `bicycle` (4-state) or `unicycle` (3-state). |
+| `model` | string | `bicycle` | - | `bicycle` (4-state) or `unicycle` (3-state). |
 | `np` | int | 20 | nodes | Prediction horizon (must be ≥ 1). |
 | `nc` | int | 20 | nodes | Control horizon (must be ≥ 1). |
 | `dt` | double | 0.1 | s | Step size, also the control period (must be > 0). |
-| `q_pos` | double | 10.0 | — | Position tracking weight. |
-| `q_theta` | double | 1.0 | — | Heading (and remaining state) tracking weight. |
-| `s_factor` | double | 2.0 | — | Terminal-weight factor `S = s_factor * Q`. |
-| `r_weight` | double | 0.1 | — | Control-effort weight. |
-| `w_weight` | double | 100.0 | — | Obstacle-slack penalty. |
+| `q_pos` | double | 10.0 | - | Position tracking weight. |
+| `q_theta` | double | 1.0 | - | Heading (and remaining state) tracking weight. |
+| `s_factor` | double | 2.0 | - | Terminal-weight factor `S = s_factor * Q`. |
+| `r_weight` | double | 0.1 | - | Control-effort weight. |
+| `w_weight` | double | 100.0 | - | Obstacle-slack penalty. |
 | `v_ref` | double | 1.0 | m/s | Reference forward speed. |
 | `goal_x`, `goal_y`, `goal_theta` | double | 5.0, 0.0, 0.0 | m, m, rad | Single goal pose (used when no waypoint set is given). |
 | `goal_tol` | double | 0.25 | m | Waypoint-arrival radius; also latches the final-goal stop. |
-| `obstacle_enable` | bool | false | — | Enable the single legacy fixed obstacle. |
+| `obstacle_enable` | bool | false | - | Enable the single legacy fixed obstacle. |
 | `max_obstacles` | int | 1 | slots | Obstacle-slot capacity `K` per node when avoidance is on (must be ≥ 0). |
 | `d_safe` | double | 1.0 | m | Required clearance for the legacy obstacle (must be ≥ 0). |
 | `obs_x`, `obs_y` | double | 2.5, 0.6 | m | Legacy obstacle position. |
 | `report_period` | int | 50 | steps | Log solve-time stats every N steps (0 disables). |
-| `publish_diagnostics` | bool | true | — | Publish one `SolverDiagnostics` per cycle. |
-| `log_level` | string | `info` | — | Node logger verbosity, read by the launch file (`debug`…`fatal`). |
+| `publish_diagnostics` | bool | true | - | Publish one `SolverDiagnostics` per cycle. |
+| `log_level` | string | `info` | - | Node logger verbosity (`debug`...`fatal`). Not a declared node parameter: the launch file reads it from the YAML and passes it as `--ros-args --log-level`. |
 
 <details>
 <summary>Waypoint set and time-varying obstacles (parallel-array parameters)</summary>
@@ -76,8 +79,8 @@ legacy `obs_*` obstacle above.
 | Parameter | Type | Default | Unit | Meaning |
 | --- | --- | --- | --- | --- |
 | `goals_x`, `goals_y`, `goals_theta` | double[] | `[]` | m, m, rad | Ordered waypoints; the active goal advances once the pose is within `goal_tol`. The three arrays must have equal length. |
-| `start_x`, `start_y`, `start_theta` | double | 0.0 | m, m, rad | Initial simulated pose (`start_theta` only for a 3-state model). |
-| `obs_motion` | string[] | `[]` | — | Per-obstacle motion: `static`, `circle`, or `line`. A non-empty list supersedes the legacy obstacle and enables avoidance. |
+| `start_x`, `start_y`, `start_theta` | double | 0.0 | m, m, rad | Initial simulated pose. `start_theta` is declared for any model carrying at least three states, which covers both the 3-state unicycle and the 4-state bicycle. |
+| `obs_motion` | string[] | `[]` | - | Per-obstacle motion: `static`, `circle`, or `line`. A non-empty list supersedes the legacy obstacle and enables avoidance. |
 | `obs_cx`, `obs_cy` | double[] | `[]` | m | Static position, circle centre, or line "from" point. |
 | `obs_ex`, `obs_ey` | double[] | `[]` | m | Line "to" point. |
 | `obs_radius` | double[] | `[]` (1.0) | m | Circle orbit radius. |
@@ -96,7 +99,7 @@ parentheses.
 | `/robot/cmd_vel` | `geometry_msgs/msg/Twist` | Reliable, depth 1 | Published | First control mapped to a body twist each cycle. |
 | `/prox_mpc/path` | `nav_msgs/msg/Path` | Reliable, depth 1 | Published | Predicted optimal trajectory. |
 | `/prox_mpc/diagnostics` | `prox_mpc_msgs/msg/SolverDiagnostics` | Reliable, depth 10 | Published | Per-cycle solver telemetry, only when `publish_diagnostics` is true. |
-| `map → base_link` | TF | — | Broadcast | Simulated planar pose, for RViz. |
+| `map -> base_link` | TF | - | Broadcast | Simulated planar pose, for RViz. |
 
 On a non-converged or non-finite solve the node publishes a zero command and holds
 the pose rather than folding a bad iterate into the state; it still publishes

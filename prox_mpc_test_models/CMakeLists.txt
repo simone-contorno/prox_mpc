@@ -15,14 +15,19 @@ if(CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
   add_compile_options(-Wall -Wextra -Wpedantic)
 endif()
 
-# Remove Eigen's internal assertions in the hot path (safe under Release)
+# Match prox_mpc_core's Eigen assertion setting so this fixture builds against
+# identical Eigen semantics.
 add_compile_definitions(EIGEN_NO_DEBUG)
 
 # Packages
 find_package(ament_cmake REQUIRED)
 find_package(prox_mpc_core REQUIRED)
 find_package(Eigen3 REQUIRED)
-find_package(proxsuite REQUIRED)
+# 0.6.5 is the floor package.xml declares. It matters: 0.6.5 inserted an
+# enumerator into QPSolverOutput, so an older copy on CMAKE_PREFIX_PATH
+# (for example an unmanaged /usr/local install) compiles against a different
+# solver contract than the declared dependency.
+find_package(proxsuite 0.6.5 REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(pluginlib REQUIRED)
 find_package(rclcpp REQUIRED)
@@ -62,10 +67,9 @@ install(
   LIBRARY DESTINATION lib
   RUNTIME DESTINATION bin
 )
-install(
-  FILES prox_mpc_test_models_plugins.xml
-  DESTINATION share/${PROJECT_NAME}
-)
+
+# Export
+ament_export_include_directories(include)
 
 # Tests
 if(BUILD_TESTING)

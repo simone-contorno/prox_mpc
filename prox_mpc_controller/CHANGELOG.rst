@@ -2,7 +2,7 @@
 Changelog for package prox_mpc_controller
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-1.0.0 (2026-07-01)
+1.0.0 (2026-07-19)
 ------------------
 * Initial release: ``nav2_core::Controller`` plugin wrapping the ProxMPC core,
   with global-plan reference building, costmap and predictive obstacle fills, a

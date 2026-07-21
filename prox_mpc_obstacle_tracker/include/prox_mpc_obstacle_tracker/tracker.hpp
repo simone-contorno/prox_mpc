@@ -20,7 +20,7 @@ namespace prox_mpc_obstacle_tracker
 /// One tracked obstacle. state/cov are always the CV-space [x, y, vx, vy]
 /// estimate and its 4x4 covariance in the tracking frame: the IMM's
 /// moment-matched combined output when IMM is enabled, or the bare CV Kalman
-/// state on the legacy path — so association gating and publishing read the
+/// state on the legacy path - so association gating and publishing read the
 /// same fields either way.
 struct Track
 {

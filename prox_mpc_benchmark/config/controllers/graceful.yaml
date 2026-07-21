@@ -10,10 +10,6 @@ FollowPath:
   plugin: "nav2_graceful_controller::GracefulController"
   transform_tolerance: 0.1
   max_lookahead: 0.9
-  # Graceful tends to park just outside the strict < 0.25 goal tolerance — a
-  # completion deadlock, not an avoidance failure. Target closer to the plan end
-  # and keep speed up through the boundary (min_lookahead 0.05, v_linear_min 0.2,
-  # slowdown_radius 0.1).
   min_lookahead: 0.05
   initial_rotation: true
   initial_rotation_tolerance: 0.75
@@ -21,7 +17,7 @@ FollowPath:
   # in place near it, and slow down only within 0.2 m. Graceful's pose-following
   # law still decelerates asymptotically into the goal and tends to park right at
   # the 0.25 m tolerance boundary on a dead-straight approach, so it can register
-  # as not-reached on the open cell even though its tracking is exact — a known
+  # as not-reached on the open cell even though its tracking is exact - a known
   # completion trait of this controller.
   prefer_final_rotation: false
   k_phi: 2.0

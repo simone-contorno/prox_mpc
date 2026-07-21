@@ -29,8 +29,8 @@ namespace prox_mpc_obstacle_tracker
 /// likelihoods, and updates the model probabilities. On a missed scan the
 /// cycle is predict-only and the model probabilities are left unchanged.
 /// The combined output is moment-matched in CV space, so the published
-/// position/velocity/covariance semantics are unchanged from the single-CV
-/// tracker.
+/// position/velocity/covariance are always [x, y, vx, vy] and a 4x4
+/// covariance, regardless of which model currently dominates.
 class ImmFilter
 {
 public:
@@ -63,8 +63,8 @@ public:
   /// First half of one IMM cycle: mix the model states (Markov transition,
   /// mixing probabilities, moment-matched mixed priors via the cross-model
   /// state converters), then run both model predicts by dt [s]. dt <= 0 is
-  /// the no-time-elapsed limit (identity transition), so it is a no-op —
-  /// matching the legacy tracker's non-monotonic-stamp guard.
+  /// the no-time-elapsed limit (identity transition), so it is a no-op -
+  /// this also guards against a non-monotonic stamp.
   void predict(double dt);
 
   /// Second half of one IMM cycle: both model updates with the measurement

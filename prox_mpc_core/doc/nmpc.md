@@ -1,4 +1,4 @@
-# ProxMPC — NMPC, SQP, and the QP Sub-problem
+# ProxMPC - NMPC, SQP, and the QP Sub-problem
 
 This document covers the nonlinear MPC formulation, its sequential convex
 (SQP) solution, and how each QP sub-problem is assembled and solved with ProxQP.
@@ -55,7 +55,7 @@ $$
 and $A_k$, $B_k$ are its analytic Jacobians.
 The yaw-rate term uses $v_k \sin(\delta_k)/L$ by design, not the textbook
 $v_k \tan(\delta_k)/L$: this is a deliberate modeling choice, applied consistently
-across `updatec`, `updateA`, `updateB`, and `toTwist`, so it is not a typo — the
+across `updatec`, `updateA`, `updateB`, and `toTwist`, so it is not a typo - the
 two agree for small steering angles and the analytic Jacobians match the $\sin$
 form exactly.
 A purely linear model returns constant $A$, $B$ and a trivial residual; the SQP
@@ -141,7 +141,7 @@ The inequality block enforces, per active constraint and step:
 
 All bounds are expressed relative to the linearization point, because the QP
 solves for increments.
-The inequality builder assembles exactly three model bound categories — `"x"`,
+The inequality builder assembles exactly three model bound categories - `"x"`,
 `"u"`, and `"du"`. The fourth category, `"w"`, is reserved and not assembled: a
 model-declared `"w"` bound is ignored by the builder (the obstacle slack
 lower-bound `s >= 0` is emitted by the obstacle block, not via `getIneq("w")`).
@@ -149,9 +149,12 @@ lower-bound `s >= 0` is emitted by the obstacle block, not via `getIneq("w")`).
 ## The SQP scheme
 
 `MPC::solve` slides the previous solution forward by one step (warm start), pins
-the first state to the current pose, then performs one linearize–solve–update
-step per call: build and solve the QP about the current iterate, then apply the
-increments.
+the first state to the current pose, then enters a loop that builds and solves
+the QP about the current iterate and applies the increments. The loop exits as
+soon as the QP sub-problem reports `PROXQP_SOLVED`, so a cycle whose first
+sub-problem converges performs exactly one linearize-solve-update pass; further
+passes re-linearize about the updated iterate only when the previous QP did not
+converge.
 
 $$
 x \mathrel{+}= \Delta x, \quad
@@ -160,10 +163,13 @@ w \mathrel{+}= \Delta w,
 \qquad \text{until } \texttt{status} = \text{SOLVED} \text{ or } k \ge k_{\max}.
 $$
 
-Because each control cycle re-solves with the warm-started iterate, the
-re-linearization that an SQP performs internally is spread across cycles: a linear
-model needs a single QP, while a nonlinear model refines its linearization as the
-trajectory settles.
+The retry count is bounded by `max_iter_sqp` (100 by default) and, when set, by
+the `max_solve_time` wall-clock budget, so a failing sub-problem cannot overrun
+the control cycle. Because the loop terminates on the first converged QP rather
+than on an increment-norm test, it is a real-time-iteration scheme: each cycle
+contributes one linearization, and a nonlinear model refines its linearization
+across successive control cycles through the warm start rather than within a
+single call.
 
 ### Convergence and failure reporting
 
@@ -173,7 +179,7 @@ On non-convergence `MPC::solve` takes **no safety action**: it returns the last
 (non-converged) iterate, keeps the previous command as the warm-start reference,
 and leaves the fallback to the caller.
 The caller must therefore check `qp_info.status` each cycle and, on failure,
-apply its own policy — the recommended one is a deceleration ramp toward zero that
+apply its own policy - the recommended one is a deceleration ramp toward zero that
 respects the robot's acceleration limits, never an instantaneous stop.
 Keeping this policy out of the math library lets each consumer choose the safe
 behavior appropriate to its platform.
@@ -201,8 +207,14 @@ sequenceDiagram
 
 The QP is solved in **sparse** mode by default (`qp_type = false`); a dense path
 exists for small problems (`qp_type = true`).
-Warm starting is on by default: the QP is re-initialized with fresh matrices each
-solve and re-solved with the carried primal/dual estimates.
+The QP is re-initialized with fresh matrices each solve. It is deliberately not
+seeded with the previous sub-problem's solution: the sub-problem is posed in
+increment form, so its solution tends to zero as the SQP converges, and starting
+from the previous (large) increment starts the solver away from the answer rather
+than near it. `guess` therefore selects between ProxQP's own cheap starts, the
+equality-constrained guess (`true`, the default) or no initial guess (`false`).
+The warm start that matters is at trajectory level in `MPC::solve`, which slides
+the previous solution forward one step before re-linearizing.
 The iteration caps (`max_ext_qp = 10000`, `max_int_qp = 1500`,
 `max_iter_sqp = 100`) are centralized as named constants and overridable through
 setters.

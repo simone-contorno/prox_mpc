@@ -1,0 +1,116 @@
+name: Build ProxMPC Debian packages
+
+# Builds the controller runtime (prox_mpc_msgs, prox_mpc_core,
+# prox_mpc_controller) as .deb packages. The demo, benchmark, and test-model
+# packages are development tooling and are deliberately not shipped.
+#
+# This workflow publishes nothing. It proves the packages build and uploads them
+# as artifacts; distribution goes through the ROS buildfarm (see the note at the
+# bottom of this file).
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  ROS_DISTRO: jazzy
+
+jobs:
+  build-deb:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            arch: amd64
+          - runner: ubuntu-24.04-arm
+            arch: arm64
+    runs-on: ${{ matrix.runner }}
+    container:
+      image: ros:jazzy-ros-base-noble
+      options: --user root
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4.3.1
+        with:
+          fetch-depth: 0
+
+      - name: Install packaging tooling
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            python3-bloom \
+            python3-rosdep \
+            fakeroot \
+            dpkg-dev \
+            debhelper \
+            dh-python
+
+      - name: Resolve dependencies
+        run: |
+          rosdep init || true
+          rosdep update
+          apt-get update
+          . /opt/ros/${ROS_DISTRO}/setup.sh
+          # External dependencies only. The intra-repository ones are resolved by
+          # the build script's local rosdep rules, since these packages are not in
+          # the distro index yet.
+          # No -r: an unresolved key must fail the build, not be skipped.
+          rosdep install \
+            --from-paths prox_mpc_msgs prox_mpc_core prox_mpc_test_models prox_mpc_controller \
+            --ignore-src --rosdistro ${ROS_DISTRO} -y \
+            -t build -t buildtool -t exec
+
+      # The same script contributors run locally, so CI and local builds cannot
+      # drift apart.
+      - name: Build Debian packages
+        run: .github/scripts/build_runtime_debs.sh "${GITHUB_WORKSPACE}/debs"
+
+      - name: Verify the plugin is present in the built package
+        run: |
+          set -e
+          deb="$(ls debs/ros-${ROS_DISTRO}-prox-mpc-controller_*.deb | head -1)"
+          echo "Inspecting ${deb}"
+          contents="$(dpkg-deb -c "${deb}")"
+          echo "${contents}"
+          # A controller package without its plugin description installs cleanly
+          # and then fails at runtime with an opaque pluginlib error.
+          echo "${contents}" | grep -q "prox_mpc_controller_plugin.xml" \
+            || { echo "::error::plugin description missing from package"; exit 1; }
+          echo "${contents}" | grep -q "libprox_mpc_controller.so" \
+            || { echo "::error::controller library missing from package"; exit 1; }
+          # test_models is a test_depend: it must stay out of the runtime Depends,
+          # or every installation drags in a fault-injection plugin.
+          if dpkg-deb -f "${deb}" Depends | grep -q "prox-mpc-test-models"; then
+            echo "::error::test_models leaked into the controller's runtime Depends"
+            exit 1
+          fi
+
+      - name: Upload Debian packages
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
+        with:
+          name: proxmpc-debs-${{ matrix.arch }}
+          path: debs/*.deb
+          if-no-files-found: error
+
+  # Publishing goes through the official ROS buildfarm, not this workflow.
+  #
+  # Binaries on packages.ros.org are produced by the ROS build farm after a
+  # release is accepted into the ros/rosdistro index. That is a one-time manual
+  # step per release, not something CI should do:
+  #
+  #   bloom-release --new-track --rosdistro jazzy --track jazzy prox_mpc
+  #
+  # which creates the release repository and opens a pull request against
+  # https://github.com/ros/rosdistro. Once it is merged the farm builds the
+  # packages and `apt install ros-jazzy-prox-mpc-controller` works with no extra
+  # apt source configured by the user.
+  #
+  # This workflow therefore exists to prove the packages BUILD on every push to
+  # main, and to hand you installable artifacts for testing. It publishes
+  # nothing.

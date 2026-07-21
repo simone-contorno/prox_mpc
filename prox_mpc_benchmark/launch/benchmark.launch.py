@@ -4,7 +4,7 @@
 """
 Launch one benchmark cell (scenario x model x mode), headless.
 
-Mode (b1) — the deterministic standalone core sim — is launched here directly:
+Mode (b1) - the deterministic standalone core sim - is launched here directly:
 the prox_mpc_demo simulation node and the prox_mpc_benchmark metrics node are
 brought up against the same scenario geometry. Modes (a) Gazebo+Nav2 and (b2)
 Nav2-without-Gazebo are heavier and are driven by run_matrix.py / the demo
@@ -18,42 +18,10 @@ from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, OpaqueFunction
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
+from prox_mpc_benchmark.scenario_obstacles import obstacle_arrays
 import yaml
 
 PKG = 'prox_mpc_benchmark'
-
-
-def _obstacle_arrays(scn):
-    motion, cx, cy, ex, ey, radius, speed, clearance = ([] for _ in range(8))
-    for o in scn.get('obstacles', []) or []:
-        m = 'static' if o.get('type') == 'static' else o.get('motion', 'static')
-        motion.append(m)
-        if m == 'circle':
-            c = o.get('center', {})
-            cx.append(float(c.get('x', 0.0)))
-            cy.append(float(c.get('y', 0.0)))
-            ex.append(0.0)
-            ey.append(0.0)
-            radius.append(float(o.get('radius', 1.0)))
-            speed.append(float(o.get('speed', 0.0)))
-        elif m == 'line':
-            a, b = o.get('from', {}), o.get('to', {})
-            cx.append(float(a.get('x', 0.0)))
-            cy.append(float(a.get('y', 0.0)))
-            ex.append(float(b.get('x', 0.0)))
-            ey.append(float(b.get('y', 0.0)))
-            radius.append(1.0)
-            speed.append(float(o.get('speed', 0.0)))
-        else:
-            p = o.get('pose', {})
-            cx.append(float(p.get('x', 0.0)))
-            cy.append(float(p.get('y', 0.0)))
-            ex.append(0.0)
-            ey.append(0.0)
-            radius.append(1.0)
-            speed.append(0.0)
-        clearance.append(float(o.get('clearance', 0.7)))
-    return motion, cx, cy, ex, ey, radius, speed, clearance
 
 
 def _setup(context, *args, **kwargs):
@@ -79,7 +47,7 @@ def _setup(context, *args, **kwargs):
     goals_t = [float(g.get('yaw', 0.0)) for g in scn['goals']]
     ref_x = [float(s['x'])] + goals_x
     ref_y = [float(s['y'])] + goals_y
-    motion, cx, cy, ex, ey, radius, speed, clearance = _obstacle_arrays(scn)
+    motion, cx, cy, ex, ey, radius, speed, clearance = obstacle_arrays(scn)
 
     sim_params = {
         'model': model, 'np': int(ctrl['np']), 'nc': int(ctrl['nc']),

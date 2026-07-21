@@ -17,7 +17,8 @@ ament_export_dependencies(rosidl_default_runtime)
 
 if(BUILD_TESTING)
   find_package(ament_lint_auto REQUIRED)
-  # Copyright is disabled (short SPDX header per file; full text in LICENSE).
+  # Copyright is disabled: interface-only package, no per-file headers;
+  # full text in LICENSE.
   set(ament_cmake_copyright_FOUND TRUE)
   ament_lint_auto_find_test_dependencies()
 endif()

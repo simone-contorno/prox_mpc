@@ -1,4 +1,4 @@
-# ProxMPC controller preset (FollowPath block) — PREDICTIVE variant for the
+# ProxMPC controller preset (FollowPath block) - predictive variant for the
 # benchmark matrix. Identical to proxmpc.yaml except for two knobs: dynamic
 # obstacles enter through prediction (predict_obstacles on; the benchmark launch
 # starts prox_mpc_obstacle_tracker on the simulated /scan) and the obstacle slack
@@ -37,7 +37,7 @@ FollowPath:
   # no-go zone that stalls the robot short of the goal.
   costmap_cost_threshold: 253
   obstacle_cluster_radius: 0.3
-  # Predictive (dynamic) obstacle avoidance ENABLED. Consumes the tracker's
+  # Predictive (dynamic) obstacle avoidance enabled. Consumes the tracker's
   # /tracked_obstacles (odom frame); a confirmed moving track is anticipated over
   # the horizon, static structure stays costmap-driven (hybrid).
   predict_obstacles: true

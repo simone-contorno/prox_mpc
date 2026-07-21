@@ -28,6 +28,29 @@
 namespace
 {
 
+/// Map proxsuite's solver outcome onto the message's own STATUS_* contract.
+///
+/// Deliberately not a static_cast: proxsuite 0.6.5 inserted
+/// PROXQP_SOLVED_CLOSEST_PRIMAL_FEASIBLE into the middle of QPSolverOutput, so a
+/// cast silently reports a dual-infeasible solve as STATUS_NOT_RUN when built
+/// against it. An enumerator added upstream after this mapping was written falls
+/// through to STATUS_UNKNOWN rather than impersonating another state.
+std::uint8_t solverStatusToMsg(proxsuite::proxqp::QPSolverOutput status)
+{
+  using QPOut = proxsuite::proxqp::QPSolverOutput;
+  using Diag = prox_mpc_msgs::msg::SolverDiagnostics;
+  switch (status) {
+    case QPOut::PROXQP_SOLVED: return Diag::STATUS_SOLVED;
+    case QPOut::PROXQP_MAX_ITER_REACHED: return Diag::STATUS_MAX_ITER_REACHED;
+    case QPOut::PROXQP_PRIMAL_INFEASIBLE: return Diag::STATUS_PRIMAL_INFEASIBLE;
+    case QPOut::PROXQP_SOLVED_CLOSEST_PRIMAL_FEASIBLE:
+      return Diag::STATUS_SOLVED_CLOSEST_PRIMAL_FEASIBLE;
+    case QPOut::PROXQP_DUAL_INFEASIBLE: return Diag::STATUS_DUAL_INFEASIBLE;
+    case QPOut::PROXQP_NOT_RUN: return Diag::STATUS_NOT_RUN;
+  }
+  return Diag::STATUS_UNKNOWN;
+}
+
 /// Stop speed below which a cancel ramp is considered complete [m/s, rad/s].
 constexpr double kCancelStopEpsilon = 0.01;
 /// Upper bound on the costmap scan half-window [cells] to keep the per-cycle cost
@@ -214,6 +237,12 @@ void ProxMpcController::configure(
   clamp_low("obstacle_cluster_radius", obstacle_cluster_radius_, 0.0);
   max_obstacle_scan_cells_ =
     node->declare_parameter<int>(p + "max_obstacle_scan_cells", kMaxScanHalfWidth);
+  if (max_obstacle_scan_cells_ < 1) {
+    RCLCPP_WARN(
+      logger_, "max_obstacle_scan_cells %d below 1; clamping to 1.",
+      max_obstacle_scan_cells_);
+    max_obstacle_scan_cells_ = 1;
+  }
 
   /* Predictive (dynamic) obstacle avoidance. predict_obstacles off reproduces the
    * costmap-only behavior bit-for-bit; the rest size the predictive + hybrid fill. */
@@ -882,7 +911,7 @@ void ProxMpcController::fillObstacles(
     const double ovy = st * o.velocity.x + ct * o.velocity.y;
     if (std::hypot(ovx, ovy) < dynamic_speed_threshold_) {continue;}  // costmap covers static
     // Tracker-sampled curved prediction: validate fail-closed (prediction_dt
-    // finite and > 0, every sample finite — else treat as empty, keeping the
+    // finite and > 0, every sample finite - else treat as empty, keeping the
     // straight-ray fill), then transform with the same rigid transform as
     // position/velocity above.
     std::vector<std::array<double, 2>> samples;
@@ -1148,7 +1177,7 @@ void ProxMpcController::publishDiagnostics(
   d.header.frame_id = costmap_ros_ ? costmap_ros_->getBaseFrameID() : std::string("base_link");
   d.solve_time_ms = solve_ms;
   d.qp_solve_time_ms = mpc_->qp_info.run_time / 1000.0;  // proxsuite reports microseconds
-  d.status = static_cast<std::uint8_t>(mpc_->qp_info.status);
+  d.status = solverStatusToMsg(mpc_->qp_info.status);
   d.converged = converged;
   d.sqp_iters = static_cast<std::uint32_t>(mpc_->sqp_iter);
   d.qp_iters_ext = static_cast<std::uint32_t>(mpc_->qp_iter_ext);

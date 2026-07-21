@@ -122,12 +122,12 @@ std::tuple<MatrixXd, MatrixXd> MPC::solve()
     auto [x_sol, u_sol, w_sol, info] = proxqp->solve(x, u, u0, w, goal_x, goal_u);
 
     /* Update */
-    x += x_sol;                             // state
-    u += u_sol;                             // control
-    w += w_sol;                             // slack variable
-    qp_info = info;                         // QP informations
-    qp_iter_ext += qp_info.iter_ext;        // QP external total iterations
-    sqp_iter++;                             // SQP iterations
+    x += x_sol;
+    u += u_sol;
+    w += w_sol;
+    qp_info = info;
+    qp_iter_ext += qp_info.iter_ext;
+    sqp_iter++;
 
     /* Wall-clock budget (0 disables it): bound the worst-case solve so a slow
      * SQP cannot overrun the control cycle. On timeout the loop exits with

@@ -1,4 +1,4 @@
-# ProxMpcController — Architecture
+# ProxMpcController - Architecture
 
 This document describes the design of `prox_mpc_controller`, the
 [Nav2](https://docs.nav2.org/) controller plugin that drives the
@@ -66,7 +66,7 @@ stateDiagram-v2
   `pluginlib::ClassLoader<prox_mpc::Model>`, reads the model's speed and
   deceleration bounds from its declared constraints, sizes the MPC once
   (`init()` builds and sizes the QP), creates the predicted-trajectory publisher,
-  and — only when `predict_obstacles` is set — creates the tracked-obstacle
+  and - only when `predict_obstacles` is set - creates the tracked-obstacle
   subscription and the RViz marker publisher.
   An unknown model name escalates to `nav2_core::ControllerException`.
 - `activate()` / `deactivate()` toggle the lifecycle publishers.
@@ -159,8 +159,8 @@ When `predict_obstacles` is set, the controller subscribes to a
 [prox_mpc_obstacle_tracker](../../prox_mpc_obstacle_tracker)).
 Each cycle it snapshots the latest message under a mutex, and if the message is
 fresh (within `obstacle_timeout`) it propagates every moving track over the
-horizon along its tracker-sampled predicted trajectory — falling back to a
-constant-velocity ray when the message carries no prediction samples — binds each
+horizon along its tracker-sampled predicted trajectory - falling back to a
+constant-velocity ray when the message carries no prediction samples - binds each
 to a fixed obstacle slot across nodes, and fills the remaining slots from the
 costmap (hybrid).
 A stale or missing message, or a missing transform, degrades to the costmap-only
@@ -200,8 +200,10 @@ Per the project type rules they are `double`, `int`, `string`, or `bool` only.
 
 | Parameter | Type | Default | Unit | Description |
 | --- | --- | --- | --- | --- |
-| `model_plugin` | string | `prox_mpc_core/Bicycle` | — | `prox_mpc::Model` plugin loaded by name. |
+| `model_plugin` | string | `prox_mpc_core/Bicycle` | - | `prox_mpc::Model` plugin loaded by name. |
 | `model_params.L` | double | 1.6 | m | Wheelbase forwarded to `Model::configure`; pre-positions the bicycle steering reference. |
+| `model_params.v_max` | double | 0.0 | m/s | Optional forward-speed bound on the model's `u[0]` input. Forwarded to `Model::configure` only when `> 0.0`; the default 0.0 keeps the model's built-in limit. |
+| `model_params.v_min` | double | 0.0 | m/s | Reverse-speed bound, forwarded only alongside a positive `v_max`. A negative value is used as given; otherwise the bound is set to `-v_max`. |
 | `np` | int | 20 | nodes | Prediction horizon. |
 | `nc` | int | 20 | nodes | Control horizon. |
 | `dt` | double | 0.1 | s | Step size and control period. |
@@ -211,7 +213,7 @@ Per the project type rules they are `double`, `int`, `string`, or `bool` only.
 | Parameter | Type | Default | Unit | Description |
 | --- | --- | --- | --- | --- |
 | `desired_linear_vel` | double | 1.0 | m/s | Cruise speed the plan is sampled at; clamped to the model's speed bound. |
-| `curvature_gain` | double | 0.0 | — | Cruise reduction on path curvature; 0.0 disables it. |
+| `curvature_gain` | double | 0.0 | - | Cruise reduction on path curvature; 0.0 disables it. |
 
 ### Cost weights
 
@@ -232,7 +234,7 @@ Per the project type rules they are `double`, `int`, `string`, or `bool` only.
 | `max_iter_sqp` | int | 100 | SQP-iteration cap per cycle. |
 | `max_solve_time` | double | 0.0 | Wall-clock budget in seconds for the whole SQP loop; 0.0 disables it (the iteration caps are then the only bound). On timeout the solve reports non-convergence and the cycle brakes. Floored at 0.0. |
 | `qp_type` | bool | false | QP backend: false = sparse, true = dense. |
-| `guess` | bool | true | Warm-start the QP from the previous solve. |
+| `guess` | bool | true | ProxQP initial-guess strategy: equality-constrained (`true`) or none (`false`). The QP is not seeded with the previous increment; see [nmpc.md](../../prox_mpc_core/doc/nmpc.md). |
 | `max_solver_failures` | int | 3 | Consecutive non-converged solves before escalating to a recovery. |
 
 `max_solve_time` defaults to `0.0` (disabled) in
@@ -246,7 +248,7 @@ iteration caps are the only bound unless a stack sets a positive budget.
 | `max_obstacles` | int | 1 | slots | Obstacle-slot capacity `K` per node; 0 disables the in-loop term. |
 | `safety_margin` | double | 0.1 | m | Folded into `d_safe`. |
 | `robot_radius` | double | 0.5 | m | Robot disc radius, folded into `d_safe`. |
-| `cbf_gamma` | double | 1.0 | — | Discrete-time CBF rate `h(x_{k+1}) >= (1-gamma) h(x_k)`; 1.0 = pointwise. |
+| `cbf_gamma` | double | 1.0 | - | Discrete-time CBF rate `h(x_{k+1}) >= (1-gamma) h(x_k)`; 1.0 = pointwise. |
 | `costmap_cost_threshold` | int | 200 | cost | Cells at or above this count as occupied. |
 | `obstacle_cluster_radius` | double | 0.3 | m | Groups adjacent occupied cells into one representative. |
 | `max_obstacle_scan_cells` | int | 50 | cells | Cap on the per-node costmap scan half-window. |
@@ -255,8 +257,8 @@ iteration caps are the only bound unless a stack sets a positive budget.
 
 | Parameter | Type | Default | Unit | Description |
 | --- | --- | --- | --- | --- |
-| `predict_obstacles` | bool | false | — | Opt-in; false reproduces the costmap-only behavior. |
-| `obstacle_topic` | string | `tracked_obstacles` | — | `ObstacleArray` input topic. |
+| `predict_obstacles` | bool | false | - | Opt-in; false reproduces the costmap-only behavior. |
+| `obstacle_topic` | string | `tracked_obstacles` | - | `ObstacleArray` input topic. |
 | `obstacle_timeout` | double | 0.5 | s | Staleness before falling back to costmap-only. |
 | `dynamic_speed_threshold` | double | 0.1 | m/s | Speed above which a track is propagated (static is left to the costmap). |
 | `prediction_uncertainty_growth` | double | 0.0 | m/s | Extra `d_safe` per second of prediction. |
@@ -277,3 +279,31 @@ controller stays available.
 [config/prox_mpc_controller.yaml](../config/prox_mpc_controller.yaml); set it to
 `true` to emit per-cycle solver telemetry (published only when a subscriber is
 connected).
+
+## Robot-specific tuning
+
+The velocity envelope is the one deployment setting to establish per robot; the
+remaining behaviors below are fixed in the plugin, so a deployment adapts to them
+through the model plugin and the costmap configuration rather than through
+controller parameters.
+
+- `desired_linear_vel`, together with the `model_params.v_max` and
+  `model_params.v_min` overrides, should follow the vehicle's real envelope
+  rather than the simulation defaults. `model_params` carries only `L`, `v_max`,
+  and `v_min`; no acceleration key is declared or forwarded, so the acceleration
+  and deceleration limits - including the ones that shape the deceleration ramp -
+  come from the loaded model's declared control-rate (`du`) bounds. A platform
+  with different limits needs a model plugin that declares them.
+- `NO_INFORMATION` (255) costmap cells never count as obstacles: the per-node
+  costmap scan skips them along with cells below `costmap_cost_threshold`, so
+  unknown space does not hard-block the optimizer. Where unknown space must be
+  treated as blocking, that belongs to the costmap and planner configuration.
+- The footprint veto evaluates the polygon from `getRobotFootprint()` through
+  `footprintCostAtPose(...)` at the pose one step ahead; the pre-oriented
+  `getOrientedFootprint(...)` is not used. Publishing an accurate robot footprint
+  of at least three points keeps the check active, because a smaller footprint is
+  not a valid polygon and the veto is skipped for that cycle with a throttled
+  warning, leaving the in-loop keep-out half-planes as the obstacle guard.
+- `cancel()` completes once both last-commanded velocities fall below a fixed
+  0.01 stop epsilon (m/s and rad/s); it is a compile-time constant, and no
+  `deceleration_limit` parameter exists to override the model-derived limits.

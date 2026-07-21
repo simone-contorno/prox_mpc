@@ -5,7 +5,7 @@
 """
 Orchestrate the benchmark matrix (scenario x model x mode x repeats).
 
-For mode (b1) — the deterministic standalone core sim — this launches the
+For mode (b1) - the deterministic standalone core sim - this launches the
 prox_mpc_demo simulation node and the prox_mpc_benchmark metrics node against the
 same scenario geometry, waits for the goal (the metrics node self-terminates a
 short settle after reaching it) or the scenario timeout, and collects the per-run
@@ -27,6 +27,7 @@ import subprocess
 import sys
 import time
 
+from prox_mpc_benchmark.scenario_obstacles import obstacle_arrays
 import yaml
 
 PKG = 'prox_mpc_benchmark'
@@ -58,42 +59,6 @@ def scenario_reference(scn: dict):
         xs.append(float(g['x']))
         ys.append(float(g['y']))
     return xs, ys
-
-
-def obstacle_arrays(scn: dict):
-    """Map scenario obstacles to the standalone node's parallel-array params."""
-    motion, cx, cy, ex, ey, radius, speed, clearance = ([] for _ in range(8))
-    for o in scn.get('obstacles', []) or []:
-        otype = o.get('type', 'static')
-        m = 'static' if otype == 'static' else o.get('motion', 'static')
-        motion.append(m)
-        if m == 'circle':
-            c = o.get('center', {})
-            cx.append(float(c.get('x', 0.0)))
-            cy.append(float(c.get('y', 0.0)))
-            ex.append(0.0)
-            ey.append(0.0)
-            radius.append(float(o.get('radius', 1.0)))
-            speed.append(float(o.get('speed', 0.0)))
-        elif m == 'line':
-            a = o.get('from', {})
-            b = o.get('to', {})
-            cx.append(float(a.get('x', 0.0)))
-            cy.append(float(a.get('y', 0.0)))
-            ex.append(float(b.get('x', 0.0)))
-            ey.append(float(b.get('y', 0.0)))
-            radius.append(1.0)
-            speed.append(float(o.get('speed', 0.0)))
-        else:  # static
-            p = o.get('pose', {})
-            cx.append(float(p.get('x', 0.0)))
-            cy.append(float(p.get('y', 0.0)))
-            ex.append(0.0)
-            ey.append(0.0)
-            radius.append(1.0)
-            speed.append(0.0)
-        clearance.append(float(o.get('clearance', 0.7)))
-    return motion, cx, cy, ex, ey, radius, speed, clearance
 
 
 def write_params(path: Path, scn: dict, model: str, control: dict,

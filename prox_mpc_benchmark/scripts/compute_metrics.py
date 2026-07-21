@@ -55,8 +55,14 @@ def main():
     ap.add_argument('--repeat', type=int, default=0)
     ap.add_argument('--goal-tol', type=float, default=0.25)
     ap.add_argument('--diag-topic', default='')
-    ap.add_argument('--ct-topic', default='')
-    ap.add_argument('--gd-topic', default='')
+    # Required, unlike --diag-topic: both carry Float64, so an unset topic cannot
+    # be matched by message type the way SolverDiagnostics can. Defaulting to ''
+    # matched nothing and reported success: False for a run that had reached the
+    # goal, which is worse than refusing to run.
+    ap.add_argument('--ct-topic', required=True,
+                    help='cross-track error topic (std_msgs/Float64)')
+    ap.add_argument('--gd-topic', required=True,
+                    help='goal distance topic (std_msgs/Float64); drives success')
     args = ap.parse_args()
 
     solve, sqp, qp = [], [], []

@@ -4,9 +4,9 @@
 
 // Standalone driver for the prox_mpc_obstacle_tracker lifecycle node. The node
 // brings itself up (configure -> activate), spins, and tears itself down on
-// SIGINT/SIGTERM through a single checked finalize() ladder, per the project's
-// graceful-shutdown standard (own signal handlers, async-signal-safe handler,
-// checked transitions, one teardown path, clean spin cancel).
+// SIGINT/SIGTERM through a single checked finalize() ladder (own signal
+// handlers, async-signal-safe handler, checked transitions, one teardown
+// path, clean spin cancel).
 
 #include <atomic>
 #include <chrono>

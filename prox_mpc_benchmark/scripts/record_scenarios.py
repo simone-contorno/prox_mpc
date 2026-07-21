@@ -6,14 +6,14 @@
 Record the mode (b2) demo scenarios to per-scenario screen-capture clips.
 
 For each scenario this stands up the mode-b2 Nav2 stack (benchmark_nav2.launch.py:
-kinematic plant, scan simulator, the selected controller, and — with
-obstacle_tracker:=true — the IMM tracker), plus a path-corrected waffle
+kinematic plant, scan simulator, the selected controller, and - with
+obstacle_tracker:=true - the IMM tracker), plus a path-corrected waffle
 robot_state_publisher and RViz, waits for lifecycle activation, screen-records a
 fixed-length clip with ffmpeg x11grab, sends the scenario goal, and tears the whole
 tree down with the run_nav2 process-group SIGINT -> grace -> SIGKILL discipline.
 
 The b2 stack runs on wall/system time (no /clock publisher), so RViz and the
-robot_state_publisher use use_sim_time:=false — the opposite of the Gazebo demo.
+robot_state_publisher use use_sim_time:=false - the opposite of the Gazebo demo.
 
 ffmpeg is the recorder. Clips are fixed-duration, so the four are length-synced and
 combine cleanly into a 2x2 grid (see combine_grid.sh). Nothing is committed:

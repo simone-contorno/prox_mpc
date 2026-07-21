@@ -6,21 +6,21 @@
 Generate N *blind* two-mover held-out scenarios for the b2 cross-controller run.
 
 Blind = the obstacle geometry is drawn from a seeded RNG within fixed feasible
-bounds and written out WITHOUT ever running a controller to screen it. This
+bounds and written out without ever running a controller to screen it. This
 removes the author-selection bias that a hand-built held-out cell carries (the
 `dynamic_multi` cell was picked after rejecting geometries where pred failed).
 
 The only geometric constraint is a solvability precondition applied blind to all
 controllers alike: the orbiter's left edge must clear the line patrol by a
 margin, so a feasible lane always exists and the cell is not an unavoidable pinch
-that fails every controller (uninformative). It does NOT look at performance.
+that fails every controller (uninformative). It does not look at performance.
 
-Every generated scenario MUST be run and reported; dropping the ones where pred
+Every generated scenario must be run and reported; dropping the ones where pred
 does badly would re-introduce the exact bias this tool removes.
 
 Usage:
     python3 gen_blind_multi.py --n 4 --seed 20260707
-    # then run each printed scenario name through run_nav2.py (all six controllers)
+    # then run each printed scenario name through run_nav2.py (all seven controllers)
 """
 
 # The scenario YAML this script emits has structurally long lines (obstacle mappings
@@ -75,7 +75,7 @@ def render(s):
     - {{type: dynamic, motion: line, from: {{x: {s['line_x']}, y: -1.8}}, to: {{x: {s['line_x']}, y: 1.8}}, speed: {s['line_speed']}, clearance: {CLEARANCE}}}
     - {{type: dynamic, motion: circle, center: {{x: {s['cx']}, y: {s['cy']}}}, radius: {s['radius']}, speed: {s['cspeed']}, clearance: {CLEARANCE}}}
   models: [unicycle]
-  controllers: [proxmpc_pred, proxmpc, dwb, mppi, regulated_pure_pursuit, graceful]
+  controllers: [proxmpc_pred, proxmpc, dwb, mppi, regulated_pure_pursuit, graceful, vector_pursuit]
   run: {{repeats: 5, timeout_s: 60, seed: 0}}
 """
 

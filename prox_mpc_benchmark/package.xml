@@ -12,8 +12,11 @@
   </description>
   <maintainer email="simone.contorno@outlook.it">Simone Contorno</maintainer>
   <license>Apache-2.0</license>
+  <url type="repository">https://github.com/simone-contorno/prox_mpc</url>
+  <url type="bugtracker">https://github.com/simone-contorno/prox_mpc/issues</url>
 
   <buildtool_depend>ament_cmake</buildtool_depend>
+  <buildtool_depend>ament_cmake_python</buildtool_depend>
 
   <!-- C++ live metrics node. -->
   <depend>rclcpp</depend>
@@ -54,11 +57,15 @@
   <!-- Mode (b2) Nav2 servers and the cross-controller set the launch starts. -->
   <exec_depend>nav2_map_server</exec_depend>
   <exec_depend>nav2_planner</exec_depend>
+  <!-- The GridBased planner plugin nav2_b2_base.yaml selects. -->
+  <exec_depend>nav2_navfn_planner</exec_depend>
   <exec_depend>nav2_controller</exec_depend>
   <exec_depend>nav2_behaviors</exec_depend>
   <exec_depend>nav2_bt_navigator</exec_depend>
   <exec_depend>nav2_lifecycle_manager</exec_depend>
   <exec_depend>dwb_core</exec_depend>
+  <!-- The trajectory critics config/controllers/dwb.yaml selects. -->
+  <exec_depend>dwb_critics</exec_depend>
   <exec_depend>nav2_mppi_controller</exec_depend>
   <exec_depend>nav2_regulated_pure_pursuit_controller</exec_depend>
   <exec_depend>nav2_graceful_controller</exec_depend>

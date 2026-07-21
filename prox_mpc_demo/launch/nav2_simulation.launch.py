@@ -18,7 +18,7 @@ The same launch runs any Nav2 controller and any scenario: pass a different
 Predictive (dynamic) obstacle avoidance is a single opt-in switch:
 
   * ``predictive:=False`` (default) uses ``config/nav2_prox_mpc.yaml`` (the in-loop
-    obstacle term off — plain Nav2 navigation) and does not start the tracker.
+    obstacle term off - plain Nav2 navigation) and does not start the tracker.
   * ``predictive:=True`` uses ``config/nav2_prox_mpc_predictive.yaml`` (the feature
     on) and starts ``prox_mpc_obstacle_tracker`` on ``/scan``.
 

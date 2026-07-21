@@ -102,9 +102,18 @@ install(TARGETS timing_controller_wrapper
 install(DIRECTORY include/
   DESTINATION include/${PROJECT_NAME}
 )
-install(FILES timing_controller_plugin.xml
+
+# Attribution for the Apache-2.0-derived scalable world and recording RViz
+# config ships alongside the assets it covers.
+install(
+  FILES THIRD_PARTY_LICENSES.md
   DESTINATION share/${PROJECT_NAME}
 )
+
+# Importable helpers shared by the installed scripts and the launch files, so the
+# scenario -> obstacle-array mapping has one definition rather than one per caller.
+find_package(ament_cmake_python REQUIRED)
+ament_python_install_package(${PROJECT_NAME})
 
 # Installed Python tooling (orchestration / metrics / aggregation / generation).
 install(PROGRAMS
@@ -125,8 +134,13 @@ install(PROGRAMS
 )
 
 # Launch + config + scalable world / Ackermann model (mode a).
+# Keep byte-compiled launch files out of the install space. Both patterns are
+# needed: plain CMake matches the "__pycache__" directory name, while
+# ament's --symlink-install reimplementation globs files only and needs "*.pyc".
 install(DIRECTORY launch config worlds models rviz
   DESTINATION share/${PROJECT_NAME}
+  PATTERN "__pycache__" EXCLUDE
+  PATTERN "*.pyc" EXCLUDE
 )
 
 if(BUILD_TESTING)

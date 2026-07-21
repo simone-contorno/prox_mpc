@@ -9,10 +9,10 @@
 // ray-casts the scenario obstacles (static box / moving circle / patrolling line,
 // with the identical motion law as mode b1) from the robot pose and publishes a
 // 2D LaserScan on /scan, which a costmap obstacle_layer marks and clears. Every
-// controller under test (DWB / MPPI / RPP / Graceful, and ProxMPC's costmap fill)
-// therefore perceives the same obstacle through the same costmap and inflation, so
-// the obstacle-avoidance comparison is fair by construction — no controller gets
-// privileged ground-truth obstacle knowledge.
+// controller under test (DWB / MPPI / RPP / Graceful / Vector Pursuit, and
+// ProxMPC's costmap fill) therefore perceives the same obstacle through the
+// same costmap and inflation, so the obstacle-avoidance comparison is fair by
+// construction - no controller gets privileged ground-truth obstacle knowledge.
 //
 // The virtual lidar is mounted at the body origin (scan frame defaults to
 // base_link), so ranges are measured from the robot centre. Obstacles are sensed
@@ -26,6 +26,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <cstdint>
 #include <limits>
 #include <memory>
 #include <random>

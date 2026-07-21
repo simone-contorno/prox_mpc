@@ -25,7 +25,11 @@ find_package(Eigen3 REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(nav_msgs REQUIRED)
 find_package(pluginlib REQUIRED)
-find_package(proxsuite REQUIRED)
+# 0.6.5 is the floor package.xml declares. It matters: 0.6.5 inserted an
+# enumerator into QPSolverOutput, so an older copy on CMAKE_PREFIX_PATH
+# (for example an unmanaged /usr/local install) compiles against a different
+# solver contract than the declared dependency.
+find_package(proxsuite 0.6.5 REQUIRED)
 
 # Library
 # SHARED so the core can be linked into downstream shared plugin libraries (for
@@ -84,10 +88,6 @@ pluginlib_export_plugin_description_file(prox_mpc_core prox_mpc_core_plugins.xml
 install(
   DIRECTORY include/
   DESTINATION include
-)
-install(
-  FILES prox_mpc_core_plugins.xml
-  DESTINATION share/${PROJECT_NAME}
 )
 install(
   TARGETS ${PROJECT_NAME}

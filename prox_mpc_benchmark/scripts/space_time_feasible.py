@@ -5,10 +5,10 @@
 """
 Controller-independent space-time feasibility check for a b2 scenario.
 
-Answers "does ANY collision-free, speed-capped trajectory exist from start to
-goal against the moving obstacles?" with a holonomic, speed-capped disc robot —
-independent of any controller. Reachability is OVER-approximated (a generous
-robot), so an INFEASIBLE verdict is trustworthy: if even this robot cannot reach
+Answers "does any collision-free, speed-capped trajectory exist from start to
+goal against the moving obstacles?" with a holonomic, speed-capped disc robot -
+independent of any controller. Reachability is over-approximated (a generous
+robot), so an infeasible verdict is trustworthy: if even this robot cannot reach
 the goal, no real (non-holonomic, cap-0.5) robot can. It is used to gate the
 blind held-out cells: a cell the checker calls infeasible is discarded (it is
 impossible for anyone, not a controller failure), so the surviving cells give a
@@ -89,7 +89,7 @@ def feasible(scn):
         return ~occ
 
     # One-step reachability disc at the 0.5 m/s cap, slightly generous (+0.5 cell)
-    # so the model is a mild over-approximation and an INFEASIBLE verdict is safe.
+    # so the model is a mild over-approximation and an infeasible verdict is safe.
     step = VMAX * DT / RES + 0.5
     offs = [(dx, dy) for dx in range(-int(step) - 1, int(step) + 2)
             for dy in range(-int(step) - 1, int(step) + 2)

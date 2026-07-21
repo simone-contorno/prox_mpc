@@ -2,7 +2,7 @@
 Changelog for package prox_mpc_msgs
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-1.0.0 (2026-07-01)
+1.0.0 (2026-07-19)
 ------------------
 * Initial release: ``Obstacle`` and ``ObstacleArray`` messages for tracked
   dynamic obstacles (position, velocity, radius, and covariances).

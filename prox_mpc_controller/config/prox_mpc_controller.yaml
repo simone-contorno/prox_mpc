@@ -1,7 +1,7 @@
 # ProxMpcController configuration. This file is the single source of truth for
-# the controller's parameters, mirroring the demo's parameter set. Defaults for
-# the non-obstacle parameters match the values validated in the core, so an
-# unconfigured controller reproduces the reference behaviour.
+# the controller's parameters. Defaults for the non-obstacle parameters match
+# the values validated in the core, so an unconfigured controller reproduces
+# the reference behavior.
 controller_server:
   ros__parameters:
     # Standard Nav2 controller_server wiring (update rates, goal and progress
@@ -40,7 +40,7 @@ controller_server:
       max_iter_sqp: 100
       max_solve_time: 0.0   # [s] wall-clock budget for the SQP loop; 0 = disabled (iteration caps only)
       qp_type: false        # false = sparse, true = dense
-      guess: true           # warm start
+      guess: true           # ProxQP initial-guess strategy (see prox_mpc_core/doc/nmpc.md)
 
       # Consecutive non-converged solves tolerated before the controller raises a
       # recovery; each failure decelerates toward zero at the robot's limit.
@@ -61,11 +61,11 @@ controller_server:
       # Predictive (dynamic) obstacle avoidance. When enabled and a fresh
       # tracked-obstacle message is available, each dynamic track is propagated
       # over the horizon (constant velocity) and bound to a fixed obstacle slot
-      # across nodes, so the NMPC avoids where each obstacle WILL be; the rest of
+      # across nodes, so the NMPC avoids where each obstacle will be; the rest of
       # the K slots are filled from the costmap (hybrid). predict_obstacles=false
       # (and any stale/missing tracking data) reproduces the costmap-only fill.
-      predict_obstacles: false             # opt-in; false = today's behavior
-      obstacle_topic: "tracked_obstacles"  # prox_mpc_msgs/ObstacleArray input
+      predict_obstacles: false              # opt-in; false selects the costmap-only obstacle fill
+      obstacle_topic: "tracked_obstacles"   # prox_mpc_msgs/ObstacleArray input
       obstacle_timeout: 0.5                 # [s] staleness before costmap-only fallback
       dynamic_speed_threshold: 0.1          # [m/s] speed above which a track is propagated
       prediction_uncertainty_growth: 0.0    # [m/s] extra d_safe per second of prediction

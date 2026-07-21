@@ -1,8 +1,8 @@
 # Demonstration videos
 
 Reproducible screen-capture automation for the ProxMPC demo.
-It records the four mode (b2) benchmark scenarios — driven by the kinematic plant,
-no Gazebo — as fixed-length clips and stitches them into one 2x2 grid video.
+It records the four mode (b2) benchmark scenarios - driven by the kinematic plant,
+no Gazebo - as fixed-length clips and stitches them into one 2x2 grid video.
 The four scenarios are the no-obstacle, static, dynamic-line, and dynamic-circle
 cells, all run with the predictive controller (`proxmpc_pred`) and the IMM obstacle
 tracker enabled so the predicted-obstacle overlay is exercised.
@@ -16,6 +16,7 @@ locally regenerated artifact, not committed to the repository.
 - [Prerequisites](#prerequisites)
 - [Record the per-scenario clips](#record-the-per-scenario-clips)
 - [Combine into a 2x2 grid](#combine-into-a-2x2-grid)
+- [Multi-controller grids](#multi-controller-grids)
 - [Outputs](#outputs)
 - [Parameters](#parameters)
 - [Notes and gotchas](#notes-and-gotchas)
@@ -25,8 +26,8 @@ locally regenerated artifact, not committed to the repository.
 
 Each clip brings up the mode (b2) Nav2 stack through
 [`launch/benchmark_nav2.launch.py`](../launch/benchmark_nav2.launch.py): the
-kinematic plant, the scan simulator, the selected controller, and — because the
-recorder passes `obstacle_tracker:=true` — the IMM (CV + CTRV) tracker.
+kinematic plant, the scan simulator, the selected controller, and - because the
+recorder passes `obstacle_tracker:=true` - the IMM (CV + CTRV) tracker.
 Alongside the stack the recorder starts a `robot_state_publisher` and a
 `joint_state_publisher` on the waffle URDF, and RViz on the recording profile
 [`rviz/recording.rviz`](../rviz/recording.rviz) (a full-frame, dock-free view
@@ -34,20 +35,20 @@ framing the corridor).
 Two URDF details matter for a clean render: the description is **re-rooted at
 `base_link`** (the stock waffle roots at `base_footprint`, whose fixed
 `base_footprint -> base_link` joint would fight the plant's `odom -> base_link`
-and give `base_link` two TF parents — corrupting the costmap's scan transform into
+and give `base_link` two TF parents - corrupting the costmap's scan transform into
 phantom, uncleared keep-outs that trap the robot), and the `joint_state_publisher`
 supplies the continuous wheel joints (without it RViz reddens the RobotModel).
 The mesh paths are also corrected so the model loads without "Error loading
 geometries".
 
 An `obstacle_markers` node draws each scenario obstacle as a ground-truth cylinder
-on `/obstacle_bodies` (a `MarkerArray`, visualization only — never
+on `/obstacle_bodies` (a `MarkerArray`, visualization only - never
 `/tracked_obstacles`, so it does not feed the controller), using the same analytic
 motion law and first-motion clock as the scan simulator. The body therefore tracks
 the obstacle exactly, so the video shows where the obstacle really is alongside its
 (lagging) costmap footprint.
 
-The b2 stack runs on wall/system time — there is no `/clock` publisher — so RViz,
+The b2 stack runs on wall/system time - there is no `/clock` publisher - so RViz,
 the `robot_state_publisher`, and the `joint_state_publisher` are started with
 `use_sim_time:=false`. This is the opposite of the Gazebo demo launch, and using
 sim time here would leave RViz waiting on a clock that never ticks.
@@ -82,7 +83,7 @@ records black regardless of what is on screen. Pick one of:
 
 - **Xorg session (simplest, GPU-rendered):** log in via the GDM gear menu as
   "Ubuntu on Xorg", then run the recorder unchanged (it captures `$DISPLAY`, `:0`).
-- **Virtual Xvfb display (headless, scriptable — how the bundled clips were made):**
+- **Virtual Xvfb display (headless, scriptable - how the bundled clips were made):**
   start a virtual X server sized to the capture, then point the recorder at it with
   `--display`. RViz falls back to software GL (llvmpipe), which renders correctly:
 
@@ -91,7 +92,7 @@ records black regardless of what is on screen. Pick one of:
   ros2 run prox_mpc_benchmark record_scenarios.py --display :99 --resolution 1920x1080
   ```
 
-Confirm a display is capturable before a long run — a single frame should not be
+Confirm a display is capturable before a long run - a single frame should not be
 near-black (`YAVG` well above ~16):
 
 ```bash
@@ -178,7 +179,7 @@ The full ffmpeg command is echoed before it runs.
 To compare controllers on the *same* scenario (ProxMPC vs the stock Nav2 peers),
 record each controller into its own folder with `--controller` / `--out-dir`, then
 combine one scenario across four folders with the explicit `--inputs` / `--labels`
-mode (the four paths and four cell labels, top-left → bottom-right):
+mode (the four paths and four cell labels, top-left -> bottom-right):
 
 ```bash
 # one folder per controller (the tracker starts only for proxmpc_pred)
@@ -202,10 +203,10 @@ recording profile) rather than ProxMPC's `/prox_mpc_local_plan` (green).
 All artifacts land under `results/videos/` (gitignored):
 
 - `nav2_open.mp4`, `static_box.mp4`, `dynamic_line_forward.mp4`,
-  `dynamic_circle.mp4` — the per-scenario clips.
-- `prox_mpc_demo_grid.mp4` — the combined 2x2 grid.
-- `prox_mpc_demo_grid.gif` — the inline GIF embedded (and looping) in the README.
-- `logs/` — per-child capture logs for auditing bringup and RViz.
+  `dynamic_circle.mp4` - the per-scenario clips.
+- `prox_mpc_demo_grid.mp4` - the combined 2x2 grid.
+- `prox_mpc_demo_grid.gif` - the inline GIF embedded (and looping) in the README.
+- `logs/` - per-child capture logs for auditing bringup and RViz.
 
 ## Parameters
 
@@ -254,5 +255,5 @@ All artifacts land under `results/videos/` (gitignored):
 
 ## License
 
-[Apache-2.0](../../LICENSE) — the full text is in [LICENSE](../../LICENSE) and
+[Apache-2.0](../../LICENSE) - the full text is in [LICENSE](../../LICENSE) and
 attribution in [NOTICE](../../NOTICE).

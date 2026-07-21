@@ -27,6 +27,7 @@ import subprocess
 import sys
 import time
 
+from prox_mpc_benchmark.scenario_obstacles import body_radii, obstacle_arrays
 import yaml
 
 PKG = 'prox_mpc_benchmark'
@@ -36,7 +37,7 @@ DEFAULT_CONTROLLERS = [
 
 # Shared robot radius (nav2_b2_base costmap) and ProxMPC safety margin. The physical
 # obstacle radius is back-computed so that this robot inflation plus the marked
-# obstacle disc reproduces the scenario keep-out clearance — so every controller
+# obstacle disc reproduces the scenario keep-out clearance - so every controller
 # faces the identical physical obstacle and ProxMPC's effective keep-out matches b1.
 ROBOT_RADIUS = 0.22
 SAFETY_MARGIN = 0.10
@@ -52,49 +53,6 @@ def load_yaml(path: Path) -> dict:
         return yaml.safe_load(fh)
 
 
-def obstacle_arrays(scn: dict):
-    """
-    Map scenario obstacles to the scan-simulator / metrics parallel arrays.
-
-    Mirrors run_matrix.obstacle_arrays so b1 and b2 drive the identical obstacle
-    geometry, and adds the physical body radius used for costmap marking and the
-    clearance metric.
-    """
-    motion, cx, cy, ex, ey, radius, speed, body = ([] for _ in range(8))
-    for o in scn.get('obstacles', []) or []:
-        otype = o.get('type', 'static')
-        m = 'static' if otype == 'static' else o.get('motion', 'static')
-        motion.append(m)
-        if m == 'circle':
-            c = o.get('center', {})
-            cx.append(float(c.get('x', 0.0)))
-            cy.append(float(c.get('y', 0.0)))
-            ex.append(0.0)
-            ey.append(0.0)
-            radius.append(float(o.get('radius', 1.0)))
-            speed.append(float(o.get('speed', 0.0)))
-        elif m == 'line':
-            a = o.get('from', {})
-            b = o.get('to', {})
-            cx.append(float(a.get('x', 0.0)))
-            cy.append(float(a.get('y', 0.0)))
-            ex.append(float(b.get('x', 0.0)))
-            ey.append(float(b.get('y', 0.0)))
-            radius.append(1.0)
-            speed.append(float(o.get('speed', 0.0)))
-        else:  # static
-            p = o.get('pose', {})
-            cx.append(float(p.get('x', 0.0)))
-            cy.append(float(p.get('y', 0.0)))
-            ex.append(0.0)
-            ey.append(0.0)
-            radius.append(1.0)
-            speed.append(0.0)
-        clearance = float(o.get('clearance', 0.7))
-        body.append(max(0.05, clearance - (ROBOT_RADIUS + SAFETY_MARGIN)))
-    return motion, cx, cy, ex, ey, radius, speed, body
-
-
 def write_scan_params(path: Path, scn: dict, repeat: int = 0):
     """
     Write the scan-simulator params (obstacle field + scan geometry).
@@ -103,7 +61,8 @@ def write_scan_params(path: Path, scn: dict, repeat: int = 0):
     Gaussian range-noise model on obstacle returns; the seed is varied per
     repeat so repeats sample independent (but reproducible) noise.
     """
-    motion, cx, cy, ex, ey, radius, speed, body = obstacle_arrays(scn)
+    motion, cx, cy, ex, ey, radius, speed, clearance = obstacle_arrays(scn)
+    body = body_radii(clearance, ROBOT_RADIUS, SAFETY_MARGIN)
     noise_std = float(scn.get('sensor', {}).get('range_noise_std', 0.0))
     params = {
         'scan_frame': 'base_link',
@@ -134,7 +93,8 @@ def write_gt_params(path: Path, scn: dict):
     Uses the same obstacle field as the scan simulator, republished as perfect
     /tracked_obstacles.
     """
-    motion, cx, cy, ex, ey, radius, speed, body = obstacle_arrays(scn)
+    motion, cx, cy, ex, ey, radius, speed, clearance = obstacle_arrays(scn)
+    body = body_radii(clearance, ROBOT_RADIUS, SAFETY_MARGIN)
     params = {'odom_topic': 'odom', 'tracking_frame': 'odom', 'rate_hz': 20.0}
     if motion:
         params.update({
@@ -185,7 +145,8 @@ def write_metrics_params(path: Path, scn: dict, control: dict, controller: str,
     }
     # Same obstacle field the scan simulator uses, so the clearance metric measures
     # the obstacles the controller actually faced (controller-agnostic).
-    motion, cx, cy, ex, ey, radius, speed, body = obstacle_arrays(scn)
+    motion, cx, cy, ex, ey, radius, speed, clearance = obstacle_arrays(scn)
+    body = body_radii(clearance, ROBOT_RADIUS, SAFETY_MARGIN)
     if motion:
         metrics.update({
             'obs_motion': motion,
@@ -288,7 +249,6 @@ def run_cell(scn, controller, repeat, control, results_dir, robot, map_yaml,
             runs_dir / f'{tag}.gt.log')
 
     metrics = goal_proc = sampler = tracker_sampler = None
-    metrics_log = open(runs_dir / f'{tag}.metrics.log', 'w')
     try:
         time.sleep(warmup_s)  # let the lifecycle manager activate the servers
         # Instrument the controller_server process for the embedded-resource metrics.
@@ -322,7 +282,7 @@ def run_cell(scn, controller, repeat, control, results_dir, robot, map_yaml,
         # The metrics node anchors its obstacle clock to the first robot motion
         # IT observes. If the goal races ahead of its subscriptions (slow
         # discovery under load), the clock starts late and the whole obstacle
-        # field is evaluated out of phase — false collision/clearance numbers.
+        # field is evaluated out of phase - false collision/clearance numbers.
         # Gate the goal on the node being discoverable.
         for _ in range(20):
             probe = subprocess.run(
@@ -350,7 +310,6 @@ def run_cell(scn, controller, repeat, control, results_dir, robot, map_yaml,
         terminate(tracker_sampler)
         terminate(gt_proc)
         terminate(stack)
-        metrics_log.close()
         stack_log.close()
         time.sleep(3.0)  # let DDS discovery settle before the next cell
 

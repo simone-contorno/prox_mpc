@@ -11,13 +11,11 @@
 // next state. It also measures the solve time (min / avg / max in ms) and logs it
 // periodically, and (when publish_diagnostics is true) publishes one
 // prox_mpc_msgs/SolverDiagnostics per cycle on /prox_mpc/diagnostics so the
-// real-time and feasibility metric classes are observable. The effective control
-// rate can also be checked with `ros2 topic hz /robot/cmd_vel`.
+// real-time and feasibility metric classes are observable.
 //
-// Obstacles may be a single static obstacle (legacy obs_x / obs_y / d_safe) or a
+// Obstacles may be a single fixed obstacle (obs_x / obs_y / d_safe) or a
 // time-varying list (obs_motion = static | circle | line). For a dynamic
-// obstacle the per-node predicted positions are filled, so mode (b1) exercises
-// genuine predictive avoidance of the four shipped scenarios deterministically.
+// obstacle the per-node predicted positions are filled.
 //
 // step() and broadcastPose() are protected so a unit test can drive one control
 // cycle deterministically without spinning the wall timer.
@@ -46,8 +44,6 @@
 #include <stdexcept>
 #include <string>
 #include <vector>
-
-using namespace prox_mpc;
 
 class SimulationNode : public rclcpp::Node
 {
@@ -116,8 +112,8 @@ public:
     k_obs_ = avoidance_on ? std::max(max_obstacles_, obs_count) : 0;
 
     /* Model. The handle is retained so the node can map controls to a twist. */
-    if (model_name_ == "unicycle") {model_ = std::make_shared<Unicycle>();} else {
-      model_ = std::make_shared<Bicycle>();
+    if (model_name_ == "unicycle") {model_ = std::make_shared<prox_mpc::Unicycle>();} else {
+      model_ = std::make_shared<prox_mpc::Bicycle>();
     }
     n_ = model_->getN();
     m_ = model_->getM();
@@ -132,7 +128,7 @@ public:
     MatrixXd W = MatrixXd::Constant(1, 1, w_weight);
 
     /* MPC. */
-    mpc_ = std::make_shared<MPC>();
+    mpc_ = std::make_shared<prox_mpc::MPC>();
     mpc_->setNp(np_);
     mpc_->setNc(nc_);
     mpc_->setdt(dt_);
@@ -276,11 +272,11 @@ protected:
     pub_cmd_->publish(model_->toTwist(u0));
 
     /* Publish the predicted trajectory for visualization. */
-    pub_path_->publish(optimPath(x, now()));
+    pub_path_->publish(prox_mpc::optimPath(x, now()));
 
     /* Closed-loop: advance to the model's predicted next state. */
     pose_ = x.row(1);
-    normalizeAngle(pose_(2));
+    prox_mpc::normalizeAngle(pose_(2));
 
     /* Broadcast map -> base_link so RViz tracks the simulated pose. */
     broadcastPose();
@@ -356,8 +352,8 @@ protected:
   std::vector<ObstacleSpec> obstacles_;
   double sim_time_ = 0.0;  // deterministic sim clock (step_index * dt)
 
-  std::shared_ptr<Model> model_;
-  std::shared_ptr<MPC> mpc_;
+  std::shared_ptr<prox_mpc::Model> model_;
+  std::shared_ptr<prox_mpc::MPC> mpc_;
   VectorXd pose_;
   MatrixXd goal_states_;
 
@@ -403,8 +399,8 @@ private:
     if (k_obs_ == 0) {return;}
     MatrixXd obs = MatrixXd::Zero(static_cast<Eigen::Index>(np_ * k_obs_), 3);
     for (Eigen::Index r = 0; r < obs.rows(); r++) {
-      obs(r, 0) = MPC::kObsFarSentinel;
-      obs(r, 1) = MPC::kObsFarSentinel;
+      obs(r, 0) = prox_mpc::MPC::kObsFarSentinel;
+      obs(r, 1) = prox_mpc::MPC::kObsFarSentinel;
       obs(r, 2) = 0.0;
     }
     if (!obstacles_.empty()) {
@@ -419,7 +415,7 @@ private:
         }
       }
     } else {
-      // Legacy single static obstacle in slot 0 of every node.
+      // Single-obstacle form: written into slot 0 of every node.
       for (size_t node = 0; node < np_; node++) {
         const Eigen::Index row = static_cast<Eigen::Index>(node * k_obs_);
         obs(row, 0) = obs_x_;

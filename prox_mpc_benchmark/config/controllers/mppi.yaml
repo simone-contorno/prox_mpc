@@ -32,9 +32,8 @@ FollowPath:
     trajectory_step: 5
     time_step: 3
   critics: ["ConstraintCritic", "CostCritic", "GoalCritic", "GoalAngleCritic", "PathAlignCritic", "PathFollowCritic", "PathAngleCritic", "PreferForwardCritic"]
-  # CostCritic obstacle weight kept at the upstream default: raising it trades
-  # orbiting-cell avoidance for static_box completion and slower goals with no
-  # net gain, so the default is MPPI's best-balanced operating point here.
+  # CostCritic obstacle weight left at the upstream default; the tuning pass is
+  # recorded in the comparison document.
   CostCritic:
     enabled: true
     cost_weight: 3.81

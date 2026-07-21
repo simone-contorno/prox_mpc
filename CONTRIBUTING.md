@@ -24,14 +24,14 @@ that pattern.
   the orchestration/analysis scripts under `prox_mpc_benchmark/scripts/`,
   targeting Python 3.12. Those scripts live in an `ament_cmake` package
   (`prox_mpc_benchmark/package.xml` declares `<build_type>ament_cmake</build_type>`)
-  and are installed, not built as an `ament_python` package — follow that
+  and are installed, not built as an `ament_python` package - follow that
   pattern rather than converting a package to `ament_python`.
 - **CMake.** `cmake_minimum_required(VERSION 3.28)` is the floor in every
   package's `CMakeLists.txt`; do not lower it.
 - **Formatting is `ament_uncrustify`-only.** As stated in the package READMEs
   (e.g. `prox_mpc_core/README.md`, `prox_mpc_controller/README.md`,
   `prox_mpc_obstacle_tracker/README.md`): `cpplint` and `ament_copyright` are
-  disabled — uncrustify is the single enforced C++ formatter, and files carry
+  disabled - uncrustify is the single enforced C++ formatter, and files carry
   a short SPDX header with the full text in [LICENSE](LICENSE), for example:
 
   ```cpp
@@ -45,7 +45,7 @@ that pattern.
   `CMakeLists.txt` calls `find_package(ament_lint_auto REQUIRED)` and
   `ament_lint_auto_find_test_dependencies()` under `BUILD_TESTING`, and
   `.github/workflows/ci.yaml` invokes `colcon test --return-code-on-test-failure`
-  after the build. That is the whole lint path in this repo — there is no
+  after the build. That is the whole lint path in this repo - there is no
   separate `ament_uncrustify --reformat` or standalone lint invocation in CI,
   so verify locally the same way: build, then `colcon test` in your overlay.
 - **RAII and ownership.** Use `std::unique_ptr` by default for exclusive
@@ -56,7 +56,7 @@ that pattern.
   `std::shared_ptr` by reference or use one solely to extend an object's
   lifetime; pass `const std::shared_ptr&` when only observing it.
 - **Named constants over magic numbers**, and **explicit narrowing
-  conversions** — narrow to a lower-precision type only at a tightly scoped
+  conversions** - narrow to a lower-precision type only at a tightly scoped
   boundary, with a comment explaining why (see the existing exceptions called
   out in ROS parameter and Eigen/solver code for precedent).
 
@@ -76,13 +76,13 @@ that pattern.
   reviewable and bisectable.
 - **No DCO / sign-off is currently required.** This repository has no
   `Signed-off-by` trailer convention in its commit history and no existing
-  `CONTRIBUTING`-adjacent policy or `.github/` template requiring one — do not
+  `CONTRIBUTING`-adjacent policy or `.github/` template requiring one - do not
   add a sign-off trailer unless a maintainer asks for it in review.
 
 ## Testing standards
 
 - **Frameworks.** Every test in this repo is a GoogleTest (with GMock
-  available) suite registered via `ament_add_gtest` — there is no
+  available) suite registered via `ament_add_gtest` - there is no
   `ament_add_pytest_test`, no `launch_testing`, and no `.py` test file
   anywhere in the tree. If you add Python-facing behavior that needs its own
   test (as opposed to being exercised through a C++ node under test), discuss
@@ -92,30 +92,24 @@ that pattern.
   suite, registered in that package's `CMakeLists.txt` under
   `if(BUILD_TESTING)`. Current suites, for reference:
   - `prox_mpc_core/test/`: `test_model_interface`, `test_mpc_regression`,
-    `test_custom_model`, `test_obstacle_k`, `test_utils`
-    (`prox_mpc_core/CMakeLists.txt:127-132`).
-  - `prox_mpc_controller/test/test_prox_mpc_controller.cpp`
-    (`prox_mpc_controller/CMakeLists.txt:122-124`).
+    `test_custom_model`, `test_obstacle_k`, `test_utils`.
+  - `prox_mpc_controller/test/test_prox_mpc_controller.cpp`.
   - `prox_mpc_obstacle_tracker/test/`: `test_clustering`, `test_imm_filter`,
-    `test_tracker`, `test_obstacle_tracker_node`
-    (`prox_mpc_obstacle_tracker/CMakeLists.txt:124-137`).
-  - `prox_mpc_demo/test/test_simulation_node.cpp`
-    (`prox_mpc_demo/CMakeLists.txt:74-76`).
-  - `prox_mpc_benchmark/test/`: `test_metrics`, `test_obstacle_field`
-    (`prox_mpc_benchmark/CMakeLists.txt:138-145`).
+    `test_tracker`, `test_obstacle_tracker_node`.
+  - `prox_mpc_demo/test/test_simulation_node.cpp`.
+  - `prox_mpc_benchmark/test/`: `test_metrics`, `test_obstacle_field`.
   - `prox_mpc_msgs` and `prox_mpc_test_models` currently register no gtest
-    suites — only `ament_lint_auto` runs under `BUILD_TESTING` for those two
+    suites - only `ament_lint_auto` runs under `BUILD_TESTING` for those two
     packages (they are IDL-only and a pluginlib-loaded model library,
     respectively).
 - **Unit vs. integration pattern.** Follow the split this repo already uses
   rather than inventing a new one:
   - ROS-free core logic is tested directly, with no node/executor in the
-    loop — e.g. `prox_mpc_obstacle_tracker`'s `test_clustering`,
+    loop - e.g. `prox_mpc_obstacle_tracker`'s `test_clustering`,
     `test_imm_filter`, and `test_tracker` link only against
     `${PROJECT_NAME}_core` and exercise clustering, filter, and
-    association/lifecycle logic as plain C++ (`prox_mpc_obstacle_tracker/CMakeLists.txt:124-131`);
-    `prox_mpc_core`'s five suites test the model/solver interface the same
-    way.
+    association/lifecycle logic as plain C++; `prox_mpc_core`'s five suites
+    test the model/solver interface the same way.
   - ROS-facing surfaces are tested through their public interface, in the
     same process, with the test owning `rclcpp` init/shutdown via its own
     `main` (`SKIP_LINKING_MAIN_LIBRARIES`): `test_prox_mpc_controller` brings
@@ -125,7 +119,7 @@ that pattern.
     lifecycle-node transition ladder and the scan-to-publish path against a
     synthetic scan; `test_simulation_node` drives the demo's control cycle
     directly without a wall timer. There is no `launch_testing`-based
-    integration test anywhere in this repo yet — if you need true multi-node,
+    integration test anywhere in this repo yet - if you need true multi-node,
     multi-process system coverage, that would be new territory here, and per
     the house convention it belongs in a dedicated system-test package, not
     bolted onto one of the existing library packages.
@@ -133,7 +127,7 @@ that pattern.
   with `--symlink-install` and `--coverage` flags, then runs
   `colcon test --return-code-on-test-failure` followed by
   `colcon test-result --verbose` across the whole workspace (no package
-  matrix — one `build-and-test` job covers every package). Reproduce that
+  matrix - one `build-and-test` job covers every package). Reproduce that
   locally from your overlay:
 
   ```bash
@@ -145,7 +139,7 @@ that pattern.
   Drop `--packages-select <package>` to match the CI invocation exactly
   (it tests the whole workspace); use it locally to iterate on one package
   faster. A second CI job, `clang-tsa`, rebuilds the whole workspace with
-  Clang and `-Wthread-safety` — it does not run tests, only the
+  Clang and `-Wthread-safety` - it does not run tests, only the
   thread-safety-annotated build, so a change to mutex-guarded state in
   `prox_mpc_controller` or `prox_mpc_obstacle_tracker` should also be checked
   against that build if you touch shared/guarded state.
@@ -155,7 +149,7 @@ that pattern.
   (`coverage_filtered.info`, with `/opt/*`, `/usr/*`, `*/test/*`, and
   `*/build/*` excluded) and uploads it as a build artifact
   (`.github/workflows/ci.yaml`, the `Generate coverage report` and
-  `Upload coverage artifact` steps) — but nothing in the workflow reads a
+  `Upload coverage artifact` steps) - but nothing in the workflow reads a
   percentage back out of that report or fails the job on it. There is no
   `fail_under`, no Codecov config, and no other coverage gate anywhere in
   `.github/workflows/` or the package tree. Treat 95% as the target to aim
@@ -164,12 +158,13 @@ that pattern.
   `references/coverage.md`), not as something that currently blocks a PR.
 - **Ship tests with the change, in the same PR.** Recent history mostly
   follows this: `c854679` (`feat(obstacle_tracker): IMM CV+CTRV tracking...`)
-  added all four tracker test files alongside the new filter and clustering
-  code in the same commit; `d78ff1a`
+  added the new `test_imm_filter` suite and extended the three existing tracker
+  suites (`test_clustering`, `test_tracker`, `test_obstacle_tracker_node`)
+  alongside the new filter and clustering code in the same commit; `d78ff1a`
   (`feat(controller): predictive dynamic-obstacle avoidance...`) added 205
   lines to `test_prox_mpc_controller.cpp` alongside the behavior change; and
   `3580c0c` is a dedicated `test(core): ...` commit closing a gap left by a
-  prior change. This is not exceptionless — `dae7906`
+  prior change. This is not exceptionless - `dae7906`
   (`feat(benchmark): matched-cap fair harness...`) landed a real behavior
   change (a genuine matched speed cap, a sensor-noise model, new scenarios)
   touching 22 files with no test-file update, so it is not a hard gate today.
@@ -179,12 +174,11 @@ that pattern.
 
 ## Security
 
-- **Never commit secrets, keys, or credentials.** There is no secret-scanning
-  step in CI today — no `gitleaks`, `trufflehog`, or equivalent in
-  `.github/workflows/ci.yaml` — so nothing automated will catch a leaked key,
-  and the review you do before you commit is the only gate. The tracked tree is
-  currently clean of secrets: the only credential-shaped strings in it are the
-  public maintainer emails in each `package.xml` and in
+- **Never commit secrets, keys, or credentials.** Nothing in CI will catch a
+  leaked key (see [SECURITY.md](SECURITY.md#what-ci-does-and-does-not-check)), so
+  the review you do before you commit is the only gate. The tracked tree is
+  currently clean: the only credential-shaped strings in it are the public
+  maintainer emails in each `package.xml` and in
   `prox_mpc_benchmark/models/ackermann_robot/model.config`, which are contact
   addresses, not secrets. Keep it that way. Before every commit, read your
   staged diff and run a quick sweep, for example:
@@ -194,8 +188,8 @@ that pattern.
   git grep -niE 'api[_-]?key|secret|password|-----BEGIN' -- $(git diff --staged --name-only)
   ```
 
-  This is a robotics-control package — a Nav2 controller plugin, a lidar
-  obstacle tracker, and a benchmarking harness — with no login flow, no API
+  This is a robotics-control package - a Nav2 controller plugin, a lidar
+  obstacle tracker, and a benchmarking harness - with no login flow, no API
   tokens, no service credentials, and no config file that should ever hold one.
   If a change appears to need a secret, that is a design smell to raise in the
   PR, not something to inline.
@@ -205,7 +199,7 @@ that pattern.
   Apache-2.0, BSD-2-Clause, BSD-3-Clause, MIT, and header-only *unmodified*
   MPL-2.0 are in policy (Eigen's MPL-2.0 headers are the sole MPL case, used
   unmodified). Copyleft licenses (GPL/LGPL/AGPL, or a modified MPL file) are out
-  of policy — do not add one without maintainer sign-off. When you add a
+  of policy - do not add one without maintainer sign-off. When you add a
   dependency you must: (1) add a row to the `THIRD_PARTY_LICENSES.md` inventory
   table stating how it is used, its license, and a one-line rationale; (2)
   declare it explicitly in `package.xml` with the correct tag
@@ -213,44 +207,26 @@ that pattern.
   it in `CMakeLists.txt`; and (3) prefer a rosdep-provisioned apt key over a
   vendored copy, matching how `ros-jazzy-proxsuite` is pinned
   (`version_gte="0.6.5"`) and `ros-jazzy-vector-pursuit-controller` is declared
-  as a runtime `exec_depend`. Bundled *demo assets* (URDF, world files) are
-  inventoried separately in
-  [prox_mpc_demo/THIRD_PARTY_LICENSES.md](prox_mpc_demo/THIRD_PARTY_LICENSES.md).
-- **Know what CI does and does not check.** `.github/workflows/ci.yaml` already
-  applies the hardening this repo commits to: the workflow declares
-  least-privilege `permissions: contents: read`, and every third-party action is
-  pinned by full commit SHA with the version tag in a trailing comment
-  (`actions/checkout@34e1148…  # v4.3.1`,
-  `actions/upload-artifact@ea165f8…  # v4.6.2`) rather than by a mutable tag —
-  keep both of those properties if you touch the workflow. Static analysis that
-  actually runs is `ament_cppcheck` (cppcheck is installed and
-  `AMENT_CPPCHECK_ALLOW_SLOW_VERSIONS` is set so it does not silently no-op) via
-  `colcon test`, plus the separate `clang-tsa` job that rebuilds the workspace
-  under `-Wthread-safety`. What CI does **not** run: there is no secret scanner,
-  no CodeQL or other deep SAST, no dependency-CVE audit
-  (`pip-audit`/`trivy`/`grype`/OSV), and no `.github/dependabot.yml` for
-  automated dependency bumps. Do not assume a scan will catch a leaked secret, a
-  vulnerable dependency, or an out-of-policy license — that is on the
-  contributor and reviewer. If you add or bump a dependency, check it against
-  [OSV](https://osv.dev/) yourself before opening the PR.
-- **Reporting a security concern.** There is no `SECURITY.md` in this repo yet
-  and no coordinated-disclosure policy. Do not open a public issue or PR that
-  describes an exploitable flaw. Instead, open a private GitHub security advisory
-  on the repository, or contact the maintainer directly at
-  `simone.contorno@outlook.it` (the maintainer address used across the
-  `package.xml` manifests). Include the affected package, the impact, and a
-  minimal reproduction.
-- **Out of scope for this package.** ROS 2 / DDS transport security — SROS2
-  enclaves, DDS-Security authentication and encryption — is **not** configured
-  anywhere in this repo and is out of scope here: there is no `ROS_SECURITY_*`
-  setup, no enclave, and no keystore in the tree. These packages ship no
-  network-facing service, no hardcoded bind address, and no default credentials;
-  the controller is a pluginlib-loaded `nav2_core::Controller` running
-  in-process inside `controller_server`, and the tracker is a lifecycle node on
-  the local ROS graph. Securing the DDS transport and the host is a deployment
-  and system-integration concern for whoever fields these packages, not
-  something this package configures — if you deploy on a shared or untrusted
-  network, apply SROS2 and network isolation at that layer.
+  as a runtime `exec_depend`. Bundled *assets* (URDF, world files, RViz configs)
+  are inventoried by the package that ships them -
+  [prox_mpc_demo](prox_mpc_demo/THIRD_PARTY_LICENSES.md) and
+  [prox_mpc_benchmark](prox_mpc_benchmark/THIRD_PARTY_LICENSES.md). CI enforces
+  the dependency half of this with
+  `.github/scripts/check_dependency_inventory.py`.
+- **If you touch the workflows, keep their hardening.**
+  `.github/workflows/ci.yaml` declares least-privilege
+  `permissions: contents: read` and pins every third-party action by full commit
+  SHA with the version tag in a trailing comment
+  (`actions/checkout@34e1148...  # v4.3.1`) rather than by a mutable tag. Preserve
+  both. What CI does and does not scan for is listed in
+  [SECURITY.md](SECURITY.md#what-ci-does-and-does-not-check) - check a new or
+  bumped dependency against [OSV](https://osv.dev/) yourself, because nothing
+  automated does.
+- **Reporting a security concern.** Do not open a public issue or PR that
+  describes an exploitable flaw. Follow [SECURITY.md](SECURITY.md), which
+  covers the private reporting routes, what to include, response expectations,
+  and what is in and out of scope (notably: SROS2 / DDS transport security is
+  out of scope for this repository).
 
 ## Documentation standards
 
@@ -260,7 +236,7 @@ that pattern.
   `## Table of Contents` (a bullet list of anchor links to every `##`
   section), the body sections, and a closing `## License` footer.
   `prox_mpc_core/README.md` and `prox_mpc_benchmark/README.md` are the
-  reference examples — match this shape for a new or restructured package
+  reference examples - match this shape for a new or restructured package
   doc rather than inventing a different outline.
 - **Markdown style.** The rules that govern this file govern every Markdown
   file in the repo: GitHub-Flavored Markdown with ATX headers, one sentence
@@ -268,13 +244,13 @@ that pattern.
   fenced code block, a language identifier on every fenced code block (e.g.
   `cpp`, `bash`, `yaml`, or `xml`), and relative links for anything that lives
   in this repository. Use Mermaid only where a diagram materially helps the
-  reader, not by default on every page. [docs/architecture.md](docs/architecture.md)
+  reader, not by default on every page. [doc/architecture.md](doc/architecture.md)
   and the root [README.md](README.md)'s "Per-cycle control loop" diagram are the
   real, working examples of the conventions already in use here: `flowchart TD`
   / `flowchart LR` for orientation, `<br/>` for a line break inside a node
   label, `[(...)]` for an external system (for example Nav2),
   `subgraph name[...] ... end` to group related nodes, and three edge styles
-  used deliberately — a plain `-->` for an unlabeled dependency, a labeled
+  used deliberately - a plain `-->` for an unlabeled dependency, a labeled
   `-- text -->` for a named relationship (for example
   `trk -- tracked_obstacles --> ctrl`), and a dashed `-. text .->` for a
   `pluginlib`-style load-by-name relationship rather than a build dependency
@@ -286,8 +262,8 @@ that pattern.
   meaning), interfaces (topics, services, actions, TF) with their QoS,
   lifecycle behavior, architecture or data flow, troubleshooting, and
   verification. `prox_mpc_core/README.md` and
-  `prox_mpc_controller/docs/architecture.md` are the two documents in this
-  repo that already do this well end to end — the former for a library
+  `prox_mpc_controller/doc/architecture.md` are the two documents in this
+  repo that already do this well end to end - the former for a library
   package's README shape, the latter for a lifecycle-plugin's
   QoS-annotated interface table, parameter tables, and state-diagram
   lifecycle section. Follow one of them as the working model rather than

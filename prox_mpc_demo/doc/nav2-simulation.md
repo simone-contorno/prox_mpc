@@ -11,9 +11,9 @@ verified (see "Verified results").
 - [Launch arguments](#launch-arguments)
 - [RViz robot model and displays](#rviz-robot-model-and-displays)
 - [Build](#build)
-- [Scenario 0 — plugin loads in controller_server (no Gazebo)](#scenario-0--plugin-loads-in-controller_server-no-gazebo)
-- [Scenario 1 — clean run, NavigateToPose SUCCEEDED (open room)](#scenario-1--clean-run-navigatetopose-succeeded-open-room)
-- [Scenario 2 — obstacle avoidance (unmapped static + dynamic)](#scenario-2--obstacle-avoidance-unmapped-static--dynamic)
+- [Scenario 0 - plugin loads in controller_server (no Gazebo)](#scenario-0---plugin-loads-in-controller_server-no-gazebo)
+- [Scenario 1 - clean run, NavigateToPose SUCCEEDED (open room)](#scenario-1---clean-run-navigatetopose-succeeded-open-room)
+- [Scenario 2 - obstacle avoidance (unmapped static + dynamic)](#scenario-2---obstacle-avoidance-unmapped-static--dynamic)
 - [Verified results](#verified-results)
 - [Controller config notes (what these defaults encode)](#controller-config-notes-what-these-defaults-encode)
 - [tb3 pillar-maze world (prox_mpc_world.sdf.xacro)](#tb3-pillar-maze-world-prox_mpc_worldsdfxacro)
@@ -41,11 +41,11 @@ over the canonical Nav2 Jazzy scenario (`nav2_bringup/tb3_simulation_launch.py` 
   `prox_mpc_obstacle_tracker` on `/scan`, feeding `/tracked_obstacles` to the
   controller for predictive (dynamic) obstacle avoidance, and switches the params
   to `config/nav2_prox_mpc_predictive.yaml`. The default (`predictive:=False`)
-  starts no tracker and uses the verified baseline params — normal navigation
+  starts no tracker and uses the verified baseline params - normal navigation
   behaves exactly as the stock plugin-agnostic stack.
 - **RViz (opt-in)**: with `use_rviz:=True` the launch opens
-  [rviz/nav2_simulation.rviz](../rviz/nav2_simulation.rviz) — the stock Nav2 view
-  plus the ProxMPC local-plan / predicted-obstacle displays — and drives the waffle
+  [rviz/nav2_simulation.rviz](../rviz/nav2_simulation.rviz) - the stock Nav2 view
+  plus the ProxMPC local-plan / predicted-obstacle displays - and drives the waffle
   RobotModel from a path-corrected copy of the waffle URDF. See
   [RViz robot model and displays](#rviz-robot-model-and-displays).
 
@@ -79,7 +79,7 @@ An explicit `params_file:=<path>` overrides the file chosen by `predictive`.
 ## RViz robot model and displays
 
 Under `use_rviz:=True` this wrapper starts RViz on
-[rviz/nav2_simulation.rviz](../rviz/nav2_simulation.rviz) — the stock
+[rviz/nav2_simulation.rviz](../rviz/nav2_simulation.rviz) - the stock
 `nav2_default_view.rviz` (map, laser scan, global/local costmaps, AMCL particle
 cloud, plans, TF, and the Nav2 toolbar) extended with two ProxMPC displays. The
 standalone `simulation.launch.py` keeps its own lighter
@@ -91,18 +91,18 @@ under `models/turtlebot3_model/meshes/*.dae`, so an RViz RobotModel pointed at t
 waffle `/robot_description` raised "Error loading geometries". This wrapper runs its
 own `robot_state_publisher` on a path-corrected copy of the waffle URDF (the four
 mesh subpaths fixed at launch time) so the RobotModel loads. That RSP is also
-load-bearing for navigation — it is the only source of the
+load-bearing for navigation - it is the only source of the
 `base_footprint -> base_link -> base_scan` and wheel TF that AMCL and the costmaps
-consume (Gazebo's DiffDrive plugin publishes only `odom -> base_footprint`) — so
+consume (Gazebo's DiffDrive plugin publishes only `odom -> base_footprint`) - so
 `tb3_simulation_launch.py`'s own RSP and `nav2_default_view.rviz` are disabled
 (`use_robot_state_pub:=False`, `use_rviz:=False`) and this wrapper owns both
 `/robot_description` (latched: `KEEP_LAST` depth 1, `reliable`, `transient_local`)
 and the RViz session.
 
 Default displays. `nav2_simulation.rviz` inherits the stock `nav2_default_view.rviz`
-display set — RobotModel (`/robot_description`), Map (`/map`), LaserScan (`/scan`),
+display set - RobotModel (`/robot_description`), Map (`/map`), LaserScan (`/scan`),
 the global and local costmaps, the AMCL particle cloud, the global/local plans, and
-TF — and adds two ProxMPC controller-plugin displays:
+TF - and adds two ProxMPC controller-plugin displays:
 
 | Display | Topic | Type | Notes |
 | --- | --- | --- | --- |
@@ -142,7 +142,7 @@ ros2 launch prox_mpc_demo nav2_simulation.launch.py predictive:=True headless:=F
 ros2 run prox_mpc_benchmark goal_sender.py --points 2.0,-0.5,0.0 --timeout 120
 ```
 
-## Scenario 0 — plugin loads in controller_server (no Gazebo)
+## Scenario 0 - plugin loads in controller_server (no Gazebo)
 
 ```bash
 ros2 plugin list --package prox_mpc_controller   # lists prox_mpc_controller::ProxMpcController
@@ -156,16 +156,16 @@ The load line appears at controller_server configure/activate (Scenarios 1-2):
 [ProxMpcController]: Activating ProxMpcController 'FollowPath'.
 ```
 
-## Scenario 1 — clean run, NavigateToPose SUCCEEDED (open room)
+## Scenario 1 - clean run, NavigateToPose SUCCEEDED (open room)
 
-Terminal A — bring up Gazebo Harmonic + Nav2 + ProxMPC, headless (open world + map
+Terminal A - bring up Gazebo Harmonic + Nav2 + ProxMPC, headless (open world + map
 are the defaults):
 
 ```bash
 ros2 launch prox_mpc_demo nav2_simulation.launch.py
 ```
 
-Terminal B — (optional) the estimate-position mechanism. AMCL already self-seeds;
+Terminal B - (optional) the estimate-position mechanism. AMCL already self-seeds;
 this is the manual equivalent of RViz "2D Pose Estimate":
 
 ```bash
@@ -174,13 +174,13 @@ ros2 topic pub --once /initialpose geometry_msgs/msg/PoseWithCovarianceStamped \
     pose: {pose: {position: {x: -2.0, y: -0.5, z: 0.0}, orientation: {w: 1.0}}}}"
 ```
 
-Terminal B — watch the controller's commands during navigation:
+Terminal B - watch the controller's commands during navigation:
 
 ```bash
 ros2 topic echo /cmd_vel_nav        # raw ProxMpcController output (Twist)
 ```
 
-Terminal C — send the scenario goal (~4 m straight drive) and read the result:
+Terminal C - send the scenario goal (~4 m straight drive) and read the result:
 
 ```bash
 ros2 action send_goal /navigate_to_pose nav2_msgs/action/NavigateToPose \
@@ -194,22 +194,26 @@ ros2 action send_goal /navigate_to_pose nav2_msgs/action/NavigateToPose \
 - Controller load line (Terminal A) as in Scenario 0.
 - Non-zero commands while navigating (Terminal B): `linear.x` around 0.2-0.3 m/s.
 - Goal result (Terminal C): `Goal finished with status: SUCCEEDED`.
-- Stop: the final command is `linear.x: 0.0, angular.z: 0.0` — the controller
+- Stop: the final command is `linear.x: 0.0, angular.z: 0.0` - the controller
   commands a stop at the goal.
 
-## Scenario 2 — obstacle avoidance (unmapped static + dynamic)
+## Scenario 2 - obstacle avoidance (unmapped static + dynamic)
 
 Same open world; spawn obstacles the static map does not contain into the running
 world, then navigate. Nav2's global costmap (scan obstacle layer) + replanning
 route around them; the controller tracks the rerouted collision-free path.
 
-Terminal A — bring up (as Scenario 1):
+Terminal A - bring up (as Scenario 1):
 
 ```bash
 ros2 launch prox_mpc_demo nav2_simulation.launch.py
 ```
 
-Terminal B — spawn an unmapped static box on the path and a patrolling actor:
+Terminal B - spawn an unmapped static box on the path, plus a moving box that
+repeatedly crosses it. The moving box is not an SDF `<actor>`: it is a rigid box
+driven by the `gz-sim` `VelocityControl` system at a constant body-frame forward
+speed and yaw rate, which traces a bounded 0.6 m-radius circle in place (0.3 m/s
+over 0.5 rad/s) rather than driving off the map.
 
 ```bash
 DEMO=$(ros2 pkg prefix prox_mpc_demo)/share/prox_mpc_demo
@@ -219,7 +223,7 @@ ros2 run ros_gz_sim create -name walker \
   -file $DEMO/models/prox_mpc_dynamic_actor/model.sdf -x 0.8 -y -1.6 -z 0.5
 ```
 
-Terminal C — send the same goal:
+Terminal C - send the same goal:
 
 ```bash
 ros2 action send_goal /navigate_to_pose nav2_msgs/action/NavigateToPose \
@@ -228,7 +232,7 @@ ros2 action send_goal /navigate_to_pose nav2_msgs/action/NavigateToPose \
                   orientation: {w: 1.0}}}}" --feedback
 ```
 
-**Expected behaviour**: the lidar marks the box/actor into the costmaps, the global
+**Expected behaviour**: the lidar marks both boxes into the costmaps, the global
 planner reroutes around them, the controller steers around (non-trivial `angular.z`)
 and reports `SUCCEEDED`.
 
@@ -238,9 +242,9 @@ Run headless on a GPU host (Gazebo Sim 8.11.0 / Harmonic, ROS 2 Jazzy):
 
 | Scenario | Result | Evidence |
 | --- | --- | --- |
-| 0 — plugin load | PASS | `Created controller : FollowPath of type prox_mpc_controller::ProxMpcController`; clean configure/activate |
-| 1 — clean SUCCEEDED | PASS | `Goal finished with status: SUCCEEDED`, 0 recoveries; `cmd_vel.linear.x` 0.22-0.27 during nav; final cmd `0.0/0.0` (stop) |
-| 2 — obstacle avoidance | PASS | both obstacles spawned; `SUCCEEDED`, 1 recovery; 23 global replans; 264 cmd cycles with `abs(angular.z) > 0.2` steering around the obstacles |
+| 0 - plugin load | PASS | `Created controller : FollowPath of type prox_mpc_controller::ProxMpcController`; clean configure/activate |
+| 1 - clean SUCCEEDED | PASS | `Goal finished with status: SUCCEEDED`, 0 recoveries; `cmd_vel.linear.x` 0.22-0.27 during nav; final cmd `0.0/0.0` (stop) |
+| 2 - obstacle avoidance | PASS | both obstacles spawned; `SUCCEEDED`, 1 recovery; 23 global replans; 264 cmd cycles with `abs(angular.z) > 0.2` steering around the obstacles |
 
 Verified headless with predictive obstacle avoidance (Gazebo Sim 8.11.0 /
 Jazzy), goal `(2.0, -0.5)`:
@@ -248,7 +252,13 @@ Jazzy), goal `(2.0, -0.5)`:
 | Scenario | Result | Evidence |
 | --- | --- | --- |
 | Baseline normal nav (`predictive:=False`, default) | PASS | controller `K=0`; `Reached the goal!` / `Goal succeeded` (~19 s drive); 0 footprint vetoes, 0 solver failures |
-| Predictive (`predictive:=True`, moving box circling the mid-path) | PASS | controller `K=2`, tracker active; `Reached the goal!` / `Goal succeeded` (~22 s); 0 footprint vetoes, 0 solver failures, 0 `NoValidControl`, 0 TF errors, no recoveries |
+| Predictive (`predictive:=True`, moving box circling the mid-path) - *historical, pre-retune* | PASS | controller `K=2`, tracker active; `Reached the goal!` / `Goal succeeded` (~22 s); 0 footprint vetoes, 0 solver failures, 0 `NoValidControl`, 0 TF errors, no recoveries |
+
+The predictive row records a run made with `max_obstacles: 2`, while
+[config/nav2_prox_mpc_predictive.yaml](../config/nav2_prox_mpc_predictive.yaml)
+ships `max_obstacles: 4`, `cbf_gamma: 1.0`, and `max_dynamic_obstacles: 2`. The
+row therefore does not describe the shipped configuration, and the values in it
+are the ones observed at the time rather than a re-measurement.
 
 The baseline run confirms predictive avoidance is a clean enable/disable feature:
 with `predictive:=False` normal path tracking + Nav2 replanning behave exactly as
@@ -262,13 +272,13 @@ centroid drifts at ~robot speed) and the robot drives erratically.
 The defaults in [config/nav2_prox_mpc.yaml](../config/nav2_prox_mpc.yaml) were tuned
 against the live loop:
 
-- `desired_linear_vel: 0.5` — at the velocity-smoother cap. A slower value samples
+- `desired_linear_vel: 0.5` - at the velocity-smoother cap. A slower value samples
   the reference too close to the robot (~0.5 m over the horizon), so heading
   tracking dominates and the unicycle rotates-in-place to align instead of
   translating; 0.5 places the reference ~1 m ahead so forward motion is optimal.
-- `q_theta: 1.0` — heading tracking keeps the robot tight on the collision-free
+- `q_theta: 1.0` - heading tracking keeps the robot tight on the collision-free
   global path (with `q_theta: 0` it over-swings and drifts into obstacles).
-- `max_obstacles: 0` (baseline) — the in-loop NMPC obstacle term is OFF, so
+- `max_obstacles: 0` (baseline) - the in-loop NMPC obstacle term is OFF, so
   avoidance is delegated entirely to Nav2's planner + costmaps (global replanning
   around marked obstacles), the standard Nav2 architecture. Keep it for
   path-tracking runs that should behave as plain Nav2 navigation.
@@ -276,7 +286,7 @@ against the live loop:
   lifecycle manager brings it up and aborts the whole bringup if its `dock_plugins`
   is unset.
 
-### Predictive (dynamic) obstacle avoidance — `predictive:=True`
+### Predictive (dynamic) obstacle avoidance - `predictive:=True`
 
 The feature is opt-in and lives in
 [config/nav2_prox_mpc_predictive.yaml](../config/nav2_prox_mpc_predictive.yaml),
@@ -288,19 +298,26 @@ ros2 launch prox_mpc_demo nav2_simulation.launch.py predictive:=True
 
 What it changes from the baseline (the rest of the stack is identical):
 
-- `max_obstacles: 2`, `cbf_gamma: 0.3` — the in-loop NMPC obstacle term runs
-  alongside Nav2. The discrete-time CBF coupling (`cbf_gamma < 1`) makes it viable:
-  with the pointwise term (`cbf_gamma = 1`) "stay put" was locally optimal near a
-  dense field and the robot stalled; `0.3` lets the safety margin decay gradually.
-- `predict_obstacles: true`, `max_dynamic_obstacles: 1` — a confirmed *moving*
+- `max_obstacles: 4`, `cbf_gamma: 1.0` - the in-loop NMPC obstacle term runs
+  alongside Nav2, with four slots so the box and the adjacent wall cells are all
+  captured. `cbf_gamma: 1.0` is the pointwise keep-out, which is what this config
+  targets: the open-world single-obstacle and dynamic cells. A dense obstacle field
+  is the case that may instead want a lower gamma, where the discrete-time CBF
+  coupling (`cbf_gamma < 1`) lets the safety margin decay gradually rather than
+  binding at every node.
+- `predict_obstacles: true`, `max_dynamic_obstacles: 2` - a confirmed *moving*
   track is propagated over the horizon along its tracker-sampled predicted
   trajectory (a constant-velocity ray when no samples are provided) and bound to a
   dynamic slot; the static box and walls keep coming from the costmap (hybrid). With no
   moving obstacle the predictive fill degrades to the costmap-only result. The
+  second dynamic slot exists because a single slot is not enough after an
+  association break (an obstacle reversing direction): the old track coasts as a
+  phantom while the real obstacle is re-acquired as a new track, and with one slot
+  the phantom can outrank the real track and the solver goes blind to it. The
   predicted trajectories publish on `prox_mpc_predicted_obstacles`
   (`visualization_msgs/MarkerArray`) for RViz.
 - `max_dynamic_obstacle_radius: 0.5` (controller) and `max_cluster_radius: 0.6`
-  (tracker) — the wall-rejection guards. An extended wall's cluster centroid drifts
+  (tracker) - the wall-rejection guards. An extended wall's cluster centroid drifts
   at ~robot speed as the robot moves, so without these it is tracked as a phantom
   fast-moving obstacle that inflates the keep-out and erases real costmap cells,
   and the robot drives erratically. The guards keep walls out of the predictive

@@ -29,10 +29,10 @@ driving a TurtleBot3 waffle under a full Nav2 stack in Gazebo Harmonic (see
 
 ## Documentation
 
-- [doc/architecture.md](doc/architecture.md) — the Nav2 integration design:
+- [doc/architecture.md](doc/architecture.md) - the Nav2 integration design:
   responsibility split, the controller lifecycle, the per-cycle data flow, the
   interfaces and QoS, the full parameter reference, and the two safety layers.
-- [doc/control-law.md](doc/control-law.md) — the controller-side math:
+- [doc/control-law.md](doc/control-law.md) - the controller-side math:
   reference construction, costmap reduction, predictive obstacle propagation,
   the deceleration fallback, speed limits, and the discrete-time CBF coupling.
 - Engine math is in the core: [NMPC/SQP/QP](../prox_mpc_core/doc/nmpc.md) and

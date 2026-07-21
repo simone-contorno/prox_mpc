@@ -1,0 +1,101 @@
+name: Bug report
+description: Something in ProxMPC behaves incorrectly.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report. Please do **not** use this form for security
+        vulnerabilities - follow [SECURITY.md](../blob/main/SECURITY.md) instead.
+
+  - type: dropdown
+    id: package
+    attributes:
+      label: Package
+      description: Which package does this affect?
+      options:
+        - prox_mpc_core
+        - prox_mpc_controller
+        - prox_mpc_obstacle_tracker
+        - prox_mpc_msgs
+        - prox_mpc_demo
+        - prox_mpc_benchmark
+        - prox_mpc_test_models
+        - Not sure
+    validations:
+      required: true
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What did you observe, and what did you expect instead?
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction
+      description: |
+        Minimal steps to reproduce - ideally a launch command and the parameter
+        values you used. A report we can reproduce gets fixed; one we cannot
+        usually does not.
+      placeholder: |
+        1. ros2 launch ...
+        2. Send a goal to ...
+        3. Observe ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: config
+    attributes:
+      label: Controller / tracker parameters
+      description: The relevant block of your params YAML.
+      render: yaml
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant log output
+      description: |
+        Include controller warnings and errors. Solver-failure, footprint-veto,
+        and `NoValidControl` messages are especially useful.
+      render: shell
+
+  - type: input
+    id: ros-distro
+    attributes:
+      label: ROS 2 distro
+      placeholder: Jazzy
+    validations:
+      required: true
+
+  - type: input
+    id: platform
+    attributes:
+      label: Platform
+      description: OS, architecture, and hardware (x86-64 dev host, Jetson Orin, ...).
+      placeholder: Ubuntu 24.04, x86-64
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: ProxMPC version or commit
+      placeholder: 1.0.0, or a commit SHA
+    validations:
+      required: true
+
+  - type: dropdown
+    id: environment
+    attributes:
+      label: Where did you see this?
+      options:
+        - Simulation (kinematic plant / benchmark)
+        - Simulation (Gazebo)
+        - Physical robot hardware
+    validations:
+      required: true

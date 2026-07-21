@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-Ground-truth dynamic-obstacle publisher — the ORACLE for the feasibility gate.
+Ground-truth dynamic-obstacle publisher - the ORACLE for the feasibility gate.
 
 Publishes /tracked_obstacles (prox_mpc_msgs/ObstacleArray, odom frame) with the
 EXACT obstacle state and future trajectory from the analytic scenario motion law
@@ -12,7 +12,7 @@ IMM tracker that gives the predictive controller perfect perception + perfect
 prediction. Two uses:
 
   * Feasibility gate: if proxmpc_pred fed this oracle still collides on a cell,
-    the cell is infeasible for this robot at this speed cap (discard it) — not a
+    the cell is infeasible for this robot at this speed cap (discard it) - not a
     controller failure. If the oracle solves it, the cell is provably solvable.
   * Perception ablation: oracle-pred vs tracker-pred on the same solvable cell
     isolates whether a failure is the tracker (perception) or the controller.

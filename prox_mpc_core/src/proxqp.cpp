@@ -4,6 +4,7 @@
 
 #include <prox_mpc/proxqp.hpp>
 
+
 #include <cmath>
 #include <limits>
 #include <stdexcept>
@@ -114,8 +115,6 @@ void ProxQP::init(std::shared_ptr<Model> model)
 
   /* Optimal results */
   result_x = VectorXd::Zero(H.cols());
-  result_lambda = VectorXd::Zero(E.rows());
-  result_mu = VectorXd::Zero(C.rows());
 
   /* Settings */
   setH();   // Hessian matrix
@@ -148,6 +147,26 @@ void ProxQP::init(std::shared_ptr<Model> model)
 }
 
 /*!
+ * @brief Initial-guess policy for the QP sub-problem.
+ *
+ * ProxQP's own cheap starts only. The sub-problem is rebuilt each solve, so there
+ * is no preserved workspace for a warm start to attach to: handing proxsuite an
+ * external guess (or WARM_START_WITH_PREVIOUS_RESULT) after a fresh init mixes a
+ * stale guess with a reset state, which proxsuite 0.6.5 answers by diverging.
+ *
+ * Warm starting the QP across cycles is planned: it is factorization reuse that
+ * pays, not fewer iterations, and it needs init-once plus update() against a
+ * declared sparsity pattern. See "Planned work" in the repository README before
+ * reintroducing a guess here.
+ */
+proxsuite::proxqp::InitialGuessStatus ProxQP::initialGuessPolicy() const
+{
+  return guess ?
+         proxsuite::proxqp::InitialGuessStatus::EQUALITY_CONSTRAINED_INITIAL_GUESS :
+         proxsuite::proxqp::InitialGuessStatus::NO_INITIAL_GUESS;
+}
+
+/*!
  * Solve the quadratic program using ProxQP solver and compute the optimal state and control input evolution,
  * resulting in an optimal trajectory.
  * @param x states matrix.
@@ -175,40 +194,26 @@ ProxQP::solve(
     E_sparse = E.sparseView();
     C_sparse = C.sparseView();
 
-    // QP problem initialization
+    qp_sparse.settings.initial_guess = initialGuessPolicy();
     qp_sparse.init(H_sparse, c, E_sparse, b, C_sparse, low, upp);
 
-    // Solve
-    if (guess == true) {   // warm start
-      qp_sparse.solve(result_x, result_lambda, result_mu);
-    } else {
-      qp_sparse.solve();
-    }
+    qp_sparse.solve();
 
     // Take results
     result_x = qp_sparse.results.x;
-    result_lambda = qp_sparse.results.y;
-    result_mu = qp_sparse.results.z;
 
     // Take QP info
     qp_info = qp_sparse.results.info;
   }
   /* Dense problem */
   else {
-    // Initialize the problem
+    qp_dense.settings.initial_guess = initialGuessPolicy();
     qp_dense.init(H, c, E, b, C, low, upp);
 
-    // Solve
-    if (guess == true) {   // warm start
-      qp_dense.solve(result_x, result_lambda, result_mu);
-    } else {
-      qp_dense.solve();
-    }
+    qp_dense.solve();
 
     // Take results
     result_x = qp_dense.results.x;
-    result_lambda = qp_dense.results.y;
-    result_mu = qp_dense.results.z;
 
     // Take QP info
     qp_info = qp_dense.results.info;
@@ -217,13 +222,13 @@ ProxQP::solve(
   /* Update decision variables */
   for (size_t i = x_start; i < u_start; i += n) {
     x.row(i / n) = result_x.segment(i, n);
-  }                                                                                             // states
+  }
   for (size_t i = u_start; i < w_start; i += m) {
     u.row((i - u_start) / m) = result_x.segment(i, m);
-  }                                                                                             // control inputs
+  }
   for (size_t i = w_start; i < n_dvars; i++) {
     w(i - w_start) = result_x(i);
-  }                                                                                             // slack variable
+  }
 
   return {x, u, w, qp_info};
 }
@@ -310,21 +315,22 @@ void ProxQP::setE(const MatrixXd & x, const MatrixXd & u)
   for (size_t i = eq_idx[0]; i < eq_idx[1]; i += n) {
     // Update for the current step
     model->setX(x.row(count));
-    model->setU(u.row(std::clamp((int)(count), 0, (int)(u.rows() - 1))));
+    model->setU(u.row(std::clamp(static_cast<int>(count), 0, static_cast<int>(u.rows() - 1))));
 
     model->updateA(dt);
     model->updateB();
 
     // State
-    E.block(i, i - eq_idx[0], n, n) = model->getA();                // current
-    E.block(i, i - eq_idx[0] + n, n, n) = -MatrixXd::Identity(n, n); // next
+    E.block(i, i - eq_idx[0], n, n) = model->getA();
+    E.block(i, i - eq_idx[0] + n, n, n) = -MatrixXd::Identity(n, n);
 
     // Control input. Move-blocking convention: when Np > Nc the prediction nodes
     // beyond the control horizon reuse the last control block (col clamped to the
     // final control block at w_start - m), i.e. the control is held constant after
     // node Nc. With Np == Nc (the bundled config) the clamp is inert.
     col = u_start + (i - eq_idx[0]) / n * m;
-    E.block(i, std::clamp((int)(col), 0, (int)(w_start - m)), n, m) = model->getB() * dt;
+    E.block(i, std::clamp(static_cast<int>(col), 0, static_cast<int>(w_start - m)), n,
+        m) = model->getB() * dt;
 
     count++;
   }
@@ -342,9 +348,9 @@ void ProxQP::setb(const MatrixXd & x, const MatrixXd & u)
   /* Model kinematics */
   for (size_t i = eq_idx[0]; i < eq_idx[1]; i += n) {
     // Update for the current step
-    model->setX(x.row(count));                                              // state vector
-    model->setU(u.row(std::clamp((int)(count), 0, (int)(u.rows() - 1))));   // control input
-    model->updatec(dt, x.row(count + 1));                                   // local function approximation.
+    model->setX(x.row(count));
+    model->setU(u.row(std::clamp(static_cast<int>(count), 0, static_cast<int>(u.rows() - 1))));
+    model->updatec(dt, x.row(count + 1));
 
     b.segment(i, n) = -model->getc();
 
@@ -368,8 +374,8 @@ void ProxQP::setC(const MatrixXd & x)
   }
 
   /* States' constraints */
-  for (size_t j = 0; j < model->getIneq("x").size(); j++) { // for each state inequality constraint
-    for (size_t l = ineq_idx[i]; l < ineq_idx[i + 1]; l++) { // for each step
+  for (size_t j = 0; j < model->getIneq("x").size(); j++) {
+    for (size_t l = ineq_idx[i]; l < ineq_idx[i + 1]; l++) {
       idx = x_start + model->getIneq("x").at(j)[0] + n * (l - ineq_idx[i]);
       C(l, idx) = 1;
     }
@@ -377,8 +383,8 @@ void ProxQP::setC(const MatrixXd & x)
   }
 
   /* Control inputs' constraints */
-  for (size_t j = 0; j < model->getIneq("u").size(); j++) { // for each control inequality constraint
-    for (size_t l = ineq_idx[i]; l < ineq_idx[i + 1]; l++) { // for each step
+  for (size_t j = 0; j < model->getIneq("u").size(); j++) {
+    for (size_t l = ineq_idx[i]; l < ineq_idx[i + 1]; l++) {
       idx = u_start + model->getIneq("u").at(j)[0] + m * (l - ineq_idx[i]);
       C(l, idx) = 1;
     }
@@ -386,8 +392,8 @@ void ProxQP::setC(const MatrixXd & x)
   }
 
   /* Control inputs derivatives' constraints */
-  for (size_t j = 0; j < model->getIneq("du").size(); j++) { // for each control derivative inequality constraint
-    for (size_t l = ineq_idx[i]; l < ineq_idx[i + 1]; l++) { // for each step
+  for (size_t j = 0; j < model->getIneq("du").size(); j++) {
+    for (size_t l = ineq_idx[i]; l < ineq_idx[i + 1]; l++) {
       idx = u_start + model->getIneq("du").at(j)[0] + m * (l - ineq_idx[i]);
       C(l, idx) = -1;
       C(l, idx + m) = 1;
@@ -456,15 +462,15 @@ void ProxQP::setd(
   size_t idx;
 
   /* First control input's bounds */
-  for (size_t j = 0; j < model->getIneq("du").size(); j++) { // first control input bounds
+  for (size_t j = 0; j < model->getIneq("du").size(); j++) {
     idx = model->getIneq("du").at(j)[0];
     low(j) = model->getIneq("du").at(j)[1] * dt + u_prev(idx) - u(0, idx);
     upp(j) = model->getIneq("du").at(j)[2] * dt + u_prev(idx) - u(0, idx);
   }
 
   /* States' bounds */
-  for (size_t j = 0; j < model->getIneq("x").size(); j++) { // for each state inequality constraint
-    for (size_t l = ineq_idx[i]; l < ineq_idx[i + 1]; l++) { // for each step
+  for (size_t j = 0; j < model->getIneq("x").size(); j++) {
+    for (size_t l = ineq_idx[i]; l < ineq_idx[i + 1]; l++) {
       row = l - ineq_idx[i];
       col = model->getIneq("x").at(j)[0];
       low(l) = model->getIneq("x").at(j)[1] - x(row, col);
@@ -474,8 +480,8 @@ void ProxQP::setd(
   }
 
   /* Control inputs' bounds */
-  for (size_t j = 0; j < model->getIneq("u").size(); j++) { // for each control inequality constraint
-    for (size_t l = ineq_idx[i]; l < ineq_idx[i + 1]; l++) { // for each step
+  for (size_t j = 0; j < model->getIneq("u").size(); j++) {
+    for (size_t l = ineq_idx[i]; l < ineq_idx[i + 1]; l++) {
       row = l - ineq_idx[i];
       col = model->getIneq("u").at(j)[0];
       low(l) = model->getIneq("u").at(j)[1] - u(row, col);
@@ -485,8 +491,8 @@ void ProxQP::setd(
   }
 
   /* Control inputs derivatives' bounds */
-  for (size_t j = 0; j < model->getIneq("du").size(); j++) { // for each control derivative inequality constraint
-    for (size_t l = ineq_idx[i]; l < ineq_idx[i + 1]; l++) { // for each step
+  for (size_t j = 0; j < model->getIneq("du").size(); j++) {
+    for (size_t l = ineq_idx[i]; l < ineq_idx[i + 1]; l++) {
       row = l - ineq_idx[i];
       col = model->getIneq("du").at(j)[0];
 

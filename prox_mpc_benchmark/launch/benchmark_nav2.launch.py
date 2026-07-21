@@ -15,6 +15,8 @@ The metrics node and the goal sender are launched by run_nav2.py (which owns the
 per-run summary and teardown), not here, so this file only stands up the stack.
 """
 
+import atexit
+import contextlib
 import os
 import tempfile
 
@@ -34,6 +36,12 @@ import yaml
 TRACKER_START_DELAY_S = 6.0
 
 PKG = 'prox_mpc_benchmark'
+
+
+def _unlink_quietly(path):
+    """Remove path, tolerating an already-removed file at interpreter shutdown."""
+    with contextlib.suppress(OSError):
+        os.unlink(path)
 
 
 def _merged_params(context):
@@ -89,9 +97,13 @@ def _merged_params(context):
     params['bt_navigator']['ros__parameters']['default_nav_through_poses_bt_xml'] = \
         os.path.join(bt_dir, 'navigate_through_poses_w_replanning_and_recovery.xml')
 
+    # The launched nodes read this file after this function returns, so it cannot
+    # be a context manager; unlink at process exit instead. A full b2 matrix is
+    # hundreds of launches, and orphaned files accumulate in /tmp otherwise.
     fd, path = tempfile.mkstemp(prefix=f'b2_{controller}_', suffix='.yaml')
     with os.fdopen(fd, 'w') as fh:
         yaml.safe_dump(params, fh, default_flow_style=None, sort_keys=False)
+    atexit.register(_unlink_quietly, path)
     return path
 
 
@@ -124,7 +136,7 @@ def _setup(context, *args, **kwargs):
     # Predictive ProxMPC: start the obstacle tracker on the simulated /scan so a
     # confirmed moving track is fed to the controller as /tracked_obstacles (odom
     # frame). The tracker's own main() self-configures and self-activates, so it is
-    # NOT added to the Nav2 lifecycle manager's node_names (the manager would try to
+    # not added to the Nav2 lifecycle manager's node_names (the manager would try to
     # configure an already-active node and abort the whole bringup). It is also held
     # back TRACKER_START_DELAY_S so it does not contend with controller_server's
     # activation. Its config is the single source of truth in prox_mpc_obstacle_tracker.

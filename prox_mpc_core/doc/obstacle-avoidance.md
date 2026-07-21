@@ -1,4 +1,4 @@
-# ProxMPC — Obstacle Avoidance
+# ProxMPC - Obstacle Avoidance
 
 This document derives the obstacle-avoidance constraints used by `prox_mpc_core`
 and explains why this formulation is the standard choice for optimization-based
@@ -127,7 +127,7 @@ $$
 
 Geometrically, the circular keep-out disc is replaced by the **tangent line to
 the $d_\text{safe}$ circle at the point closest to the current robot position**.
-"Stay outside the disc" becomes "stay on the far side of this line" — convex, and
+"Stay outside the disc" becomes "stay on the far side of this line" - convex, and
 exactly what a QP can enforce.
 Because $n$ and $h(p_k)$ depend on the current iterate, they are recomputed every
 SQP iteration: as the iterate moves, the tangent line rotates to follow the true
@@ -176,7 +176,7 @@ plain lower bound on the slack variable.
 
 The pointwise constraint above requires every node to be safe *independently*
 ($h(p_{k+1}) \ge 0$). Near a dense obstacle field this can make a near-zero
-("stay put") command locally optimal — the solver still reports `SOLVED`, but the
+("stay put") command locally optimal - the solver still reports `SOLVED`, but the
 robot stalls. The fix is a **discrete-time control-barrier-function (CBF)**
 coupling between consecutive nodes (Zeng, Zhang & Sreenath, ACC 2021):
 
@@ -226,7 +226,7 @@ each obstacle constraint row shares a single $(k, j)$ index with its slack, so t
 slack block is exactly $N_p \cdot K$ with no dangling entries.
 
 When fewer than $K$ obstacles are present near a node, the unused slots are filled
-with a **far sentinel** — a point at $(10^6, 10^6)$ with zero clearance.
+with a **far sentinel** - a point at $(10^6, 10^6)$ with zero clearance.
 Then $\lVert p_k - o \rVert$ is enormous, the constraint is satisfied with zero
 slack, and the slot is provably non-binding.
 This lets a fixed capacity $K$ reduce cleanly to fewer active obstacles without
@@ -239,11 +239,11 @@ $(o_x, o_y, d_\text{safe})_{k,j}$: it only enforces the half-plane and the CBF
 coupling on whatever positions it is handed.
 Two fills exist on the controller side, both writing the same `setObs` contract:
 
-- **static (costmap)** — the default. For each node the controller scans the
+- **static (costmap)** - the default. For each node the controller scans the
   local costmap around the robot's *reference* position and emits the nearest
   occupied cells. The obstacle position varies across nodes only because the robot
   moves, so the term constrains the robot against where obstacles are *now*.
-- **predictive (tracked obstacles)** — opt-in. A dynamic track is propagated
+- **predictive (tracked obstacles)** - opt-in. A dynamic track is propagated
   along its tracker-sampled predicted trajectory (the IMM CV+CTRV forward
   prediction), or a constant-velocity ray $o_{k,j} = p_j + v_j\,\Delta t_k$ as the
   fallback when the track carries no samples, and bound to the same slot $j$ for

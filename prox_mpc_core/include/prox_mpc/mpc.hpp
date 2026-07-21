@@ -16,7 +16,9 @@ namespace prox_mpc
 {
 
 /* Model Predictive Control class. */
-class MPC : public ProbDim, MPCParams
+/* MPCParams is inherited privately on purpose: the horizon buffers and weight
+ * matrices are solver internals, reconfigured through MPC's public interface. */
+class MPC : public ProbDim, private MPCParams
 {
 public:
   /* Constructor. */

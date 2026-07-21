@@ -1,0 +1,19 @@
+# Local rosdep rules for the ProxMPC packages themselves.
+#
+# bloom resolves intra-repository dependencies through rosdep, which only knows
+# packages already published in the ROS distro index. Until these are released
+# there, `bloom-generate rosdebian` on prox_mpc_controller fails with
+# "Could not resolve rosdep key 'prox_mpc_core'". These rules map each package
+# to the Debian name bloom itself generates (underscores become hyphens).
+#
+# Delete this file once the packages are released into the rosdistro index -
+# at that point the upstream index resolves them and these rules would shadow it.
+prox_mpc_msgs:
+  ubuntu: [ros-jazzy-prox-mpc-msgs]
+prox_mpc_core:
+  ubuntu: [ros-jazzy-prox-mpc-core]
+# A test_depend of prox_mpc_controller. bloom resolves test dependencies too, so
+# this must exist even though it is never a runtime dependency of the installed
+# controller (it lands in Build-Depends, not Depends).
+prox_mpc_test_models:
+  ubuntu: [ros-jazzy-prox-mpc-test-models]

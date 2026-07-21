@@ -25,6 +25,11 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4.3.1
 
+      # Nothing else gates the license inventory, and two dependencies have
+      # already entered the tree without a row.
+      - name: Check dependency license inventory
+        run: python3 .github/scripts/check_dependency_inventory.py
+
       - name: Install dependencies
         run: |
           apt-get update
@@ -35,7 +40,7 @@ jobs:
             lcov
           rosdep update
           # Resolves proxsuite -> ros-jazzy-proxsuite (the canonical, pinned dep).
-          rosdep install --from-paths . --ignore-src -r -y
+          rosdep install --from-paths . --ignore-src -y
 
       # Use a proper colcon workspace so build/ and install/ live outside the
       # package source tree (keeps ament linters off CMake-generated files).
@@ -106,7 +111,7 @@ jobs:
             clang \
             python3-colcon-common-extensions
           rosdep update
-          rosdep install --from-paths . --ignore-src -r -y
+          rosdep install --from-paths . --ignore-src -y
 
       - name: Create colcon workspace
         run: |

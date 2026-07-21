@@ -52,6 +52,10 @@ public:
 
 private:
   // The base-class export package and type the controllers register against.
+  // Declared before `wrapped_`: members destruct in reverse declaration order,
+  // so `wrapped_` releases its plugin instance before this loader unloads the
+  // library. Reversing the two would unload the .so out from under a live
+  // instance.
   pluginlib::ClassLoader<nav2_core::Controller> loader_{
     "nav2_core", "nav2_core::Controller"};
   std::shared_ptr<nav2_core::Controller> wrapped_;

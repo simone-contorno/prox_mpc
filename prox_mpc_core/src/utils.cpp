@@ -20,6 +20,7 @@ void normalizeAngle(double & angle)
  * Get the optimal path computed by the MPC.
  * @param x optimal states.
  * @param now current clock time.
+ * @note Poses are stamped in the "map" frame.
  */
 Path optimPath(const MatrixXd & x, const rclcpp::Time & now)
 {

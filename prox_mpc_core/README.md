@@ -15,7 +15,7 @@ This package contains **no ROS node**: it is the reusable library that [prox_mpc
 - [Public API](#public-api)
 - [Models](#models)
 - [Prerequisites](#prerequisites)
-- [Installation](#installation)
+- [Build](#build)
 - [Architecture](#architecture)
 - [Project Structure](#project-structure)
 - [Testing](#testing)
@@ -55,7 +55,7 @@ A consumer can load a model by name with a `pluginlib::ClassLoader<prox_mpc::Mod
 | `prox_mpc_core/Bicycle` | `prox_mpc::Bicycle` | `[x, y, theta, delta]` (n=4) | `[v, delta_dot]` (m=2) |
 | `prox_mpc_core/Unicycle` | `prox_mpc::Unicycle` | `[x, y, theta]` (n=3) | `[v, omega]` (m=2) |
 
-The bicycle supports obstacle avoidance and derives the yaw rate as `omega = v·sin(delta)/L`; the unicycle uses the identity `toTwist` mapping.
+Both models enable obstacle avoidance; they differ in their `toTwist` mapping, because the bicycle's second control is a steering rate and derives the yaw rate from the current steering state as `omega = v*sin(delta)/L`, while the unicycle's control is already a body twist and uses the base identity mapping.
 Both are exported to `pluginlib` via [prox_mpc_core_plugins.xml](prox_mpc_core_plugins.xml).
 
 ## Prerequisites
@@ -67,7 +67,7 @@ Both are exported to `pluginlib` via [prox_mpc_core_plugins.xml](prox_mpc_core_p
 
 ROS dependencies mirror the `<depend>` entries in `package.xml` and are resolved automatically by `rosdep install`.
 
-## Installation
+## Build
 
 Build in a dedicated overlay workspace, never inside the package source tree.
 
@@ -140,6 +140,7 @@ prox_mpc_core/
 │   ├── test_custom_model.cpp
 │   ├── test_obstacle_k.cpp
 │   └── test_utils.cpp
+├── CHANGELOG.rst
 ├── CMakeLists.txt
 ├── package.xml
 ├── prox_mpc_core_plugins.xml
@@ -150,11 +151,11 @@ prox_mpc_core/
 
 The package ships GoogleTest suites (via `ament_add_gtest`):
 
-- `test_model_interface` — model identity, dimensions, declared bounds, the analytic Euler residual and Jacobians, and the `configure`/`toTwist` hooks.
-- `test_mpc_regression` — the obstacle-off solve compared against recorded reference values, plus the SQP wall-clock budget and the move-blocking (`Nc < Np`) case.
-- `test_custom_model` — a custom single-integrator model driven through the interface, including move-blocking.
-- `test_obstacle_k` — the obstacle-avoidance constraint geometry, indexing, disabling, the CBF-rate effect, and the multi-obstacle case.
-- `test_utils` — the ROS-facing helpers `optimPath` and `normalizeAngle`.
+- `test_model_interface` - model identity, dimensions, declared bounds, the analytic Euler residual and Jacobians, and the `configure`/`toTwist` hooks.
+- `test_mpc_regression` - the obstacle-off solve compared against recorded reference values, plus the SQP wall-clock budget and the move-blocking (`Nc < Np`) case.
+- `test_custom_model` - a custom single-integrator model driven through the interface, including move-blocking.
+- `test_obstacle_k` - the obstacle-avoidance constraint geometry, indexing, disabling, the CBF-rate effect, and the multi-obstacle case.
+- `test_utils` - the ROS-facing helpers `optimPath` and `normalizeAngle`.
 
 Build and run them in a sourced overlay workspace:
 

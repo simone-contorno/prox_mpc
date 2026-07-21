@@ -166,13 +166,13 @@ def main():
         rclpy.spin(node)
     except KeyboardInterrupt:
         pass
-    except Exception:  # noqa: BLE001 - a tool process: still write what we have
+    except Exception:  # a tool process: still write what we have
         pass
     finally:
         node.write()
         try:
             rclpy.try_shutdown()
-        except Exception:  # noqa: BLE001
+        except Exception:
             pass
     return 0
 

@@ -10,7 +10,7 @@ the build/link dependencies are inventoried in the repository
 
 - Files: `worlds/prox_mpc_world.sdf.xacro`, `worlds/prox_mpc_open.sdf.xacro`
 - Source: derived from
-  [`nav2_minimal_tb3_sim`](https://github.com/ros-navigation/navigation2)
+  [`nav2_minimal_tb3_sim`](https://github.com/ros-navigation/nav2_minimal_turtlebot_simulation/tree/main/nav2_minimal_tb3_sim)
   `worlds/tb3_sandbox.sdf.xacro`
 - License: Apache-2.0 (same text as the repository `LICENSE`)
 - Modifications: `prox_mpc_world.sdf.xacro` mirrors `tb3_sandbox` (so the stock
@@ -22,6 +22,21 @@ the build/link dependencies are inventoried in the repository
 - Runtime reference: `prox_mpc_world.sdf.xacro` references
   `model://turtlebot3_world` by URI, a runtime dependency resolved from the
   installed Gazebo model path; it is not redistributed in this repository.
+
+## RViz configuration
+
+- File: `rviz/nav2_simulation.rviz`
+- Source: derived from
+  [`nav2_bringup`](https://github.com/ros-navigation/navigation2)
+  `rviz/nav2_default_view.rviz`
+- License: Apache-2.0 (same text as the repository `LICENSE`)
+- Modifications: the Nav2 panel, display tree, tool set, and `nav2_rviz_plugins`
+  classes are carried over from the upstream view - the large majority of the
+  file is unchanged from it. Added two ProxMPC-specific displays, a `Path` on
+  `/prox_mpc_local_plan` ("ProxMPC Local Plan") and "ProxMPC Predicted
+  Obstacles" on `/prox_mpc_predicted_obstacles`; added the `SetGoal` tool on
+  `/goal_pose`; and replaced the upstream `TopDownOrtho` view controller with
+  `Orbit`.
 
 ## R2D2 URDF model
 

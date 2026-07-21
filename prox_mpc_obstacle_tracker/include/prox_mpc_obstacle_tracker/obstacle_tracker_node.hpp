@@ -81,8 +81,7 @@ private:
   double transform_timeout_{0.1};
   // Predicted-sample spacing [s], mirrored from the tracker params for the
   // publish loop (Obstacle.prediction_dt; 0.0 is written when a track has no
-  // samples). The other IMM/CTRV parameters live only in Tracker::Params,
-  // like the existing filter parameters.
+  // samples). The other IMM/CTRV parameters live only in Tracker::Params.
   double prediction_dt_{0.1};
 
   // ROS interfaces.

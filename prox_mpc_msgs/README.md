@@ -39,12 +39,12 @@ A single tracked dynamic obstacle, expressed in the frame of the enclosing `Obst
 
 | Field | Type | Unit | Meaning |
 | --- | --- | --- | --- |
-| `id` | `uint32` | — | Stable track identifier, reused across scans for the same physical object. |
+| `id` | `uint32` | - | Stable track identifier, reused across scans for the same physical object. |
 | `position` | `geometry_msgs/Point` | m | Planar centroid; `z` unused (kept 0) by the 2D tracker. |
 | `velocity` | `geometry_msgs/Vector3` | m/s | Estimated velocity; `z` unused (kept 0). |
 | `radius` | `float64` | m | Enclosing radius of the detected cluster. |
-| `position_covariance` | `float64[4]` | m² | 2×2 position covariance, row-major `[xx, xy, yx, yy]`. Informational: the tracker fills it, but the bundled controller consumes only `velocity_covariance`. |
-| `velocity_covariance` | `float64[4]` | m²/s² | 2×2 velocity covariance, row-major `[xx, xy, yx, yy]`. Informational: the bundled controller's clearance growth is driven by its own `prediction_uncertainty_growth` parameter, not this field. |
+| `position_covariance` | `float64[4]` | m² | 2x2 position covariance, row-major `[xx, xy, yx, yy]`. Informational: the tracker fills it, but the bundled controller reads neither covariance field. |
+| `velocity_covariance` | `float64[4]` | m²/s² | 2x2 velocity covariance, row-major `[xx, xy, yx, yy]`. Informational: the bundled controller's clearance growth is driven by its own `prediction_uncertainty_growth` parameter, not this field. |
 | `predicted_positions` | `geometry_msgs/Point[]` | m | Sampled predicted centroid positions in the `ObstacleArray` header frame; sample `k` (0-based) is the prediction at `header.stamp + (k+1) * prediction_dt`. `z` unused (kept 0). Empty when prediction sampling is disabled (`prediction_steps: 0`); consumers then fall back to a straight constant-velocity ray. |
 | `prediction_dt` | `float64` | s | Spacing between predicted samples; `0.0` when `predicted_positions` is empty. |
 
@@ -64,20 +64,20 @@ Publishers are opt-in: on by default in the standalone simulation, off by defaul
 
 | Field | Type | Unit | Meaning |
 | --- | --- | --- | --- |
-| `header` | `std_msgs/Header` | — | Control-cycle stamp. |
+| `header` | `std_msgs/Header` | - | Control-cycle stamp. |
 | `solve_time_ms` | `float64` | ms | Wall solve time measured around `MPC::solve()`. |
 | `qp_solve_time_ms` | `float64` | ms | QP-reported solve/run time from `qp_info`. |
-| `status` | `uint8` | — | PROXQP `QPSolverOutput` of the last QP (see the `STATUS_*` constants below). |
-| `converged` | `bool` | — | `true` when the cycle converged (`status == STATUS_SOLVED` and the applied iterate is finite); the caller's fail-safe runs otherwise. |
-| `sqp_iters` | `uint32` | — | SQP iterations. |
-| `qp_iters_ext` | `uint32` | — | Total external QP iterations summed over the SQP loop. |
-| `primal_residual` | `float64` | — | Final QP primal residual (`qp_info.pri_res`). |
-| `dual_residual` | `float64` | — | Final QP dual residual (`qp_info.dua_res`). |
-| `objective` | `float64` | — | Final QP objective value (`qp_info.objValue`). |
+| `status` | `uint8` | - | PROXQP `QPSolverOutput` of the last QP (see the `STATUS_*` constants below). |
+| `converged` | `bool` | - | `true` when the cycle converged (`status == STATUS_SOLVED` and the applied iterate is finite); the caller's fail-safe runs otherwise. |
+| `sqp_iters` | `uint32` | - | SQP iterations. |
+| `qp_iters_ext` | `uint32` | - | Total external QP iterations summed over the SQP loop. |
+| `primal_residual` | `float64` | - | Final QP primal residual (`qp_info.pri_res`). |
+| `dual_residual` | `float64` | - | Final QP dual residual (`qp_info.dua_res`). |
+| `objective` | `float64` | - | Final QP objective value (`qp_info.objValue`). |
 | `max_obstacle_slack` | `float64` | m | Max obstacle soft-keep-out slack `w` over the horizon; `> 0` means the keep-out was relaxed (a safety-feasibility signal). 0 when avoidance is disabled. |
 | `control_period_ms` | `float64` | ms | Measured inter-cycle wall period; `NaN` on the first cycle. |
-| `deadline_missed` | `bool` | — | `true` when `solve_time_ms` or `control_period_ms` exceeds the `1000·dt` budget. |
-| `num_active_obstacles` | `uint16` | — | Number of filled (non-sentinel) obstacle slots considered this cycle. |
+| `deadline_missed` | `bool` | - | `true` when `solve_time_ms` exceeds the `1000*dt` budget. `control_period_ms` is deliberately excluded: the nominal period equals the budget by construction, so any period threshold would need an arbitrary slack. |
+| `num_active_obstacles` | `uint16` | - | Number of filled (non-sentinel) obstacle slots considered this cycle. |
 
 The `status` field takes one of the following constants, mirroring PROXQP's `QPSolverOutput`.
 

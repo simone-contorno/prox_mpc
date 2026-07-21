@@ -1,4 +1,4 @@
-# ProxMPC — Architecture and Technical Reference
+# ProxMPC - Architecture and Technical Reference
 
 This document explains the design of ProxMPC, whose math lives in the
 `prox_mpc_core` package: a C++17 nonlinear Model Predictive Control (NMPC)
@@ -175,9 +175,9 @@ current pose, solves the QP, and applies the increments.
 It reports convergence through `qp_info.status` and takes no safety action on
 failure, leaving the fallback to the caller (see [nmpc.md](nmpc.md)).
 
-The full derivation — the optimal-control problem, the decision-variable layout,
+The full derivation - the optimal-control problem, the decision-variable layout,
 the QP objective and constraints, the SQP loop with its solve data flow, and the
-ProxQP settings — is in [nmpc.md](nmpc.md).
+ProxQP settings - is in [nmpc.md](nmpc.md).
 The obstacle-avoidance constraints are derived in
 [obstacle-avoidance.md](obstacle-avoidance.md).
 
@@ -190,7 +190,7 @@ The obstacle-avoidance constraints are derived in
 | `MPC::setPose(pose)` | `VectorXd` | current measured vehicle state |
 | `MPC::setGoalX/GoalU` | `MatrixXd` | reference trajectories |
 | `MPC::setMaxObs(K)` | `size_t` | obstacle-slot capacity per node (0 disables); sizes the QP |
-| `MPC::setObs(obs)` | `MatrixXd` (Np·K × 3) | per (node, slot) triples `[o_x, o_y, d_safe]` |
+| `MPC::setObs(obs)` | `MatrixXd` (Np*K x 3) | per (node, slot) triples `[o_x, o_y, d_safe]` |
 | `Model::configure(params)` | `map<string,double>` | set model constants by name |
 | `Model::toTwist(u)` | `geometry_msgs/msg/Twist` | map a control vector to a body twist |
 | `optimPath(x, now)` | `nav_msgs/msg/Path` | trajectory as a ROS path message |

@@ -1,6 +1,7 @@
 # A single tracked dynamic obstacle, expressed in the frame of the enclosing
 # ObstacleArray header. Position and velocity come from an in-house 2D-lidar
-# detector and constant-velocity Kalman tracker (prox_mpc_obstacle_tracker).
+# detector and IMM (CV+CTRV) tracker (prox_mpc_obstacle_tracker); the legacy
+# single-CV Kalman path is selected by imm_enabled: false.
 
 # Stable track identifier, reused across scans for the same physical object.
 uint32 id
@@ -15,11 +16,12 @@ geometry_msgs/Vector3 velocity
 float64 radius
 
 # 2x2 position covariance [m^2], row-major [xx, xy, yx, yy]. Informational: the
-# tracker fills it, but the bundled controller consumes only velocity_covariance.
+# tracker fills it, but the bundled controller reads neither covariance field.
 float64[4] position_covariance
 
-# 2x2 velocity covariance [m^2/s^2], row-major [xx, xy, yx, yy]; the controller
-# sizes the prediction-uncertainty clearance growth from its trace.
+# 2x2 velocity covariance [m^2/s^2], row-major [xx, xy, yx, yy]. Informational:
+# the bundled controller sizes its prediction-uncertainty clearance growth from
+# its own prediction_uncertainty_growth parameter, not from this field.
 float64[4] velocity_covariance
 
 # Sampled predicted centroid positions [m], in the ObstacleArray header frame;

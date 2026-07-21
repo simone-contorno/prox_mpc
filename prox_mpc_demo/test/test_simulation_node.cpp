@@ -69,7 +69,7 @@ TEST(SimulationNode, StepAdvancesPoseTowardGoal)
   EXPECT_NEAR(node->pose()(1), 0.0, 0.5);
 }
 
-// The unicycle (unicycle, 3-state) model also steps forward without going non-finite.
+// The unicycle (3-state) model also steps forward without going non-finite.
 TEST(SimulationNode, UnicycleModelSteps)
 {
   auto node = makeNode({rclcpp::Parameter("model", std::string("unicycle"))});
