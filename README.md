@@ -20,7 +20,7 @@ converges in a single QP solve.
 - [Where it stands](#where-it-stands)
   - [Strengths](#strengths)
   - [Where it is weaker](#where-it-is-weaker)
-- [Planned work](#planned-work)
+- [Known limits and future work](#known-limits-and-future-work)
   - [QP warm starting across control cycles](#qp-warm-starting-across-control-cycles)
   - [Validation beyond the kinematic plant](#validation-beyond-the-kinematic-plant)
 - [Packages](#packages)
@@ -146,28 +146,21 @@ simultaneous movers. That predictive path is the configuration to deploy: the
 geometric and sampling controllers have no mechanism to match it, and reactive
 ProxMPC alone runs closer to moving obstacles than its peers do.
 
-## Planned work
+## Known limits and future work
 
-Known, scoped improvements with a route already identified. Contributions are
-welcome on any of them.
+What has been investigated and where the remaining headroom is. Contributions are
+welcome on any of it.
 
 ### QP warm starting across control cycles
 
-The largest known performance win still on the table. Each control cycle
-currently rebuilds the QP sub-problem from scratch, so ProxQP recomputes the
-symbolic factorization every time. Caching it is worth roughly **2-4x in solver
-time** on this class of problem, which is the dominant cost per cycle (see
-[OSQP's measurements](https://arxiv.org/pdf/1711.08013) - the gain comes from
-factorization reuse, not from fewer iterations).
-
-The route is known: build the workspace once and call ProxQP `update()` on later
-cycles so the previous duals carry over, with the sparsity pattern **declared
-rather than inferred**. Pinning the pattern is the crux, because the obstacle
-half-plane normals and the model Jacobians pass through zero as the trajectory
-evolves, which silently drops those entries when the pattern is derived from the
-values. A first attempt held on the single- and static-obstacle cells but not on
-the multi-obstacle equivalence case, so the simpler cold-start path ships in the
-meantime. This is expected to land in a future release.
+Investigated and measured; it does not pay here, so the shipped solver rebuilds
+the QP each cycle. The external iteration count is flat at 9.5-9.9 whether the
+previous iterate is carried or not, across problem sizes from 123 to 723 decision
+variables, because the QP solves for **increments**: its solution tends to zero as
+the SQP converges, so a cold start already begins near the answer. A formulation
+solving for absolute states would not share this property. The working
+implementation and the full measurements are on the `feat/qp-warm-start` branch
+and in [prox_mpc_core/doc/nmpc.md](prox_mpc_core/doc/nmpc.md).
 
 ### Validation beyond the kinematic plant
 
