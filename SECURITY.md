@@ -87,9 +87,11 @@ SHA; `ament_cppcheck` under `colcon test` with
 `AMENT_CPPCHECK_ALLOW_SLOW_VERSIONS` set so it does not silently no-op; and a
 separate `clang-tsa` job that rebuilds the workspace under `-Wthread-safety`.
 
-**Does not run:** no secret scanner, no CodeQL or other deep SAST, no
-dependency-CVE audit (`pip-audit` / `trivy` / `grype` / OSV), and no
-`.github/dependabot.yml`. Checking a new or bumped dependency against
+**Does not run:** no secret scanner, no CodeQL or other deep SAST, and no
+dependency-CVE audit (`pip-audit` / `trivy` / `grype` / OSV).
+`.github/dependabot.yml` exists but covers the `github-actions` ecosystem only:
+it bumps the SHA-pinned actions monthly and does not see the ROS/apt
+dependencies, which rosdep resolves. Checking a new or bumped dependency against
 [OSV](https://osv.dev/) is the contributor's and reviewer's job - see
 [CONTRIBUTING.md](CONTRIBUTING.md#security).
 
@@ -102,5 +104,8 @@ dependency-CVE audit (`pip-audit` / `trivy` / `grype` / OSV), and no
 - The parameters that bound resource use on constrained hardware -
   `max_obstacles`, `max_dynamic_obstacles`, `max_obstacle_scan_cells`,
   `max_iter_sqp`, `max_solve_time`, and the tracker's `max_clusters` and
-  `max_tracks` - are validated and clamped at configure time. Set them
-  deliberately rather than relying on defaults tuned for the shipped demos.
+  `max_tracks` - are validated at configure time: out-of-range values are
+  clamped to a safe range, except the iteration and track caps (`max_iter_sqp`,
+  `max_clusters`, `max_tracks`), which are rejected so the lifecycle transition
+  fails. Set them deliberately rather than relying on defaults tuned for the
+  shipped demos.

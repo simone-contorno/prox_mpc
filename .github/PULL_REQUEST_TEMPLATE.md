@@ -35,7 +35,7 @@ verification. If you skipped something, say so and why.
 - [ ] Added or updated tests covering the changed behavior
 - [ ] Ran a launch or simulation reproduction (describe it below)
 
-```
+```text
 paste the relevant command output here
 ```
 

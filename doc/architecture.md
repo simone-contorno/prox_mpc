@@ -32,7 +32,7 @@ together.
 | `prox_mpc_obstacle_tracker` | Lifecycle node + ROS-free core | 2D-lidar dynamic-obstacle detector and IMM (CV+CTRV) tracker. |
 | `prox_mpc_demo` | Executables + launch/config/assets | Standalone benchmark and Nav2 + Gazebo bring-up. |
 | `prox_mpc_test_models` | `Model` plugins | Fault-injection models for controller tests. |
-| `prox_mpc_benchmark` | Metrics node + Python tooling + kinematic plant + scan simulator | Measures accuracy / precision / real-time across the scenario x model x controller x mode matrix; hosts the mode (b2) Nav2 plant and a scan simulator so every controller (DWB, MPPI, RPP, Graceful, ProxMPC) perceives the scenario obstacles through the same costmap. See [prox_mpc_benchmark/README.md](../prox_mpc_benchmark/README.md) and the [comparison results](controller-comparison-results.md). |
+| `prox_mpc_benchmark` | Metrics node + Python tooling + kinematic plant + scan simulator | Measures accuracy / precision / real-time across the scenario x model x controller x mode matrix; hosts the mode (b2) Nav2 plant and a scan simulator so every controller (DWB, MPPI, RPP, Graceful, Vector Pursuit, ProxMPC) perceives the scenario obstacles through the same costmap. See [prox_mpc_benchmark/README.md](../prox_mpc_benchmark/README.md) and the [comparison results](controller-comparison-results.md). |
 
 ## Build and plugin dependencies
 

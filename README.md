@@ -73,12 +73,12 @@ the summary is below.
 
 | Controller | Tracking RMS (open) | Compute p50 / p95 (open) | Static clearance | Multi-obstacle margin |
 | --- | --- | --- | --- | --- |
-| **ProxMPC** | 0.0004 m | **0.75 / 1.15 ms** | **+0.353 m** | -0.118 m, **+0.190 m predictive** |
-| DWB | 0.0002 m | 2.46 / 2.70 ms | +0.093 m | +0.080 m |
-| MPPI | 0.0029 m | 2.61 / 2.91 ms | +0.206 m | +0.048 m |
-| Regulated Pure Pursuit | 0.0000 m | 0.21 / 0.25 ms | +0.214 m | +0.125 m |
-| Vector Pursuit | 0.0000 m | 0.21 / 0.25 ms | +0.122 m (stops short) | +0.024 m |
-| Graceful | 0.0000 m | 0.15 / 0.20 ms | +0.211 m | -0.013 m |
+| **ProxMPC** | 0.0004 m | **0.75 / 1.15 ms** | **+0.352 m** | -0.118 m, **+0.190 m predictive** |
+| DWB | 0.0001 m | 2.46 / 2.70 ms | +0.093 m | +0.080 m |
+| MPPI | 0.0029 m | 2.61 / 2.91 ms | +0.207 m | +0.048 m |
+| Regulated Pure Pursuit | 0.0000 m | 0.21 / 0.25 ms | +0.213 m | +0.125 m |
+| Vector Pursuit | 0.0000 m | 0.21 / 0.25 ms | +0.175 m (stops short) | +0.024 m |
+| Graceful | 0.0000 m | 0.15 / 0.20 ms | +0.207 m | -0.013 m |
 
 Multi-obstacle margin is the median closest approach over six two-mover cells (30
 runs per controller, 60 for MPPI's 10 repeats); positive clears the obstacle.
@@ -102,7 +102,7 @@ which is the source of truth.
   CPU against their 8.4-9.3 %. Deadline misses and infeasible cycles are zero on
   431 of 435 runs and peak at 0.6 % on the hardest two-mover cells. The
   geometric pursuit controllers are lighter still; ProxMPC's premium over them is
-  ~1-4 % of one core for a full constrained optimisation each cycle.
+  ~1-5 % of one core for a full constrained optimisation each cycle.
 - **The largest static-obstacle margin.** It reaches the goal *and* holds
   **+0.35 m clearance** around a static box, the widest of the field - ahead of
   MPPI (+0.21 m) and DWB (+0.09 m) among the optimising controllers, and of RPP
@@ -153,14 +153,11 @@ welcome on any of it.
 
 ### QP warm starting across control cycles
 
-Investigated and measured; it does not pay here, so the shipped solver rebuilds
-the QP each cycle. The external iteration count is flat at 9.5-9.9 whether the
-previous iterate is carried or not, across problem sizes from 123 to 723 decision
-variables, because the QP solves for **increments**: its solution tends to zero as
-the SQP converges, so a cold start already begins near the answer. A formulation
-solving for absolute states would not share this property. The working
-implementation and the full measurements are on the `feat/qp-warm-start` branch
-and in [prox_mpc_core/doc/nmpc.md](prox_mpc_core/doc/nmpc.md).
+A cross-cycle warm start - reusing the QP factorization and previous iterate
+instead of rebuilding the sub-problem each cycle - is prototyped on the
+`feat/qp-warm-start` branch. It is not shipped: the QP solves for **increments**,
+so its solution tends to zero as the SQP converges and a cold start already begins
+near the answer.
 
 ### Validation beyond the kinematic plant
 
@@ -243,7 +240,7 @@ QP the SQP builds each cycle),
 - Eigen 3: `sudo apt install libeigen3-dev`.
 - ProxQP / proxsuite: see the
   [proxsuite install guide](https://github.com/Simple-Robotics/proxsuite).
-- Nav2 (`nav2_core`, `nav2_costmap_2d`) - only for `prox_mpc_controller`.
+- Nav2 (`nav2_core`, `nav2_costmap_2d`, `nav2_util`) - only for `prox_mpc_controller`.
 
 ## Build
 

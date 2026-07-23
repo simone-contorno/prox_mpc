@@ -30,7 +30,7 @@ Model Predictive Control turns "follow this path safely" into an optimisation so
 At each step the controller looks a fixed horizon into the future, predicts where the vehicle would go under a candidate sequence of controls, scores that prediction against a reference (track the plan, hit the cruise speed, stay smooth, avoid obstacles), and applies only the first optimal control - then repeats.
 
 The dynamics of a real vehicle are nonlinear, so the optimal-control problem is nonlinear.
-ProxMPC solves it with **Sequential Quadratic Programming (SQP)**: it repeatedly linearises the dynamics around the current guess, assembles a **Quadratic Program (QP)**, and solves that QP with the [ProxQP](https://github.com/Simple-Robotics/proxsuite) solver, iterating until the linearisation stops changing.
+ProxMPC solves it with **Sequential Quadratic Programming (SQP)**: it linearises the dynamics around the current guess, assembles a **Quadratic Program (QP)**, and solves that QP with the [ProxQP](https://github.com/Simple-Robotics/proxsuite) solver, re-linearising and retrying only while the sub-problem fails to converge. In the nominal case that is one linearise-solve-update pass per control cycle, with the linearisation refined across cycles through the trajectory warm start ([nmpc.md](../prox_mpc_core/doc/nmpc.md)).
 A useful consequence falls out for free: if the model is already linear, the first QP is exact and the SQP converges in a single solve.
 
 Safety is split into two layers that recur throughout the stack: a **fast, convex** keep-out constraint lives *inside* the optimisation so the solver shapes a trajectory that avoids obstacles, and an **exact, conservative** check sits *outside* it as a veto, so a command that would actually collide is never issued.
@@ -67,7 +67,7 @@ The engine takes no safety action of its own - convergence and finiteness gating
 ## 3. `prox_mpc_msgs` - the obstacle contract
 
 **What it is.**
-An interface-only `rosidl` package: two messages, no node, no library.
+An interface-only `rosidl` package: three messages, no node, no library.
 It is the contract that lets the tracker and the controller evolve independently.
 
 **How it works.**
@@ -94,7 +94,7 @@ Each `computeVelocityCommands` cycle the plugin:
 1. transforms the global plan into the costmap global frame and samples a state/control reference along it by arc length (continuous, unwrapped heading; a curvature-aware steering reference for the bicycle; goal-approach easing);
 2. reduces the local costmap to the engine's obstacle triples - a clustered, windowed scan for occupied cells - and, when predictive avoidance is on, propagates tracked dynamic obstacles over the horizon and binds each to a constraint slot (hybrid fill);
 3. solves one SQP cycle, times it, and (opt-in) publishes a `SolverDiagnostics`;
-4. gates the result: a non-converged or non-finite solve, or a command that fails the **exact polygon-footprint veto**, decelerates the last command at the model's limit and escalates to a Nav2 recovery after `max_solver_failures` consecutive faults.
+4. gates the result: a non-converged or non-finite solve, or a command that fails the **exact polygon-footprint veto**, decelerates from the measured velocity at the model's limit and escalates to a Nav2 recovery after `max_solver_failures` consecutive faults (the veto counting on its own budget).
 
 This is the two-layer safety split in practice: the in-loop disc constraint shapes the trajectory; the footprint veto is the conservative backstop.
 

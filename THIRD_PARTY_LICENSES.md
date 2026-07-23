@@ -50,10 +50,10 @@ this repository, would change the analysis and must be re-reviewed.
 
 | Library | Used as | License | Notes |
 | --- | --- | --- | --- |
-| `Eigen3` | C++ headers (`<Eigen/Dense>`, `<Eigen/Sparse>`) | MPL-2.0 (with BSD-3 files) | Header-only, unmodified. Only the Dense and Sparse modules are included; **no LGPL module** (`SparseCholesky` non-impl, `SuperLU`, `UmfPack`, `Cholmod`, `Pardiso`, `SPQR`) is included or linked. |
+| `Eigen3` | C++ headers (`<Eigen/Dense>`, `<Eigen/Sparse>`) | MPL-2.0 (with BSD-3 files) | Header-only, unmodified. Only the Dense and Sparse modules are included. Two files reachable through `<Eigen/Sparse>` (`SparseCholesky/SimplicialCholesky.h`, `OrderingMethods/Amd.h`) are dual-licensed **LGPL-2.1+ or MPL-2.0**; Eigen 3.4.0 ships both with MPL-2.0-only file headers and this project takes the MPL-2.0 arm, so no LGPL obligation attaches. No LGPL-only backend (`SuperLU`, `UmfPack`, `Cholmod`, `Pardiso`, `SPQR`) is included or linked. |
 | `ProxSuite` | Linked QP solver (`proxsuite::proxsuite`) | BSD-2-Clause | See the canonical version note in [prox_mpc_core's NMPC doc](prox_mpc_core/doc/nmpc.md) and the proxsuite provisioning note below. |
-| `SIMDe` | Transitive (vendored inside ProxSuite for portable SIMD) | MIT | Pulled in via ProxSuite headers; not used directly. |
-| ROS 2 client/message/Nav2 libraries (`rclcpp`, `rclcpp_lifecycle`, `rclcpp_components`, `tf2`, `tf2_ros`, `pluginlib`, `nav2_core`, `nav2_costmap_2d`, `geometry_msgs`, `nav_msgs`, `sensor_msgs`, `lifecycle_msgs`, `visualization_msgs`) | Linked / message generation | Apache-2.0 or BSD-3-Clause | The ROS 2 Jazzy core permissive set. |
+| `SIMDe` | Transitive apt dependency (`libsimde-dev`, a `Depends` of `ros-jazzy-proxsuite`) | MIT | Not vendored: ProxSuite ships only a CMake finder and includes the headers from `libsimde-dev` in its dense linalg core. Not used directly by this project. |
+| ROS 2 client/message/Nav2 libraries (`rclcpp`, `rclcpp_lifecycle`, `rclcpp_components`, `tf2`, `tf2_ros`, `pluginlib`, `nav2_core`, `nav2_costmap_2d`, `nav2_util`, `geometry_msgs`, `nav_msgs`, `sensor_msgs`, `lifecycle_msgs`, `visualization_msgs`) | Linked / message generation | Apache-2.0 or BSD-3-Clause | The ROS 2 Jazzy core permissive set. |
 | `vector_pursuit_controller` (apt `ros-jazzy-vector-pursuit-controller` v2.0.0, maintained by Black Coffee Robotics) | Installed `nav2_core::Controller` plugin (pluginlib-loaded at runtime, not linked) | Apache-2.0 | `prox_mpc_benchmark`'s single external fair peer for the cross-controller comparison; a runtime `exec_depend`, not a build/link dependency. |
 | `nav2_graceful_controller` (apt `ros-jazzy-nav2-graceful-controller`) | Installed `nav2_core::Controller` plugin (pluginlib-loaded at runtime, not linked) | Apache-2.0 | A `prox_mpc_benchmark` cross-controller comparison peer from the Nav2 distribution; a runtime `exec_depend`, not a build/link dependency. |
 | `ffmpeg` (apt `ffmpeg`) | Invoked as a separate process by the demo-video tooling (`prox_mpc_benchmark/scripts/record_scenarios.py`, `scripts/combine_grid.sh`); never linked, never redistributed | GPL-2+ (Debian binary build) | **Documented policy exception** - see [Documented exception - ffmpeg](#documented-exception---ffmpeg-gpl-2) above. Developer-time recording utility only; not a shipped runtime component. |
@@ -62,9 +62,13 @@ this repository, would change the analysis and must be re-reviewed.
 
 The "ROS 2 client/message/Nav2 libraries" row above is a blanket entry. The keys
 it covers are enumerated here so the claim is checkable rather than rhetorical:
-every one is an Apache-2.0 or BSD-3-Clause package from the ROS 2 Jazzy
-distribution, consumed as a normal rosdep-provisioned dependency and never
-vendored or modified.
+every one is Apache-2.0, BSD-3-Clause, or MIT - all inside the permissive policy
+set above - consumed as a normal rosdep-provisioned dependency and never vendored
+or modified. Most are ROS 2 Jazzy distribution packages; the exceptions to note
+are `nav2_mppi_controller`, which declares `MIT` rather than Apache-2.0, and the
+two Ubuntu apt keys `python3-yaml` (PyYAML, MIT/Expat) and `python3-numpy`
+(BSD-3-Clause, with permissively licensed bundled components), which come from
+Ubuntu rather than the ROS distribution.
 
 `.github/scripts/check_dependency_inventory.py` (run in CI) fails if a
 `package.xml` declares a rosdep key that appears neither in the inventory table
@@ -78,6 +82,7 @@ ament_cmake_python
 ament_index_python
 ament_lint_auto
 ament_lint_common
+builtin_interfaces
 dwb_core
 dwb_critics
 joint_state_publisher
@@ -95,8 +100,10 @@ nav2_msgs
 nav2_navfn_planner
 nav2_planner
 nav2_regulated_pure_pursuit_controller
+nav2_util
 python3-numpy
 python3-yaml
+rcl_interfaces
 rclpy
 robot_state_publisher
 ros2bag
