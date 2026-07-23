@@ -161,8 +161,11 @@ when `percentage` is set, restoring the model bound on `NO_SPEED_LIMIT`), clamps
 it to the model bound, and applies it to the retained model handle with
 `model->updateIneq("u", 0, -v_\text{lim}, v_\text{lim})`, so the bound takes effect
 on the next solve without rebuilding the problem.
-A limit received before the model is loaded is cached and re-applied in
-`configure`.
+`setSpeedLimit` itself only caches the request: it runs on the node's executor
+thread while `computeVelocityCommands` runs on the action server's thread, so the
+model's inequality map is mutated on the control thread only - at the top of the
+next control cycle, or in `configure` for a limit received before the model was
+loaded. A new limit therefore takes effect from the next cycle, never mid-solve.
 
 ## Failure fallback (braking)
 
@@ -172,23 +175,32 @@ The controller owns the reaction so the policy stays decoupled from the engine.
 
 On a non-converged cycle the controller does **not** command a hard zero, which
 would be an instantaneous, dynamically infeasible stop.
-Instead it decelerates the last command toward zero at the robot's deceleration
-limit, read as the magnitude of the model's control-rate (`du`) bounds for the
-speed and yaw channels, $a_\text{dec} = \lvert a_\text{min} \rvert$, so over one
-step
+Instead it decelerates toward zero at the robot's deceleration limit, read as the
+magnitude of the model's control-rate (`du`) bounds for the speed and yaw
+channels, $a_\text{dec} = \lvert a_\text{min} \rvert$, so over one step
 
 $$
 v_\text{cmd} = \max\!\big(0,\; v_\text{prev} - a_\text{dec}\, \Delta t\big),
 $$
 
 and the yaw rate is ramped toward zero the same way (respecting its sign).
+$v_\text{prev}$ is the velocity the `controller_server` measured for this cycle,
+not the previous command, so the ramp starts from the robot's actual speed; a
+non-finite measurement (NaN or $\pm\infty$) yields exactly zero, so an infinite
+measured velocity can never be ramped into the published command.
+Because a zero deceleration limit would leave the ramp stuck at the current
+velocity forever, a model that declares no `du` bound for either channel (or no
+`u[0]` bound for the speed cap) fails `configure` with a
+`nav2_core::ControllerException` naming the missing bound.
 The same ramp serves the cancel request, the footprint veto, a non-finite pose,
 and a non-finite command.
 A counter tracks consecutive solver failures; once it exceeds
 `max_solver_failures`, the controller raises `nav2_core::NoValidControl` so the
 Nav2 behavior tree stops and replans rather than crawling on a decaying command.
 A footprint veto and a non-finite pose use the same brake but are handled
-distinctly: the veto does not consume the failure budget.
+distinctly: the veto counts on its own counter, so it does not consume the
+solver-failure budget, though a veto persisting beyond that same budget raises
+`nav2_core::NoValidControl` in turn.
 
 ## Discrete-time control barrier coupling
 

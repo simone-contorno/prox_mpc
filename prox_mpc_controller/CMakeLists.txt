@@ -31,6 +31,7 @@ find_package(proxsuite 0.6.5 REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(nav2_core REQUIRED)
 find_package(nav2_costmap_2d REQUIRED)
+find_package(nav2_util REQUIRED)
 find_package(nav_msgs REQUIRED)
 find_package(pluginlib REQUIRED)
 find_package(rclcpp REQUIRED)
@@ -57,6 +58,7 @@ ament_target_dependencies(${PROJECT_NAME}
   geometry_msgs
   nav2_core
   nav2_costmap_2d
+  nav2_util
   nav_msgs
   pluginlib
   rclcpp
@@ -96,6 +98,7 @@ ament_export_dependencies(
   geometry_msgs
   nav2_core
   nav2_costmap_2d
+  nav2_util
   nav_msgs
   pluginlib
   rclcpp

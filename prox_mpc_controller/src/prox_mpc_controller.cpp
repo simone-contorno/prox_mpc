@@ -6,10 +6,14 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cmath>
+#include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <limits>
 #include <map>
+#include <memory>
 #include <mutex>
 #include <string>
 #include <tuple>
@@ -21,6 +25,7 @@
 #include <nav2_costmap_2d/cost_values.hpp>
 #include <nav2_costmap_2d/costmap_2d.hpp>
 #include <nav2_costmap_2d/footprint_collision_checker.hpp>
+#include <nav2_util/node_utils.hpp>
 #include <pluginlib/class_list_macros.hpp>
 #include <tf2/exceptions.h>
 #include <tf2/time.h>
@@ -74,8 +79,11 @@ double quat_yaw(const geometry_msgs::msg::Quaternion & q)
 }
 
 /// One deceleration step toward zero, respecting the sign of the previous value.
+/// A non-finite previous value (NaN or +/-inf) yields zero: an infinite measured
+/// velocity would otherwise survive the ramp and be published as the command.
 double brake_toward(double prev, double decel, double dt)
 {
+  if (!std::isfinite(prev)) {return 0.0;}
   const double step = std::abs(decel) * dt;
   if (prev > 0.0) {return std::max(0.0, prev - step);}
   if (prev < 0.0) {return std::min(0.0, prev + step);}
@@ -107,6 +115,23 @@ std::array<double, 2> sample_polyline(
   const double ay = (k == 0) ? y0 : samples[k - 1][1];
   const std::array<double, 2> & b = samples[k];
   return {ax + (b[0] - ax) * alpha, ay + (b[1] - ay) * alpha};
+}
+
+/// One declared inequality bound of the model: entry layout is
+/// (vector index, lower, upper), so `which` selects 1 for the lower bound and 2
+/// for the upper one. A model that does not declare the bound cannot be driven
+/// safely, so this throws instead of substituting a value.
+double required_bound(
+  prox_mpc::Model & model, const std::string & model_plugin, const std::string & var,
+  std::size_t idx, std::size_t which, const std::string & channel,
+  const std::string & consequence)
+{
+  for (const auto & entry : model.getIneq(var)) {
+    if (static_cast<std::size_t>(entry.second[0]) == idx) {return entry.second[which];}
+  }
+  throw nav2_core::ControllerException(
+          "ProxMpcController: model '" + model_plugin + "' declares no '" + var +
+          "' bound for the " + channel + " control; " + consequence);
 }
 
 /// Apply the project log_level key to the plugin's own logger.
@@ -162,23 +187,39 @@ void ProxMpcController::configure(
       }
     };
 
-  /* Parameters (declared under the plugin instance namespace, e.g. FollowPath.*). */
+  /* Parameters live under the plugin-instance namespace (e.g. FollowPath.*) on
+   * the controller server's node. The server destroys and recreates the plugin
+   * across a cleanup()/configure() cycle while its node keeps the parameters
+   * declared, so an unguarded declaration would throw
+   * rclcpp::exceptions::ParameterAlreadyDeclaredException - not a
+   * nav2_core::ControllerException - and fail the lifecycle transition. */
   const std::string p = plugin_name_ + ".";
-  const std::string model_plugin =
-    node->declare_parameter<std::string>(p + "model_plugin", "prox_mpc_core/Bicycle");
-  const double model_l = node->declare_parameter<double>(p + "model_params.L", 1.6);
+  auto declare = [&node, &p](const std::string & key, auto & value, const auto & fallback) {
+      nav2_util::declare_parameter_if_not_declared(
+        node, p + key, rclcpp::ParameterValue(fallback));
+      node->get_parameter(p + key, value);
+    };
+
+  std::string model_plugin;
+  declare("model_plugin", model_plugin, std::string("prox_mpc_core/Bicycle"));
+  double model_l = 0.0;
+  declare("model_params.L", model_l, 1.6);
   /* Optional model input-velocity bound [m/s]; 0.0 (default) keeps the model's
    * built-in limit. Sourced from the robot config's max_linear_vel, so the speed
    * cap is a property of the model constraint rather than a controller output
    * clamp. A positive v_max caps the forward input; v_min defaults to -v_max. */
-  const double model_v_max = node->declare_parameter<double>(p + "model_params.v_max", 0.0);
-  const double model_v_min = node->declare_parameter<double>(p + "model_params.v_min", 0.0);
+  double model_v_max = 0.0;
+  declare("model_params.v_max", model_v_max, 0.0);
+  double model_v_min = 0.0;
+  declare("model_params.v_min", model_v_min, 0.0);
 
   /* Horizon sizing and step are structural: np/nc below 1 wrap to an astronomical
    * size_t allocation and dt <= 0 divides by zero, so fail configure outright. */
-  const int np_param = node->declare_parameter<int>(p + "np", 20);
-  const int nc_param = node->declare_parameter<int>(p + "nc", 20);
-  dt_ = node->declare_parameter<double>(p + "dt", 0.1);
+  int np_param = 0;
+  declare("np", np_param, 20);
+  int nc_param = 0;
+  declare("nc", nc_param, 20);
+  declare("dt", dt_, 0.1);
   if (np_param < 1 || nc_param < 1 || dt_ <= 0.0) {
     throw nav2_core::ControllerException(
             "ProxMpcController: np >= 1, nc >= 1, dt > 0 required (got np=" +
@@ -188,44 +229,66 @@ void ProxMpcController::configure(
   np_ = static_cast<std::size_t>(np_param);
   nc_ = static_cast<std::size_t>(nc_param);
 
-  desired_linear_vel_ = node->declare_parameter<double>(p + "desired_linear_vel", 1.0);
-  curvature_gain_ = node->declare_parameter<double>(p + "curvature_gain", 0.0);
+  declare("desired_linear_vel", desired_linear_vel_, 1.0);
+  declare("curvature_gain", curvature_gain_, 0.0);
 
   /* Cost weights must be non-negative: a negative weight makes the QP Hessian
    * indefinite (non-convex sub-problem). Floor them at a small positive value. */
-  double q_pos = node->declare_parameter<double>(p + "q_pos", 10.0);
-  double q_theta = node->declare_parameter<double>(p + "q_theta", 1.0);
-  double s_factor = node->declare_parameter<double>(p + "s_factor", 2.0);
-  double r_weight = node->declare_parameter<double>(p + "r_weight", 0.1);
-  double w_weight = node->declare_parameter<double>(p + "w_weight", 100.0);
+  double q_pos = 0.0;
+  declare("q_pos", q_pos, 10.0);
+  double q_theta = 0.0;
+  declare("q_theta", q_theta, 1.0);
+  double s_factor = 0.0;
+  declare("s_factor", s_factor, 2.0);
+  double r_weight = 0.0;
+  declare("r_weight", r_weight, 0.1);
+  double w_weight = 0.0;
+  declare("w_weight", w_weight, 100.0);
   clamp_low("q_pos", q_pos, kMinCostWeight);
   clamp_low("q_theta", q_theta, kMinCostWeight);
   clamp_low("s_factor", s_factor, kMinCostWeight);
   clamp_low("r_weight", r_weight, kMinCostWeight);
   clamp_low("w_weight", w_weight, kMinCostWeight);
 
-  const int max_int_iter_qp = node->declare_parameter<int>(p + "max_int_iter_qp", 1500);
-  const int max_ext_iter_qp = node->declare_parameter<int>(p + "max_ext_iter_qp", 10000);
-  const int max_iter_sqp = node->declare_parameter<int>(p + "max_iter_sqp", 100);
+  /* Iteration caps are structural, like the horizon sizing: they reach the core
+   * as size_t, so a negative value wraps to an astronomical bound (an effectively
+   * unbounded SQP loop), and ProxQP rejects a zero cap outright. Both are fatal -
+   * a one-iteration fallback would be a silent, never-converging bringup. */
+  int max_int_iter_qp = 0;
+  declare("max_int_iter_qp", max_int_iter_qp, 1500);
+  int max_ext_iter_qp = 0;
+  declare("max_ext_iter_qp", max_ext_iter_qp, 10000);
+  int max_iter_sqp = 0;
+  declare("max_iter_sqp", max_iter_sqp, 100);
+  if (max_int_iter_qp < 1 || max_ext_iter_qp < 1 || max_iter_sqp < 1) {
+    throw nav2_core::ControllerException(
+            "ProxMpcController: max_int_iter_qp >= 1, max_ext_iter_qp >= 1, max_iter_sqp >= 1 "
+            "required (got max_int_iter_qp=" + std::to_string(max_int_iter_qp) +
+            ", max_ext_iter_qp=" + std::to_string(max_ext_iter_qp) + ", max_iter_sqp=" +
+            std::to_string(max_iter_sqp) + ")");
+  }
   /* Optional wall-clock budget [s] for the whole SQP loop (0 = disabled, iteration
    * caps only). On timeout the solve reports non-convergence and this cycle brakes. */
-  double max_solve_time = node->declare_parameter<double>(p + "max_solve_time", 0.0);
+  double max_solve_time = 0.0;
+  declare("max_solve_time", max_solve_time, 0.0);
   clamp_low("max_solve_time", max_solve_time, 0.0);
-  const bool qp_type = node->declare_parameter<bool>(p + "qp_type", false);
-  const bool guess = node->declare_parameter<bool>(p + "guess", true);
-  max_solver_failures_ = node->declare_parameter<int>(p + "max_solver_failures", 3);
-  max_obstacles_ = node->declare_parameter<int>(p + "max_obstacles", 1);
+  bool qp_type = false;
+  declare("qp_type", qp_type, false);
+  bool guess = true;
+  declare("guess", guess, true);
+  declare("max_solver_failures", max_solver_failures_, 3);
+  declare("max_obstacles", max_obstacles_, 1);
   if (max_obstacles_ < 0) {
     RCLCPP_WARN(logger_, "max_obstacles %d < 0; clamping to 0.", max_obstacles_);
     max_obstacles_ = 0;
   }
-  safety_margin_ = node->declare_parameter<double>(p + "safety_margin", 0.1);
-  robot_radius_ = node->declare_parameter<double>(p + "robot_radius", 0.5);
+  declare("safety_margin", safety_margin_, 0.1);
+  declare("robot_radius", robot_radius_, 0.5);
   clamp_low("safety_margin", safety_margin_, 0.0);
   clamp_low("robot_radius", robot_radius_, 0.0);
-  cbf_gamma_ = node->declare_parameter<double>(p + "cbf_gamma", 1.0);
+  declare("cbf_gamma", cbf_gamma_, 1.0);
   clamp_range("cbf_gamma", cbf_gamma_, kMinCbfGamma, 1.0);
-  costmap_cost_threshold_ = node->declare_parameter<int>(p + "costmap_cost_threshold", 200);
+  declare("costmap_cost_threshold", costmap_cost_threshold_, 200);
   if (costmap_cost_threshold_ < 0 || costmap_cost_threshold_ > kMaxCostThreshold) {
     const int c = std::clamp(costmap_cost_threshold_, 0, kMaxCostThreshold);
     RCLCPP_WARN(
@@ -233,10 +296,9 @@ void ProxMpcController::configure(
       costmap_cost_threshold_, kMaxCostThreshold, c);
     costmap_cost_threshold_ = c;
   }
-  obstacle_cluster_radius_ = node->declare_parameter<double>(p + "obstacle_cluster_radius", 0.3);
+  declare("obstacle_cluster_radius", obstacle_cluster_radius_, 0.3);
   clamp_low("obstacle_cluster_radius", obstacle_cluster_radius_, 0.0);
-  max_obstacle_scan_cells_ =
-    node->declare_parameter<int>(p + "max_obstacle_scan_cells", kMaxScanHalfWidth);
+  declare("max_obstacle_scan_cells", max_obstacle_scan_cells_, kMaxScanHalfWidth);
   if (max_obstacle_scan_cells_ < 1) {
     RCLCPP_WARN(
       logger_, "max_obstacle_scan_cells %d below 1; clamping to 1.",
@@ -246,20 +308,16 @@ void ProxMpcController::configure(
 
   /* Predictive (dynamic) obstacle avoidance. predict_obstacles off reproduces the
    * costmap-only behavior bit-for-bit; the rest size the predictive + hybrid fill. */
-  predict_obstacles_ = node->declare_parameter<bool>(p + "predict_obstacles", false);
-  obstacle_topic_ =
-    node->declare_parameter<std::string>(p + "obstacle_topic", "tracked_obstacles");
-  obstacle_timeout_ = node->declare_parameter<double>(p + "obstacle_timeout", 0.5);
-  dynamic_speed_threshold_ =
-    node->declare_parameter<double>(p + "dynamic_speed_threshold", 0.1);
-  prediction_uncertainty_growth_ =
-    node->declare_parameter<double>(p + "prediction_uncertainty_growth", 0.0);
-  max_dynamic_obstacles_ = node->declare_parameter<int>(p + "max_dynamic_obstacles", 2);
-  max_dynamic_obstacle_radius_ =
-    node->declare_parameter<double>(p + "max_dynamic_obstacle_radius", 0.0);
+  declare("predict_obstacles", predict_obstacles_, false);
+  declare("obstacle_topic", obstacle_topic_, std::string("tracked_obstacles"));
+  declare("obstacle_timeout", obstacle_timeout_, 0.5);
+  declare("dynamic_speed_threshold", dynamic_speed_threshold_, 0.1);
+  declare("prediction_uncertainty_growth", prediction_uncertainty_growth_, 0.0);
+  declare("max_dynamic_obstacles", max_dynamic_obstacles_, 2);
+  declare("max_dynamic_obstacle_radius", max_dynamic_obstacle_radius_, 0.0);
 
   /* Opt-in solver telemetry (off by default); publishes only-when-subscribed. */
-  publish_diagnostics_ = node->declare_parameter<bool>(p + "publish_diagnostics", false);
+  declare("publish_diagnostics", publish_diagnostics_, false);
 
   /* Validate the predictive parameters; clamp out-of-range values (non-fatal, to
    * keep the controller available) and warn, matching the cruise-speed clamp. */
@@ -272,7 +330,8 @@ void ProxMpcController::configure(
     max_dynamic_obstacles_ = 0;
   }
 
-  const std::string log_level = node->declare_parameter<std::string>(p + "log_level", "info");
+  std::string log_level;
+  declare("log_level", log_level, std::string("info"));
 
   /* Keep the plugin's own ProxMpcController logger (do not adopt the server's),
    * and seed its level from the project log_level key. */
@@ -299,19 +358,7 @@ void ProxMpcController::configure(
   n_ = model_->getN();
   m_ = model_->getM();
 
-  /* Read the model's speed bound and deceleration limits from its constraints. */
-  auto bound = [](prox_mpc::Model & model, const std::string & var, std::size_t idx,
-    std::size_t which) -> double {
-      const auto & ineq = model.getIneq(var);
-      for (const auto & entry : ineq) {
-        if (static_cast<std::size_t>(entry.second[0]) == idx) {return entry.second[which];}
-      }
-      return 0.0;
-    };
-  v_max_ = bound(*model_, "u", 0, 2);
-  max_linear_vel_ = v_max_;
-  a_dec_lin_ = std::abs(bound(*model_, "du", 0, 1));
-  a_dec_ang_ = std::abs(bound(*model_, "du", 1, 1));
+  readModelBounds(*model_, model_plugin);
 
   /* Cruise speed must sit within the model's speed bound. */
   if (desired_linear_vel_ > v_max_) {
@@ -374,12 +421,34 @@ void ProxMpcController::configure(
       plugin_name_ + "/diagnostics", rclcpp::QoS(10).reliable());
   }
 
-  /* Re-apply a speed limit received before the model was available. */
-  if (speed_limit_ != 0.0) {setSpeedLimit(speed_limit_, speed_limit_is_percentage_);}
+  /* Apply a speed limit received before the model was available. configure() does
+   * not run concurrently with the solver, so it is applied in place here rather
+   * than deferred to the first control cycle. */
+  if (speed_limit_pending_.exchange(false, std::memory_order_acquire)) {
+    applySpeedLimit(
+      speed_limit_.load(std::memory_order_relaxed),
+      speed_limit_is_percentage_.load(std::memory_order_relaxed));
+  }
 
   RCLCPP_INFO(
     logger_, "Configured ProxMpcController '%s' (model '%s', Np=%zu, Nc=%zu, dt=%.3f, K=%zu).",
     plugin_name_.c_str(), model_plugin.c_str(), np_, nc_, dt_, k_obs);
+}
+
+void ProxMpcController::readModelBounds(prox_mpc::Model & model, const std::string & model_plugin)
+{
+  v_max_ = required_bound(
+    model, model_plugin, "u", 0, 2, "linear",
+    "the speed cap would collapse to zero and the controller would never move.");
+  max_linear_vel_ = v_max_;
+  a_dec_lin_ = std::abs(
+    required_bound(
+      model, model_plugin, "du", 0, 1, "linear",
+      "the solver-failure brake would never reach zero."));
+  a_dec_ang_ = std::abs(
+    required_bound(
+      model, model_plugin, "du", 1, 1, "angular",
+      "the solver-failure brake would never reach zero."));
 }
 
 void ProxMpcController::cleanup()
@@ -443,6 +512,17 @@ geometry_msgs::msg::TwistStamped ProxMpcController::computeVelocityCommands(
   const geometry_msgs::msg::Twist & velocity,
   nav2_core::GoalChecker * goal_checker)
 {
+  /* Apply a speed limit requested since the last cycle. setSpeedLimit() runs on
+   * the node's executor thread while this method runs on the action server's own
+   * thread, so the model's inequality map is mutated here, where nothing else
+   * reads it. The only behavioral difference is that a new limit takes effect on
+   * the next control cycle rather than mid-cycle. */
+  if (speed_limit_pending_.exchange(false, std::memory_order_acquire)) {
+    applySpeedLimit(
+      speed_limit_.load(std::memory_order_relaxed),
+      speed_limit_is_percentage_.load(std::memory_order_relaxed));
+  }
+
   geometry_msgs::msg::TwistStamped cmd;
   cmd.header.frame_id = costmap_ros_->getBaseFrameID();
   cmd.header.stamp = clock_->now();
@@ -549,7 +629,9 @@ geometry_msgs::msg::TwistStamped ProxMpcController::computeVelocityCommands(
       if (sk >= s.back() || plan_size < 2) {
         x = gx.back();
         y = gy.back();
-        th = (plan_size < 2) ? quat_yaw(global_plan_.poses.back().pose.orientation) :
+        /* Single-pose plan: the pose orientation is in the plan frame, so it
+         * carries the same yaw offset the positions above were rotated by. */
+        th = (plan_size < 2) ? quat_yaw(global_plan_.poses.back().pose.orientation) + tyaw :
           std::atan2(gy.back() - gy[plan_size - 2], gx.back() - gx[plan_size - 2]);
         return;
       }
@@ -769,10 +851,16 @@ geometry_msgs::msg::TwistStamped ProxMpcController::computeVelocityCommands(
 
 void ProxMpcController::setSpeedLimit(const double & speed_limit, const bool & percentage)
 {
-  speed_limit_ = speed_limit;
-  speed_limit_is_percentage_ = percentage;
-  if (!model_) {return;}  // applied in configure() once the model is loaded
+  /* Cache only. This runs on the node's executor thread; the request is applied
+   * on the control thread (configure(), or the top of the next control cycle),
+   * so the model's bounds are never mutated under a running solve. */
+  speed_limit_.store(speed_limit, std::memory_order_relaxed);
+  speed_limit_is_percentage_.store(percentage, std::memory_order_relaxed);
+  speed_limit_pending_.store(true, std::memory_order_release);
+}
 
+void ProxMpcController::applySpeedLimit(double speed_limit, bool percentage)
+{
   double v_lim;
   if (speed_limit <= 0.0) {
     v_lim = v_max_;  // NO_SPEED_LIMIT: restore the model's bound
@@ -805,6 +893,7 @@ void ProxMpcController::reset()
   last_cmd_w_ = 0.0;
   cancelling_ = false;
   plan_index_ = 0;
+  have_last_cycle_ = false;
 }
 
 void ProxMpcController::obstacleCallback(prox_mpc_msgs::msg::ObstacleArray::ConstSharedPtr msg)

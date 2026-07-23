@@ -6,6 +6,7 @@
 #define PROX_MPC_CONTROLLER__PROX_MPC_CONTROLLER_HPP_
 
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
@@ -76,6 +77,8 @@ public:
     nav2_core::GoalChecker * goal_checker) override;
 
   /// Constrain the maximum speed (absolute [m/s] or percentage of the maximum).
+  /// The request is cached and applied on the control thread, so it takes effect
+  /// from the next control cycle.
   void setSpeedLimit(const double & speed_limit, const bool & percentage) override;
 
   /// Request a graceful stop; returns true only once the robot has decelerated.
@@ -85,6 +88,23 @@ public:
   void reset() override;
 
 protected:
+  /// Read the model's speed bound (upper bound of `u[0]`) and its per-channel
+  /// deceleration limits (lower bounds of `du[0]` and `du[1]`) into v_max_,
+  /// max_linear_vel_, a_dec_lin_ and a_dec_ang_. A model that declares none of a
+  /// required bound cannot be driven safely - a zero deceleration limit leaves
+  /// the brake ramp stuck at the current velocity, and a zero speed bound clamps
+  /// the cruise speed to zero - so a missing bound throws
+  /// nav2_core::ControllerException naming it. `model_plugin` is the plugin name
+  /// reported in that message.
+  void readModelBounds(prox_mpc::Model & model, const std::string & model_plugin);
+
+  /// Convert a requested speed limit to an absolute bound (a fraction of the
+  /// model bound when `percentage`, the model bound itself on NO_SPEED_LIMIT),
+  /// clamp it to the model bound, and apply it to the model's `u[0]` inequality.
+  /// Called only from the control thread (configure() and the top of a control
+  /// cycle), never concurrently with a running solve.
+  void applySpeedLimit(double speed_limit, bool percentage);
+
   /// Fill the per-node (o_x, o_y, d_safe) obstacle matrix for one cycle. With
   /// predict_obstacles_ off, or no fresh tracked-obstacle message, this reproduces
   /// the costmap-only reduceCostmap() exactly. Otherwise it propagates each
@@ -222,9 +242,15 @@ protected:
   double a_dec_lin_{0.5};
   double a_dec_ang_{0.5};
 
-  /// Speed limit cached before the model is loaded (re-applied in configure()).
-  double speed_limit_{0.0};
-  bool speed_limit_is_percentage_{false};
+  /// Speed limit requested by the server. setSpeedLimit() runs on the node's
+  /// executor thread while the solver reads the model's bounds on the action
+  /// server's thread, so the request is cached here and applied on the control
+  /// thread: in configure() when it arrived before the model was loaded, and
+  /// otherwise at the top of the next control cycle. The release/acquire pair on
+  /// speed_limit_pending_ publishes the value and the flag together.
+  std::atomic<double> speed_limit_{0.0};
+  std::atomic<bool> speed_limit_is_percentage_{false};
+  std::atomic<bool> speed_limit_pending_{false};
 
   /// Runtime state, reset between tasks.
   int failure_count_{0};

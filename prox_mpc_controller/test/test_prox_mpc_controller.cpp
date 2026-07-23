@@ -13,7 +13,7 @@
 //   - computeVelocityCommands(): the converging happy path, the in-cycle costmap
 //     reduction, and the footprint veto;
 //   - setSpeedLimit(): absolute, percentage, clamping, NO_SPEED_LIMIT restore,
-//     and the cache-before-model case;
+//     the cache-before-model case, and the deferred apply-on-next-cycle contract;
 //   - cancel()/reset(): graceful-stop ramp and runtime-state clearing.
 //
 // Fail-safe branches each assert the safe command the plan specifies, not merely
@@ -32,6 +32,7 @@
 #include <cstddef>
 #include <limits>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <thread>
 #include <vector>
@@ -73,6 +74,7 @@ class TestableProxMpcController : public prox_mpc_controller::ProxMpcController
 public:
   using ProxMpcController::reduceCostmap;
   using ProxMpcController::fillObstacles;
+  using ProxMpcController::readModelBounds;
 
   // Inject the latest tracked-obstacle message directly (white-box), bypassing
   // the subscription so the predictive fill can be driven deterministically.
@@ -95,6 +97,44 @@ public:
   std::size_t maxObstacles() const {return static_cast<std::size_t>(max_obstacles_);}
   std::shared_ptr<prox_mpc::MPC> mpc() const {return mpc_;}
   std::shared_ptr<prox_mpc::Model> model() const {return model_;}
+};
+
+// A model that declares its control bounds but no control-rate (du) bounds, so
+// the deceleration limits the brake ramp needs do not exist. Defined here rather
+// than in prox_mpc_test_models because it only has to reach readModelBounds(),
+// not the pluginlib load path. The dynamics are never solved.
+class NoDuBoundModel : public prox_mpc::Model
+{
+public:
+  NoDuBoundModel()
+  {
+    setName("no_du_bound");
+    setN(3);
+    setM(2);
+    setIneq("u", 0, -3.0, 3.0);
+    setIneq("u", 1, -1.0, 1.0);
+  }
+  void updatec(double, VectorXd) override {}
+  void updateA(double) override {}
+  void updateB() override {}
+};
+
+// The mirror case: control-rate bounds but no bound on the speed channel, which
+// would leave v_max (and hence the cruise-speed clamp) at zero.
+class NoUBoundModel : public prox_mpc::Model
+{
+public:
+  NoUBoundModel()
+  {
+    setName("no_u_bound");
+    setN(3);
+    setM(2);
+    setIneq("du", 0, -0.5, 0.5);
+    setIneq("du", 1, -0.5, 0.5);
+  }
+  void updatec(double, VectorXd) override {}
+  void updateA(double) override {}
+  void updateB() override {}
 };
 
 // A straight global plan along +x in the costmap global frame ("map").
@@ -286,6 +326,23 @@ protected:
     return c;
   }
 
+  // A configured, activated controller with a straight plan, ready to run cycles.
+  std::shared_ptr<TestableProxMpcController> makeRunning(
+    const std::vector<rclcpp::Parameter> & overrides = {})
+  {
+    auto c = makeConfigured(overrides);
+    c->activate();
+    c->setPlan(makeStraightPlan(31, 0.2));
+    return c;
+  }
+
+  // Run one control cycle from the plan origin (the seam where a speed limit
+  // requested since the previous cycle is applied).
+  void runCycle(const std::shared_ptr<TestableProxMpcController> & c)
+  {
+    c->computeVelocityCommands(makePose(0.0, 0.0, 0.0), geometry_msgs::msg::Twist(), nullptr);
+  }
+
   // Stamp a rectangular world region [x0,x1] x [y0,y1] with a cost value.
   void fillCost(double x0, double y0, double x1, double y1, unsigned char cost)
   {
@@ -364,6 +421,64 @@ TEST_F(ProxMpcControllerTest, ConfigureReappliesPreloadSpeedLimit)
   EXPECT_NEAR(c->maxLinearVel(), 0.0, kTol);
   c->configure(node_, "FollowPath", tf_, costmap_ros_);
   EXPECT_NEAR(c->maxLinearVel(), 1.5, kTol);
+}
+
+// Nav2's controller_server destroys the plugin instance on cleanup() but its
+// node keeps every plugin parameter declared, so a cleanup() -> configure()
+// cycle must not redeclare them: an unguarded declaration throws
+// rclcpp::exceptions::ParameterAlreadyDeclaredException, which is not a
+// nav2_core::ControllerException, and the lifecycle transition fails. The same
+// holds for a fresh plugin instance configured against the same node.
+TEST_F(ProxMpcControllerTest, ReconfigureOnSameNodeDoesNotRedeclareParameters)
+{
+  auto c = makeUnconfigured({rclcpp::Parameter("FollowPath.desired_linear_vel", 0.7)});
+  ASSERT_NO_THROW(c->configure(node_, "FollowPath", tf_, costmap_ros_));
+  c->activate();
+  c->deactivate();
+  c->cleanup();
+  ASSERT_TRUE(node_->has_parameter("FollowPath.desired_linear_vel"));
+
+  EXPECT_NO_THROW(c->configure(node_, "FollowPath", tf_, costmap_ros_));
+  EXPECT_NEAR(c->desiredLinearVel(), 0.7, kTol);   // the declared value is re-read
+
+  auto fresh = std::make_shared<TestableProxMpcController>();
+  EXPECT_NO_THROW(fresh->configure(node_, "FollowPath", tf_, costmap_ros_));
+  EXPECT_NEAR(fresh->desiredLinearVel(), 0.7, kTol);
+  fresh->cleanup();
+}
+
+// A model that declares no control-rate (du) bound cannot brake - the ramp step
+// would be zero, so the solver-failure path would command the current velocity
+// forever and cancel() would never complete - and one with no bound on the speed
+// channel would clamp the cruise speed to zero. Both fail configure with a
+// ControllerException naming the missing bound.
+TEST_F(ProxMpcControllerTest, MissingModelBoundIsFatal)
+{
+  auto c = makeUnconfigured();
+
+  NoDuBoundModel no_du;
+  try {
+    c->readModelBounds(no_du, "test/NoDuBound");
+    FAIL() << "a model without du bounds must not configure";
+  } catch (const nav2_core::ControllerException & ex) {
+    const std::string what(ex.what());
+    EXPECT_NE(what.find("'du'"), std::string::npos) << what;
+    EXPECT_NE(what.find("test/NoDuBound"), std::string::npos) << what;
+  }
+
+  NoUBoundModel no_u;
+  try {
+    c->readModelBounds(no_u, "test/NoUBound");
+    FAIL() << "a model without a u bound must not configure";
+  } catch (const nav2_core::ControllerException & ex) {
+    const std::string what(ex.what());
+    EXPECT_NE(what.find("'u'"), std::string::npos) << what;
+  }
+
+  // The bundled model declares both, so the same read succeeds and yields the
+  // model's own bounds.
+  auto configured = makeConfigured();
+  EXPECT_NEAR(configured->vMax(), kModelVMax, kTol);
 }
 
 // --- lifecycle: activate / deactivate / cleanup ----------------------------
@@ -706,6 +821,32 @@ TEST_F(ProxMpcControllerTest, ComputeHoldsGoalTangentOnShortMultiPosePlan)
   EXPECT_TRUE(std::isfinite(cmd.twist.angular.z));
 }
 
+// The single-pose goal-hold heading is taken from the plan pose orientation,
+// which lives in the plan frame: it must be rotated into the costmap global
+// frame like the plan positions are, or the held heading is off by the plan
+// transform's yaw.
+TEST_F(ProxMpcControllerTest, ShortPlanGoalHoldHeadingIsTransformed)
+{
+  auto c = makeConfigured();
+  c->activate();
+
+  // map <- odom rotated by +pi/2 (no translation).
+  geometry_msgs::msg::TransformStamped tfs;
+  tfs.header.frame_id = "map";
+  tfs.child_frame_id = "odom";
+  tfs.transform.rotation.z = std::sin(M_PI / 4.0);
+  tfs.transform.rotation.w = std::cos(M_PI / 4.0);
+  tf_->setTransform(tfs, "test", true);
+
+  c->setPlan(makeStraightPlan(1, 0.2, "odom"));    // single pose, yaw 0 in odom
+  c->computeVelocityCommands(makePose(0.0, 0.0, 0.0), geometry_msgs::msg::Twist(), nullptr);
+
+  const MatrixXd gx = c->mpc()->getGoalX();
+  for (Eigen::Index k = 0; k < gx.rows(); ++k) {
+    EXPECT_NEAR(gx(k, 2), M_PI / 2.0, 1e-9);       // plan yaw 0 rotated into map
+  }
+}
+
 // A non-finite robot pose is treated as a transient fault: decelerate (here from
 // rest, so the safe command is zero) without throwing while budget remains.
 TEST_F(ProxMpcControllerTest, ComputeDeceleratesOnNonFinitePose)
@@ -854,35 +995,63 @@ TEST_F(ProxMpcControllerTest, PersistentFootprintVetoEscalates)
 // An absolute speed limit applies the value as the linear bound.
 TEST_F(ProxMpcControllerTest, SetSpeedLimitAbsolute)
 {
-  auto c = makeConfigured();
+  auto c = makeRunning();
   c->setSpeedLimit(0.8, false);
+  runCycle(c);
   EXPECT_NEAR(c->maxLinearVel(), 0.8, kTol);
 }
 
 // A percentage speed limit is a fraction of the model maximum.
 TEST_F(ProxMpcControllerTest, SetSpeedLimitPercentage)
 {
-  auto c = makeConfigured();
+  auto c = makeRunning();
   c->setSpeedLimit(50.0, true);
+  runCycle(c);
   EXPECT_NEAR(c->maxLinearVel(), 0.5 * kModelVMax, kTol);
 }
 
 // A limit above the model maximum is clamped to v_max.
 TEST_F(ProxMpcControllerTest, SetSpeedLimitClampsToModelMax)
 {
-  auto c = makeConfigured();
+  auto c = makeRunning();
   c->setSpeedLimit(10.0, false);
+  runCycle(c);
   EXPECT_NEAR(c->maxLinearVel(), kModelVMax, kTol);
 }
 
 // A non-positive limit (NO_SPEED_LIMIT) restores the model's full bound.
 TEST_F(ProxMpcControllerTest, SetSpeedLimitZeroRestoresModelMax)
 {
-  auto c = makeConfigured();
+  auto c = makeRunning();
   c->setSpeedLimit(1.0, false);
+  runCycle(c);
   EXPECT_NEAR(c->maxLinearVel(), 1.0, kTol);
   c->setSpeedLimit(0.0, false);
+  runCycle(c);
   EXPECT_NEAR(c->maxLinearVel(), kModelVMax, kTol);
+}
+
+// setSpeedLimit() runs on the node executor thread while computeVelocityCommands
+// runs on the action server's own thread, so the request is only cached there
+// and applied at the top of the next control cycle: the model's inequality map
+// is never mutated under a running solve. Both the absolute and the percentage
+// forms take effect exactly one cycle later, and the model bound follows.
+TEST_F(ProxMpcControllerTest, SpeedLimitAppliesOnNextControlCycle)
+{
+  auto c = makeRunning();
+  ASSERT_NEAR(c->maxLinearVel(), kModelVMax, kTol);
+
+  c->setSpeedLimit(0.8, false);
+  EXPECT_NEAR(c->maxLinearVel(), kModelVMax, kTol);        // not applied in place
+  runCycle(c);
+  EXPECT_NEAR(c->maxLinearVel(), 0.8, kTol);
+  EXPECT_NEAR(c->model()->getIneq("u").at(0)[2], 0.8, kTol);   // model bound updated
+
+  c->setSpeedLimit(50.0, true);
+  EXPECT_NEAR(c->maxLinearVel(), 0.8, kTol);               // still the previous limit
+  runCycle(c);
+  EXPECT_NEAR(c->maxLinearVel(), 0.5 * kModelVMax, kTol);
+  EXPECT_NEAR(c->model()->getIneq("u").at(0)[2], 0.5 * kModelVMax, kTol);
 }
 
 // --- cancel() / reset() ----------------------------------------------------
@@ -1172,6 +1341,34 @@ TEST_F(ProxMpcControllerTest, SolverFailureBrakesFromMeasuredVelocity)
   EXPECT_NEAR(cmd.twist.linear.x, 0.40 - kModelDecel * 0.1, 1e-6);
 }
 
+// A non-finite measured velocity must never survive the brake ramp: +/-inf
+// compares as moving, so an unguarded ramp would subtract a finite step from
+// infinity and publish an infinite command on the safety path. NaN, +inf and
+// -inf all yield exactly zero, on both the linear and the angular channel.
+TEST_F(ProxMpcControllerTest, SolverFailureNeutralizesNonFiniteMeasuredVelocity)
+{
+  auto c = makeConfigured(
+  {
+    rclcpp::Parameter("FollowPath.max_int_iter_qp", 1),
+    rclcpp::Parameter("FollowPath.max_ext_iter_qp", 1),
+    rclcpp::Parameter("FollowPath.max_iter_sqp", 1),
+    rclcpp::Parameter("FollowPath.max_solver_failures", 10),
+  });
+  c->activate();
+  c->setPlan(makeStraightPlan(31, 0.2));
+
+  const double inf = std::numeric_limits<double>::infinity();
+  for (const double bad : {inf, -inf, std::numeric_limits<double>::quiet_NaN()}) {
+    geometry_msgs::msg::Twist measured;
+    measured.linear.x = bad;
+    measured.angular.z = bad;
+    const auto cmd = c->computeVelocityCommands(makePose(0.0, 0.0, 0.0), measured, nullptr);
+    ASSERT_NE(c->mpc()->qp_info.status, proxsuite::proxqp::QPSolverOutput::PROXQP_SOLVED);
+    EXPECT_DOUBLE_EQ(cmd.twist.linear.x, 0.0);
+    EXPECT_DOUBLE_EQ(cmd.twist.angular.z, 0.0);
+  }
+}
+
 // Structurally invalid horizon sizing (np or nc < 1, or dt <= 0) fails configure
 // with a ControllerException rather than wrapping into an astronomical size_t
 // allocation or dividing by zero.
@@ -1214,6 +1411,31 @@ TEST_F(ProxMpcControllerTest, ConfigureClampsOutOfRangeTuning)
     }));
   ASSERT_NE(c, nullptr);
   EXPECT_EQ(c->mpc()->getMaxObs(), 0u);   // max_obstacles clamped to 0
+}
+
+// The solver iteration caps reach the core as size_t, so a negative value wraps
+// to an astronomical bound (an effectively unbounded SQP loop), and ProxQP
+// rejects a zero cap outright. Both are structural, like the horizon sizing, so
+// configure() fails with a ControllerException rather than degrading silently to
+// a one-iteration QP that can never converge.
+TEST_F(ProxMpcControllerTest, ConfigureThrowsOnInvalidSolverIterationCaps)
+{
+  for (const auto & bad : {
+    rclcpp::Parameter("FollowPath.max_int_iter_qp", -1),
+    rclcpp::Parameter("FollowPath.max_int_iter_qp", 0),
+    rclcpp::Parameter("FollowPath.max_int_iter_qp", -100),
+    rclcpp::Parameter("FollowPath.max_ext_iter_qp", -1),
+    rclcpp::Parameter("FollowPath.max_ext_iter_qp", 0),
+    rclcpp::Parameter("FollowPath.max_ext_iter_qp", -100),
+    rclcpp::Parameter("FollowPath.max_iter_sqp", -1),
+    rclcpp::Parameter("FollowPath.max_iter_sqp", 0),
+    rclcpp::Parameter("FollowPath.max_iter_sqp", -100),
+  })
+  {
+    auto c = makeUnconfigured({bad});
+    EXPECT_THROW(
+      c->configure(node_, "FollowPath", tf_, costmap_ros_), nav2_core::ControllerException);
+  }
 }
 
 // Tracked obstacles with a non-finite field or a negative radius (untrusted input)

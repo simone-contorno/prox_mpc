@@ -11,9 +11,14 @@ controller_server:
 
       # Model loaded by name through pluginlib. Adding a model does not require
       # editing the core or this list; the controller configures it after loading.
+      # The model must declare a bound on its speed input (u[0]) and control-rate
+      # (du) bounds for both channels: they set the speed cap and the deceleration
+      # ramp, and a model missing either fails configure().
       model_plugin: "prox_mpc_core/Bicycle"
       model_params:        # forwarded to Model::configure(); absent keys keep the literals
         L: 1.6             # wheelbase [m]
+        v_max: 0.0         # [m/s] forward input bound; forwarded only when > 0, else the model literal
+        v_min: 0.0         # [m/s] reverse input bound; used only alongside a positive v_max (< 0, else -v_max)
 
       # Horizons and step (couple via Np / dt / T).
       np: 20
@@ -34,13 +39,16 @@ controller_server:
       r_weight: 0.1
       w_weight: 100.0
 
-      # Solver limits (defaults match the core).
+      # Solver limits (defaults match the core). The three iteration caps must be
+      # >= 1: 0 is rejected by ProxQP and a negative value wraps to an unbounded
+      # loop in the core, so either fails configure() rather than degrading to a
+      # QP that can never converge.
       max_int_iter_qp: 1500
       max_ext_iter_qp: 10000
       max_iter_sqp: 100
       max_solve_time: 0.0   # [s] wall-clock budget for the SQP loop; 0 = disabled (iteration caps only)
       qp_type: false        # false = sparse, true = dense
-      guess: true           # ProxQP initial-guess strategy (see prox_mpc_core/doc/nmpc.md)
+      guess: true           # true = ProxQP equality-constrained initial guess per QP; false = no initial guess
 
       # Consecutive non-converged solves tolerated before the controller raises a
       # recovery; each failure decelerates toward zero at the robot's limit.

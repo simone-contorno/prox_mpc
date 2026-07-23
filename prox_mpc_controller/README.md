@@ -57,17 +57,19 @@ driving a TurtleBot3 waffle under a full Nav2 stack in Gazebo Harmonic (see
   horizon (a constant-velocity ray when no samples are provided), binds it to a
   fixed constraint slot, and fills the remaining slots from the costmap (hybrid);
   off by default, reproducing the costmap-only behavior bit-for-bit.
-- **Safe failure handling:** a non-converged or non-finite solve decelerates the
-  last command at the robot's limit and escalates to a Nav2 recovery after
-  `max_solver_failures` consecutive failures; `cancel()` ramps to a stop and
-  `setSpeedLimit()` applies a runtime bound.
+- **Safe failure handling:** a non-converged or non-finite solve decelerates from
+  the measured velocity at the robot's limit and escalates to a Nav2 recovery
+  after `max_solver_failures` consecutive failures; `cancel()` ramps to a stop
+  and `setSpeedLimit()` applies a runtime bound from the next control cycle.
+  A model that declares no control (`u`) or control-rate (`du`) bound cannot be
+  braked or driven, so it fails `configure()` instead of coming up degraded.
 
 ## Prerequisites
 
 - ROS 2 Jazzy on Ubuntu 24.04.
 - [prox_mpc_core](../prox_mpc_core) and [prox_mpc_msgs](../prox_mpc_msgs)
   (workspace packages).
-- Nav2: `nav2_core`, `nav2_costmap_2d`.
+- Nav2: `nav2_core`, `nav2_costmap_2d`, `nav2_util`.
 - Eigen 3 and ProxQP / proxsuite (transitively, through the core).
 - `tf2`, `tf2_ros`, `visualization_msgs`, `rclcpp_lifecycle` (resolved by `rosdep`).
 
@@ -77,7 +79,7 @@ This package requires Nav2, so it is not built by the core-only overlay unless
 Nav2 is installed:
 
 ```bash
-sudo apt install ros-$ROS_DISTRO-nav2-core ros-$ROS_DISTRO-nav2-costmap-2d
+sudo apt install ros-$ROS_DISTRO-nav2-core ros-$ROS_DISTRO-nav2-costmap-2d ros-$ROS_DISTRO-nav2-util
 
 colcon build --symlink-install --packages-select \
   prox_mpc_msgs prox_mpc_core prox_mpc_controller
@@ -150,6 +152,13 @@ disabled (single formatter, and a short SPDX header per file with the full text 
   [Nav2 simulation guide](../prox_mpc_demo/doc/nav2-simulation.md)).
 - **`NoValidControl` recoveries:** the QP is not converging within the configured
   iteration caps for the horizon and weights; review `doc/control-law.md`.
+- **`controller_server` aborts at configure with a missing-bound error:** the
+  loaded model declares no bound for the named channel. `u[0]` sets the speed cap
+  and the `du` bounds set the deceleration ramp, so a model missing either cannot
+  move or cannot brake; declare them in the model plugin.
+- **`controller_server` aborts at configure on an iteration cap:** `max_int_iter_qp`,
+  `max_ext_iter_qp`, and `max_iter_sqp` must all be `>= 1`; 0 is rejected by ProxQP
+  and a negative value wraps to an unbounded loop in the core.
 
 ## License
 

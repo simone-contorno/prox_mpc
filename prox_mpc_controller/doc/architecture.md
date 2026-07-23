@@ -40,7 +40,7 @@ The plugin implements the `nav2_core::Controller` methods.
 | `cleanup()` | release the MPC, model, costmap, TF, and interface handles |
 | `setPlan(path)` | store the global plan and reset the projection index |
 | `computeVelocityCommands(pose, velocity, goal_checker)` | run one control cycle |
-| `setSpeedLimit(limit, percentage)` | apply a runtime speed limit |
+| `setSpeedLimit(limit, percentage)` | cache a runtime speed limit, applied at the top of the next control cycle |
 | `cancel()` | ramp to a stop and report when stationary |
 | `reset()` | clear runtime state between tasks, keeping owned handles |
 
@@ -137,7 +137,10 @@ A separate exact polygon-footprint check, evaluated on the pose one step ahead
 with `nav2_costmap_2d::FootprintCollisionChecker`, is the conservative last line
 of defense: if that pose's footprint reaches an inscribed-inflated cost, the
 command is vetoed and replaced by the deceleration ramp without consuming the
-solver-failure budget.
+solver-failure budget. The veto keeps its own counter and escalates to
+`nav2_core::NoValidControl` once it exceeds the same `max_solver_failures`
+budget, so a robot stuck behind a static obstacle reaches a recovery instead of
+braking forever.
 The veto is skipped when the costmap exposes fewer than three footprint points.
 
 ## Solver-failure handling
@@ -195,6 +198,11 @@ All parameters are declared under the plugin-instance namespace (for example
 `FollowPath.`) and mirror
 [../config/prox_mpc_controller.yaml](../config/prox_mpc_controller.yaml).
 Per the project type rules they are `double`, `int`, `string`, or `bool` only.
+Each is declared with `nav2_util::declare_parameter_if_not_declared` and then
+read back: the `controller_server` destroys the plugin instance on `cleanup()`
+while its node keeps the parameters declared, so a plain declaration would throw
+`rclcpp::exceptions::ParameterAlreadyDeclaredException` on the next `configure()`
+and fail the lifecycle transition.
 
 ### Model and horizons
 
@@ -229,9 +237,9 @@ Per the project type rules they are `double`, `int`, `string`, or `bool` only.
 
 | Parameter | Type | Default | Description |
 | --- | --- | --- | --- |
-| `max_int_iter_qp` | int | 1500 | ProxQP internal-iteration cap. |
-| `max_ext_iter_qp` | int | 10000 | ProxQP external-iteration cap. |
-| `max_iter_sqp` | int | 100 | SQP-iteration cap per cycle. |
+| `max_int_iter_qp` | int | 1500 | ProxQP internal-iteration cap. Must be `>= 1`; a lower value fails `configure()`. |
+| `max_ext_iter_qp` | int | 10000 | ProxQP external-iteration cap. Must be `>= 1`; a lower value fails `configure()`. |
+| `max_iter_sqp` | int | 100 | SQP-iteration cap per cycle. Must be `>= 1`; a lower value fails `configure()`. The caps reach the core as `size_t`, so a negative value would wrap to an effectively unbounded loop, and ProxQP rejects a zero cap outright, so both are fatal rather than clamped. |
 | `max_solve_time` | double | 0.0 | Wall-clock budget in seconds for the whole SQP loop; 0.0 disables it (the iteration caps are then the only bound). On timeout the solve reports non-convergence and the cycle brakes. Floored at 0.0. |
 | `qp_type` | bool | false | QP backend: false = sparse, true = dense. |
 | `guess` | bool | true | ProxQP initial-guess strategy: equality-constrained (`true`) or none (`false`). The QP is not seeded with the previous increment; see [nmpc.md](../../prox_mpc_core/doc/nmpc.md). |
@@ -293,7 +301,11 @@ controller parameters.
   and `v_min`; no acceleration key is declared or forwarded, so the acceleration
   and deceleration limits - including the ones that shape the deceleration ramp -
   come from the loaded model's declared control-rate (`du`) bounds. A platform
-  with different limits needs a model plugin that declares them.
+  with different limits needs a model plugin that declares them. The bounds are
+  mandatory: a model that declares no `u[0]` bound (the speed cap) or no `du`
+  bound for the linear or angular channel (the deceleration ramp) fails
+  `configure()` with a `nav2_core::ControllerException` naming the missing bound,
+  because a controller that cannot brake must not come up.
 - `NO_INFORMATION` (255) costmap cells never count as obstacles: the per-node
   costmap scan skips them along with cells below `costmap_cost_threshold`, so
   unknown space does not hard-block the optimizer. Where unknown space must be
