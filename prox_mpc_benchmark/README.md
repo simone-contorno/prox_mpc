@@ -196,7 +196,7 @@ narrative and the conclusion on ProxMPC are in
   stock obstacle costs after harder settings only regressed them. MPPI (the one
   unseeded stochastic controller) runs n=10 per obstacle cell; the rest n=5.
 - **Result summary (matched 0.5 m/s cap).** At a matched speed cap ProxMPC holds
-  the largest static-obstacle margin of the field (+0.353 m) and clears the single
+  the largest static-obstacle margin of the field (+0.352 m) and clears the single
   crossing and orbiting obstacles reactively. On the six simultaneous two-mover
   cells the discriminator is the **median closest approach**, not the collision
   count: those cells are deliberately marginal, 40-80 % of runs finish within
@@ -214,9 +214,9 @@ narrative and the conclusion on ProxMPC are in
 
 </details>
 
-> These are **simulation** results on a kinematic plant, measured on an x86-64
+> These are simulation results on a kinematic plant, measured on an x86-64
 > dev host (Intel Core i7-10750H, 6 cores / 12 threads, 31 GiB RAM,
-> Ubuntu 24.04.4) - **not** on physical robot hardware and not contact-dynamics.
+> Ubuntu 24.04.4) - not on physical robot hardware and not contact-dynamics.
 > A collision is a *would-be* overlap of the robot and obstacle discs, scored
 > identically for every controller. Gazebo validation is a single open-cell run;
 > full Gazebo and hardware validation remain open.
@@ -319,8 +319,8 @@ MPPI, and Regulated Pure Pursuit driving the *same* mode (b2) scenario side by s
 (RViz on the kinematic plant), so the avoidance behaviours are directly comparable.
 The ProxMPC cell is the `proxmpc_pred` preset - the predictive variant, which is
 what `record_scenarios.py` records by default. Each obstacle is drawn as a
-ground-truth cylinder next to its costmap footprint. Every GIF loops inline;
-**click it** for the full-resolution mp4. Cell order: ProxMPC (predictive)
+ground-truth cylinder next to its costmap footprint. Every GIF loops inline and
+links to the full-resolution mp4. Cell order: ProxMPC (predictive)
 (top-left), DWB (top-right), MPPI (bottom-left), RPP (bottom-right).
 
 ### No obstacle

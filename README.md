@@ -39,7 +39,7 @@ converges in a single QP solve.
 The predictive ProxMPC controller reaching the goal in the four benchmark scenarios
 (no obstacle, static box, dynamic line, dynamic circle) on the kinematic plant,
 shown in RViz. Each obstacle is drawn as a ground-truth body (the orange cylinder)
-next to its costmap footprint. The GIF loops inline; **click it** for the
+next to its costmap footprint. The GIF loops inline and links to the
 full-resolution mp4.
 
 Regenerate it - the per-scenario clips land in `prox_mpc_benchmark/results/`
@@ -63,9 +63,9 @@ and perceives obstacles through the same costmaps. The full method and every
 number are in [doc/controller-comparison-results.md](doc/controller-comparison-results.md);
 the summary is below.
 
-> These are **simulation** results on a kinematic plant, measured on an x86-64
+> These are simulation results on a kinematic plant, measured on an x86-64
 > dev host (Intel Core i7-10750H, 6 cores / 12 threads, 31 GiB RAM,
-> Ubuntu 24.04.4) - **not** on physical robot hardware and not contact-dynamics.
+> Ubuntu 24.04.4) - not on physical robot hardware and not contact-dynamics.
 > A collision is a *would-be* overlap of the robot and obstacle discs, scored
 > identically for every controller. Gazebo validation is a single open-cell run;
 > full Gazebo and hardware validation remain open.
@@ -81,7 +81,7 @@ the summary is below.
 
 Multi-obstacle margin is the median closest approach over six two-mover cells (30
 runs per controller, 60 for MPPI's 10 repeats); positive clears the obstacle.
-**The margin is reported instead of a collision count on purpose.** Those cells
+The margin is reported instead of a collision count on purpose. Those cells
 are deliberately marginal, so 40-80 % of runs finish within 0.15 m of the
 threshold and the collision *count* is dominated by scheduling jitter: the same
 cell, with the same binary, returned 1/5, 5/5, and 2/5 collisions on three
@@ -95,20 +95,20 @@ which is the source of truth.
 - **Tracking on par with the best.** Sub-millimetre cross-track on an empty
   straight traverse (0.0004 m RMS, 5/5 success).
 - **Lightest of the optimising controllers.** ~0.75 ms median per cycle on the
-  open cell, **~3.3x lighter than DWB and ~3.5x than MPPI** at equal tracking
-  accuracy, and **1.1-2.7x lighter across the obstacle cells** (the margin
+  open cell, ~3.3x lighter than DWB and ~3.5x than MPPI at equal tracking
+  accuracy, and 1.1-2.7x lighter across the obstacle cells (the margin
   narrows as the obstacle field tightens and the QP gets harder), at 5.0-9.1 %
   CPU against their 8.4-9.3 %. Deadline misses and infeasible cycles are zero on
   431 of 435 runs and peak at 0.6 % on the hardest two-mover cells. The
   geometric pursuit controllers are lighter still; ProxMPC's premium over them is
   ~1-5 % of one core for a full constrained optimisation each cycle.
 - **The largest static-obstacle margin.** It reaches the goal *and* holds
-  **+0.35 m clearance** around a static box, the widest of the field - ahead of
+  +0.35 m clearance around a static box, the widest of the field - ahead of
   MPPI (+0.21 m) and DWB (+0.09 m) among the optimising controllers, and of RPP
   and Graceful (~+0.21 m) among the geometric ones.
 - **Prediction gives the field's widest margin among two simultaneous movers.**
   With its own obstacle tracker enabled (an IMM filter combining constant-velocity
-  and constant-turn-rate models) ProxMPC holds a **+0.190 m** median closest
+  and constant-turn-rate models) ProxMPC holds a +0.190 m median closest
   approach across the six two-mover cells, ahead of every peer - RPP +0.125 m,
   DWB +0.080 m, MPPI +0.048 m, Vector Pursuit +0.024 m, Graceful -0.013 m - and
   only 5 of its 30 runs finish inside the 0.15 m marginal band, against 14-24 for
