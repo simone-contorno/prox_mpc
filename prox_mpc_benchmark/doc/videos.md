@@ -103,7 +103,7 @@ ffmpeg -i /tmp/probe.png -vf signalstats,metadata=print:key=lavfi.signalstats.YA
 ## Record the per-scenario clips
 
 Record all four scenarios with the defaults (predictive controller, waffle,
-40 s clips, 1920x1080 grab of `$DISPLAY`). On Wayland, start Xvfb first and pass
+20 s clips, 1920x1080 grab of `$DISPLAY`). On Wayland, start Xvfb first and pass
 `--display` (see [Display: X11 vs Wayland](#display-x11-vs-wayland)):
 
 ```bash
@@ -125,7 +125,7 @@ ros2 run prox_mpc_benchmark record_scenarios.py \
   --controller proxmpc_pred \
   --robot waffle \
   --display :99 \
-  --duration 40 \
+  --duration 20 \
   --resolution 1920x1080 \
   --offset 0,0 \
   --framerate 30 \
@@ -217,7 +217,7 @@ All artifacts land under `results/videos/` (gitignored):
 | `--scenarios` | `nav2_open,static_box,dynamic_line_forward,dynamic_circle` | scenario basenames to record |
 | `--controller` | `proxmpc_pred` | controller preset injected into `FollowPath` |
 | `--robot` | `waffle` | robot shown (URDF + model pairing) |
-| `--duration` | `40` | clip length in seconds (self-terminating via `-t`) |
+| `--duration` | `20` | clip length in seconds (self-terminating via `-t`) |
 | `--resolution` | `1920x1080` | grab size `WxH` |
 | `--offset` | `0,0` | grab top-left origin `x,y` -> x11grab input `:0.0+x,y` |
 | `--display` | `$DISPLAY` or `:0` | X display to capture and render on |

@@ -287,7 +287,7 @@ def main() -> int:
     ap.add_argument('--scenarios', default=DEFAULT_SCENARIOS)
     ap.add_argument('--controller', default='proxmpc_pred')
     ap.add_argument('--robot', default='waffle')
-    ap.add_argument('--duration', type=float, default=40.0, help='clip length [s]')
+    ap.add_argument('--duration', type=float, default=20.0, help='clip length [s]')
     ap.add_argument('--resolution', default='1920x1080', help='grab size WxH')
     ap.add_argument('--offset', default='0,0',
                     help="grab top-left origin 'x,y' -> x11grab input :0.0+x,y")
