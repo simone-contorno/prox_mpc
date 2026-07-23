@@ -10,6 +10,7 @@
 #include <geometry_msgs/msg/twist.hpp>
 
 #include <prox_mpc/model.hpp>
+#include <prox_mpc/utils.hpp>
 
 namespace prox_mpc_test_models
 {
