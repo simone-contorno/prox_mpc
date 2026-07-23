@@ -133,6 +133,7 @@ TEST(ObstacleTrackerNode, ConfiguresWithUncappedDetectionRange)
     rclcpp::Parameter("max_detection_range", 0.0),
   });
   EXPECT_EQ(node->configure().id(), State::PRIMARY_STATE_INACTIVE);
+  node->shutdown();   // run the teardown ladder so the TF listener thread joins
 }
 
 // Every log_level keyword (and an unrecognized value) is accepted at configure.
@@ -141,6 +142,7 @@ TEST(ObstacleTrackerNode, AcceptsAllLogLevels)
   for (const std::string level : {"debug", "info", "warn", "error", "fatal", "bogus"}) {
     auto node = makeNode({rclcpp::Parameter("log_level", level)});
     EXPECT_EQ(node->configure().id(), State::PRIMARY_STATE_INACTIVE);
+    node->shutdown();   // run the teardown ladder so the TF listener thread joins
   }
 }
 
