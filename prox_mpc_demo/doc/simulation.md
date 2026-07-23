@@ -49,8 +49,8 @@ tracking-demo defaults.
 | Parameter | Type | Default | Unit | Meaning |
 | --- | --- | --- | --- | --- |
 | `model` | string | `bicycle` | - | `bicycle` (4-state) or `unicycle` (3-state). |
-| `np` | int | 20 | nodes | Prediction horizon (must be ≥ 1). |
-| `nc` | int | 20 | nodes | Control horizon (must be ≥ 1). |
+| `np` | int | 20 | nodes | Prediction horizon (must be >= 1). |
+| `nc` | int | 20 | nodes | Control horizon (must be >= 1). |
 | `dt` | double | 0.1 | s | Step size, also the control period (must be > 0). |
 | `q_pos` | double | 10.0 | - | Position tracking weight. |
 | `q_theta` | double | 1.0 | - | Heading (and remaining state) tracking weight. |
@@ -61,8 +61,8 @@ tracking-demo defaults.
 | `goal_x`, `goal_y`, `goal_theta` | double | 5.0, 0.0, 0.0 | m, m, rad | Single goal pose (used when no waypoint set is given). |
 | `goal_tol` | double | 0.25 | m | Waypoint-arrival radius; also latches the final-goal stop. |
 | `obstacle_enable` | bool | false | - | Enable the single legacy fixed obstacle. |
-| `max_obstacles` | int | 1 | slots | Obstacle-slot capacity `K` per node when avoidance is on (must be ≥ 0). |
-| `d_safe` | double | 1.0 | m | Required clearance for the legacy obstacle (must be ≥ 0). |
+| `max_obstacles` | int | 1 | slots | Obstacle-slot capacity `K` per node when avoidance is on (must be >= 0). |
+| `d_safe` | double | 1.0 | m | Required clearance for the legacy obstacle (must be >= 0). |
 | `obs_x`, `obs_y` | double | 2.5, 0.6 | m | Legacy obstacle position. |
 | `report_period` | int | 50 | steps | Log solve-time stats every N steps (0 disables). |
 | `publish_diagnostics` | bool | true | - | Publish one `SolverDiagnostics` per cycle. |
@@ -101,9 +101,24 @@ parentheses.
 | `/prox_mpc/diagnostics` | `prox_mpc_msgs/msg/SolverDiagnostics` | Reliable, depth 10 | Published | Per-cycle solver telemetry, only when `publish_diagnostics` is true. |
 | `map -> base_link` | TF | - | Broadcast | Simulated planar pose, for RViz. |
 
-On a non-converged or non-finite solve the node publishes a zero command and holds
-the pose rather than folding a bad iterate into the state; it still publishes
-diagnostics for that cycle so the feasibility signal keeps flowing.
+On a non-converged or non-finite solve the node holds the pose rather than folding
+a bad iterate into the state, and ramps the command down instead of stopping dead:
+each failed cycle it publishes one deceleration step from the command it last
+published toward zero, keeping the sign and clamping at zero.
+This is the failure policy [prox_mpc_core](../../prox_mpc_core/doc/nmpc.md)
+recommends and the one the Nav2 plugin applies.
+The per-axis deceleration limits come from the model's own control-rate (`du`)
+bounds, so the ramp respects the same acceleration limits the MPC does; a model
+declaring no such bound falls back to 0.5 (m/s^2, rad/s^2).
+Because this node is its own plant there is no separately measured velocity, so
+the ramp starts from the last published command - which is exactly what the
+simulated robot is executing.
+The retained command is cleared once the final goal is latched, so a later ramp
+never brakes off a stale value.
+The node still publishes diagnostics for a failed cycle so the feasibility signal
+keeps flowing.
+Unlike the Nav2 plugin the demo does not count failures or escalate: it has no
+recovery behaviour to escalate to.
 Once the final waypoint is reached the node latches a stop (zero command, parked
 pose) so the reported goal error is the stopping accuracy.
 

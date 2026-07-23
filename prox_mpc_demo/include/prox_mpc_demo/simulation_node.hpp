@@ -39,6 +39,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <cstdint>
 #include <limits>
 #include <memory>
 #include <stdexcept>
@@ -103,7 +104,7 @@ public:
     publish_diagnostics_ = declare_parameter<bool>("publish_diagnostics", true);
 
     /* Time-varying obstacle list (parallel arrays). When non-empty it supersedes
-     * the single legacy obstacle and enables avoidance regardless of
+     * the single fixed obstacle and enables avoidance regardless of
      * obstacle_enable. Each obstacle is static | circle | line (see positionAt). */
     parseObstacleList();
     const bool avoidance_on = obstacle_enable_ || !obstacles_.empty();
@@ -117,6 +118,13 @@ public:
     }
     n_ = model_->getN();
     m_ = model_->getM();
+
+    /* Deceleration limits for the solver-failure ramp, taken from the model's own
+     * control-rate ("du") bounds - the same source the Nav2 plugin uses. Index 1 is
+     * the model's second control rate (the unicycle's angular acceleration, the
+     * bicycle's steering acceleration), which is what the plugin ramps too. */
+    a_dec_lin_ = decelBound(*model_, 0);
+    a_dec_ang_ = decelBound(*model_, 1);
 
     /* Weights sized to the chosen model. */
     VectorXd q_diag = VectorXd::Constant(n_, q_theta);
@@ -238,8 +246,9 @@ protected:
     }
 
     /* Gate on convergence and finiteness before applying the solve. MPC::solve
-     * takes no safety action, so on a non-converged or non-finite iterate publish
-     * a zero twist and hold the pose instead of folding a bad iterate into pose_. */
+     * takes no safety action, so on a non-converged or non-finite iterate ramp the
+     * command down toward zero and hold the pose instead of folding a bad iterate
+     * into pose_. */
     const VectorXd u0 = u.row(0);
     const bool solved =
       mpc_->qp_info.status == proxsuite::proxqp::QPSolverOutput::PROXQP_SOLVED &&
@@ -248,8 +257,11 @@ protected:
     publishDiagnostics(ms, period_ms, solved);
 
     /* Hold at the goal: command zero and keep the pose parked, so the final goal
-     * error reflects the stopping point rather than post-goal drift. */
+     * error reflects the stopping point rather than post-goal drift. Clearing the
+     * retained command keeps a later ramp from braking off a stale value. */
     if (arrived_) {
+      last_cmd_v_ = 0.0;
+      last_cmd_w_ = 0.0;
       pub_cmd_->publish(geometry_msgs::msg::Twist());
       broadcastPose();
       sim_time_ += dt_;
@@ -259,8 +271,17 @@ protected:
     if (!solved) {
       RCLCPP_WARN_THROTTLE(
         get_logger(), *get_clock(), 2000,
-        "solve did not converge or returned a non-finite iterate; holding pose.");
-      pub_cmd_->publish(geometry_msgs::msg::Twist());
+        "solve did not converge or returned a non-finite iterate; ramping down.");
+      /* Decelerate toward zero within the model's acceleration limits instead of
+       * stopping dead. This node is its own plant, so there is no separately
+       * measured velocity: the ramp starts from the last command it published,
+       * which is exactly what the simulated robot is executing. */
+      geometry_msgs::msg::Twist brake;
+      last_cmd_v_ = brakeToward(last_cmd_v_, a_dec_lin_, dt_);
+      last_cmd_w_ = brakeToward(last_cmd_w_, a_dec_ang_, dt_);
+      brake.linear.x = last_cmd_v_;
+      brake.angular.z = last_cmd_w_;
+      pub_cmd_->publish(brake);
       broadcastPose();
       sim_time_ += dt_;
       return;
@@ -269,7 +290,10 @@ protected:
     /* Publish the first control as a body twist. The mapping is model specific,
      * so the model derives it (and reads the current state where needed). */
     model_->setX(pose_);
-    pub_cmd_->publish(model_->toTwist(u0));
+    const geometry_msgs::msg::Twist cmd = model_->toTwist(u0);
+    last_cmd_v_ = cmd.linear.x;
+    last_cmd_w_ = cmd.angular.z;
+    pub_cmd_->publish(cmd);
 
     /* Publish the predicted trajectory for visualization. */
     pub_path_->publish(prox_mpc::optimPath(x, now()));
@@ -335,6 +359,36 @@ protected:
     return {o.cx, o.cy};  // static
   }
 
+  /* Deceleration limit used when the model declares no (or a zero) lower bound on
+   * a control rate. A zero limit would make the failure ramp never reach zero.
+   * The demo drives no hardware, so it falls back rather than refusing to start
+   * (the Nav2 plugin, which does drive hardware, throws instead). */
+  static constexpr double kFallbackDecel = 0.5;
+
+  /* Magnitude of the model's lower "du" bound for control component idx, i.e. its
+   * deceleration limit, or kFallbackDecel when that bound is absent or zero. */
+  static double decelBound(prox_mpc::Model & model, size_t idx)
+  {
+    for (const auto & entry : model.getIneq("du")) {
+      if (static_cast<size_t>(entry.second[0]) == idx) {
+        const double decel = std::abs(entry.second[1]);
+        if (decel > 0.0) {return decel;}
+      }
+    }
+    return kFallbackDecel;
+  }
+
+  /* One deceleration step from prev toward zero, preserving sign and clamped at
+   * zero. A non-finite previous command yields zero rather than propagating it. */
+  static double brakeToward(double prev, double decel, double dt)
+  {
+    if (!std::isfinite(prev)) {return 0.0;}
+    const double step = std::abs(decel) * dt;
+    if (prev > 0.0) {return std::max(0.0, prev - step);}
+    if (prev < 0.0) {return std::min(0.0, prev + step);}
+    return 0.0;
+  }
+
   std::string model_name_;
   size_t np_, nc_, n_, m_;
   double dt_, v_ref_, goal_x_, goal_y_, goal_theta_, d_safe_, obs_x_, obs_y_;
@@ -351,6 +405,13 @@ protected:
 
   std::vector<ObstacleSpec> obstacles_;
   double sim_time_ = 0.0;  // deterministic sim clock (step_index * dt)
+
+  /* Last twist published, and the per-axis deceleration limits the failure ramp
+   * walks it down with. */
+  double last_cmd_v_ = 0.0;
+  double last_cmd_w_ = 0.0;
+  double a_dec_lin_ = kFallbackDecel;
+  double a_dec_ang_ = kFallbackDecel;
 
   std::shared_ptr<prox_mpc::Model> model_;
   std::shared_ptr<prox_mpc::MPC> mpc_;
@@ -459,6 +520,28 @@ private:
     }
   }
 
+  /* Map proxsuite's solver outcome onto the message's own STATUS_* contract.
+   * Deliberately not a static_cast: proxsuite 0.6.5 inserted
+   * PROXQP_SOLVED_CLOSEST_PRIMAL_FEASIBLE into the middle of QPSolverOutput, so a
+   * cast reports a dual-infeasible solve as STATUS_NOT_RUN. An enumerator added
+   * upstream after this mapping was written falls through to STATUS_UNKNOWN
+   * rather than impersonating another state. */
+  static uint8_t solverStatusToMsg(proxsuite::proxqp::QPSolverOutput status)
+  {
+    using QPOut = proxsuite::proxqp::QPSolverOutput;
+    using Diag = prox_mpc_msgs::msg::SolverDiagnostics;
+    switch (status) {
+      case QPOut::PROXQP_SOLVED: return Diag::STATUS_SOLVED;
+      case QPOut::PROXQP_MAX_ITER_REACHED: return Diag::STATUS_MAX_ITER_REACHED;
+      case QPOut::PROXQP_PRIMAL_INFEASIBLE: return Diag::STATUS_PRIMAL_INFEASIBLE;
+      case QPOut::PROXQP_SOLVED_CLOSEST_PRIMAL_FEASIBLE:
+        return Diag::STATUS_SOLVED_CLOSEST_PRIMAL_FEASIBLE;
+      case QPOut::PROXQP_DUAL_INFEASIBLE: return Diag::STATUS_DUAL_INFEASIBLE;
+      case QPOut::PROXQP_NOT_RUN: return Diag::STATUS_NOT_RUN;
+    }
+    return Diag::STATUS_UNKNOWN;
+  }
+
   /* Fill and publish one SolverDiagnostics for this cycle (both gate branches). */
   void publishDiagnostics(double solve_ms, double period_ms, bool solved)
   {
@@ -468,7 +551,7 @@ private:
     d.header.frame_id = "base_link";
     d.solve_time_ms = solve_ms;
     d.qp_solve_time_ms = mpc_->qp_info.run_time / 1000.0;  // proxsuite reports microseconds
-    d.status = static_cast<uint8_t>(mpc_->qp_info.status);
+    d.status = solverStatusToMsg(mpc_->qp_info.status);
     d.converged = solved;
     d.sqp_iters = static_cast<uint32_t>(mpc_->sqp_iter);
     d.qp_iters_ext = static_cast<uint32_t>(mpc_->qp_iter_ext);

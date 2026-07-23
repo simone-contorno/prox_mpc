@@ -341,5 +341,4 @@ ros2 launch prox_mpc_demo nav2_simulation.launch.py \
 
 Note: threading the dense `turtlebot3_world` pillar cluster (~0.5 m gaps) reliably
 needs the in-the-loop NMPC obstacle term tuned (or a controller tuned specifically
-for tight maze following), which is the follow-up above; the open-room scenarios
-are the verified gate.
+for tight maze following); the open-room scenarios are the verified gate.
