@@ -24,6 +24,7 @@
 #include <numeric>
 #include <sstream>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include <rclcpp/rclcpp.hpp>
@@ -130,6 +131,13 @@ public:
 
   void writeSummary()
   {
+    if (nonfinite_solve_ > 0) {
+      RCLCPP_WARN(
+        get_logger(),
+        "%zu of %zu solve_time_ms samples were non-finite and are excluded from "
+        "solve_ms_p50/p95/max/mean",
+        nonfinite_solve_, diag_count_);
+    }
     if (summary_json_.empty()) {return;}
     const double ct_rms = ct_count_ >
       0 ? std::sqrt(ct_sumsq_ / static_cast<double>(ct_count_)) : 0.0;
@@ -227,7 +235,19 @@ private:
   void onDiag(prox_mpc_msgs::msg::SolverDiagnostics::ConstSharedPtr msg)
   {
     diag_count_++;
-    solve_ms_.push_back(msg->solve_time_ms);
+    // A non-finite solve time breaks the strict weak ordering the percentile's
+    // sort requires, so it is rejected here rather than inside percentile(),
+    // leaving the quantile definition untouched. Rejects are counted and
+    // reported so a truncated timing distribution is visible, not silent.
+    if (std::isfinite(msg->solve_time_ms)) {
+      solve_ms_.push_back(msg->solve_time_ms);
+    } else {
+      nonfinite_solve_++;
+      RCLCPP_WARN_THROTTLE(
+        get_logger(), *get_clock(), kNonFiniteWarnPeriodMs,
+        "dropped %zu non-finite solve_time_ms sample(s) from the timing distribution",
+        nonfinite_solve_);
+    }
     sqp_sum_ += static_cast<double>(msg->sqp_iters);
     qp_ext_sum_ += static_cast<double>(msg->qp_iters_ext);
     if (msg->deadline_missed) {deadline_miss_++;}
@@ -362,6 +382,8 @@ private:
   std::size_t diag_count_{0}, deadline_miss_{0}, infeasible_{0};
   double sqp_sum_{0.0}, qp_ext_sum_{0.0}, slack_max_{0.0};
   std::vector<double> solve_ms_;
+  std::size_t nonfinite_solve_{0};
+  static constexpr int kNonFiniteWarnPeriodMs = 5000;
   int recoveries_{0};  // not observable in standalone; bag-based path fills it for mode (a)
 
   std::promise<void> finished_;

@@ -20,8 +20,15 @@ void TimingControllerWrapper::configure(
   std::shared_ptr<nav2_costmap_2d::Costmap2DROS> costmap_ros)
 {
   auto node = parent.lock();
-  const std::string wrapped_type =
-    node->declare_parameter<std::string>(name + ".wrapped_plugin", "");
+  // Nav2 reconfigures a plugin on the same node after a cleanup
+  // (deactivate -> cleanup -> configure), and the parameter survives the
+  // teardown; re-declaring it would throw ParameterAlreadyDeclaredException and
+  // abort the second bringup.
+  const std::string param_name = name + ".wrapped_plugin";
+  if (!node->has_parameter(param_name)) {
+    node->declare_parameter(param_name, rclcpp::ParameterValue(std::string("")));
+  }
+  const std::string wrapped_type = node->get_parameter(param_name).as_string();
   if (wrapped_type.empty()) {
     throw nav2_core::ControllerException(
             "TimingControllerWrapper: '" + name + ".wrapped_plugin' must name a controller plugin");

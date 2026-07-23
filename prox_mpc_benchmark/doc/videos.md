@@ -244,7 +244,7 @@ All artifacts land under `results/videos/` (gitignored):
   `use_sim_time:=false`, which the recorder sets.
 - x11grab needs a real display.
   The `--offset` and `--resolution` must fit inside the actual screen geometry;
-  the default grabs the whole 2560x1440 screen from the top-left.
+  the defaults grab a 1920x1080 region anchored at the top-left.
 - `xdotool` is optional.
   When installed it best-effort moves and resizes the RViz window into the capture
   region; when absent the recorder simply grabs the full region.

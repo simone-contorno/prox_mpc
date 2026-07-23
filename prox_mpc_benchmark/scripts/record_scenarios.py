@@ -110,7 +110,8 @@ def write_marker_params(path: Path, rn, scn):
     Uses the same obstacle field the scan uses, so the drawn cylinder bodies line
     up with the laser returns and the costmap.
     """
-    motion, cx, cy, ex, ey, radius, speed, body = rn.obstacle_arrays(scn)
+    motion, cx, cy, ex, ey, radius, speed, clearance = rn.obstacle_arrays(scn)
+    body = rn.body_radii(clearance, rn.ROBOT_RADIUS, rn.SAFETY_MARGIN)
     params = {'tracking_frame': 'odom', 'odom_topic': 'odom', 'rate_hz': 20.0}
     if motion:
         params.update({

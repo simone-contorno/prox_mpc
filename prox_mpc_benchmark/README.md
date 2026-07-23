@@ -153,7 +153,7 @@ narrative and the conclusion on ProxMPC are in
 <summary>How the metrics are defined and why (precision, deadline-miss, obstacle placement, resources, fair tuning)</summary>
 
 - **Precision.** Mode b1 is deterministic, so the geometric metrics (path,
-  goal error, cross-track) have ≈0 std across repeats - the precision signal is
+  goal error, cross-track) have ~0 std across repeats - the precision signal is
   exact reproducibility; only wall-clock timing jitters. Mode a shows small real
   variance (Gazebo non-determinism), which **is** the precision signal there.
 - **`deadline_missed`.** A pure compute-overrun signal: `solve_time_ms > 1000*dt`
@@ -162,6 +162,10 @@ narrative and the conclusion on ProxMPC are in
   nominal period equals the budget by construction, so any period threshold would
   need an arbitrary slack. The actionable real-time signal is the
   `solve_p50/p95/max` distribution.
+- **Non-finite timing samples.** A non-finite `solve_time_ms` is dropped at
+  ingestion and counted rather than fed to the quantile code (a NaN breaks the
+  sort's ordering). The percentile definition is unchanged and `num_diag_samples`
+  still counts every diagnostics message received.
 - **Scenario obstacle placement.** Obstacles are offset off the dead-centre line:
   a perfectly head-on symmetric point obstacle gives a soft-constraint avoider no
   lateral preference and stalls it (not a meaningful avoidance test). The offset

@@ -14,6 +14,7 @@ collects from the live metrics node, so aggregate.py treats both paths uniformly
 
 import argparse
 import json
+import math
 from pathlib import Path
 import statistics as st
 
@@ -66,7 +67,7 @@ def main():
     args = ap.parse_args()
 
     solve, sqp, qp = [], [], []
-    miss = infeas = diag_n = 0
+    miss = infeas = diag_n = solve_dropped = 0
     slack_max = 0.0
     ct, gd = [], []
     SOLVED = 0
@@ -74,7 +75,13 @@ def main():
         tn = type(msg).__name__
         if tn == 'SolverDiagnostics' and (not args.diag_topic or topic == args.diag_topic):
             diag_n += 1
-            solve.append(msg.solve_time_ms)
+            # A non-finite solve time sorts into an arbitrary position and would
+            # corrupt the percentiles, so it is rejected at ingestion (matching
+            # metrics_node) rather than inside percentile().
+            if math.isfinite(msg.solve_time_ms):
+                solve.append(msg.solve_time_ms)
+            else:
+                solve_dropped += 1
             sqp.append(msg.sqp_iters)
             qp.append(msg.qp_iters_ext)
             miss += int(msg.deadline_missed)
@@ -108,8 +115,9 @@ def main():
         'status': 'ok',
     }
     Path(args.out).write_text(json.dumps(rec, indent=2))
+    dropped = f', non-finite solve_time_ms dropped={solve_dropped}' if solve_dropped else ''
     print(f'[compute_metrics] {args.bag} -> {args.out} '
-          f'(diag={diag_n}, success={reached})')
+          f'(diag={diag_n}, success={reached}{dropped})')
     return 0
 
 

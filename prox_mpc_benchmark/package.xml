@@ -37,6 +37,9 @@
   <!-- Python orchestration / metric tooling (installed, not built). -->
   <exec_depend>rclpy</exec_depend>
   <exec_depend>ament_index_python</exec_depend>
+  <!-- ParameterDescriptor / Duration used by the obstacle publisher and markers. -->
+  <exec_depend>rcl_interfaces</exec_depend>
+  <exec_depend>builtin_interfaces</exec_depend>
   <exec_depend>launch</exec_depend>
   <exec_depend>launch_ros</exec_depend>
   <exec_depend>nav2_msgs</exec_depend>

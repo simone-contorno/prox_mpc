@@ -87,15 +87,23 @@ class ResourceSampler(Node):
         self._rss_sum_kb = 0
         self._rss_n = 0
         self._compute_ms = []
+        self._compute_dropped = 0
         self.create_subscription(Twist, cmd_topic, self._on_cmd, 10)
         if compute_topic:
             self.create_subscription(Float64, compute_topic, self._on_compute, 50)
         self.create_timer(1.0 / hz, self._sample)
 
     def _on_compute(self, msg):
-        # Per-cycle controller compute time [ms] from the timing decorator.
-        if self._first_cmd is not None:
+        # Per-cycle controller compute time [ms] from the timing decorator. A
+        # non-finite sample sorts into an arbitrary position and would corrupt
+        # the reported percentiles, so it is rejected here rather than inside
+        # percentile().
+        if self._first_cmd is None:
+            return
+        if math.isfinite(msg.data):
             self._compute_ms.append(msg.data)
+        else:
+            self._compute_dropped += 1
 
     def _on_cmd(self, _msg):
         now = time.monotonic()
@@ -125,6 +133,10 @@ class ResourceSampler(Node):
 
     def write(self):
         """Write the accumulated resource summary as JSON."""
+        if self._compute_dropped:
+            self.get_logger().warn(
+                f'{self._compute_dropped} non-finite compute-time sample(s) dropped; '
+                'excluded from compute_ms_p50/p95/max')
         cpu_mean = ((self._cpu_jiffies / CLK_TCK) / self._cpu_wall * 100.0
                     if self._cpu_wall > 0.0 else None)
         freq = None

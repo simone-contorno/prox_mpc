@@ -28,8 +28,8 @@ Usage:
 # flake8: noqa: E501
 
 import argparse
-import random
 from pathlib import Path
+import random
 
 CLEARANCE = 0.45  # same physical obstacle size as every other b2 cell (fair)
 
