@@ -64,10 +64,10 @@ Publishers are opt-in: on by default in the standalone simulation, off by defaul
 
 | Field | Type | Unit | Meaning |
 | --- | --- | --- | --- |
-| `header` | `std_msgs/Header` | - | Control-cycle stamp. |
+| `header` | `std_msgs/Header` | - | Control-cycle stamp; `frame_id` is the robot base frame the cycle was solved in. |
 | `solve_time_ms` | `float64` | ms | Wall solve time measured around `MPC::solve()`. |
 | `qp_solve_time_ms` | `float64` | ms | QP-reported solve/run time from `qp_info`. |
-| `status` | `uint8` | - | PROXQP `QPSolverOutput` of the last QP (see the `STATUS_*` constants below). |
+| `status` | `uint8` | - | Outcome of the last QP, as one of this message's own `STATUS_*` constants (see below). |
 | `converged` | `bool` | - | `true` when the cycle converged (`status == STATUS_SOLVED` and the applied iterate is finite); the caller's fail-safe runs otherwise. |
 | `sqp_iters` | `uint32` | - | SQP iterations. |
 | `qp_iters_ext` | `uint32` | - | Total external QP iterations summed over the SQP loop. |
@@ -79,7 +79,9 @@ Publishers are opt-in: on by default in the standalone simulation, off by defaul
 | `deadline_missed` | `bool` | - | `true` when `solve_time_ms` exceeds the `1000*dt` budget. `control_period_ms` is deliberately excluded: the nominal period equals the budget by construction, so any period threshold would need an arbitrary slack. |
 | `num_active_obstacles` | `uint16` | - | Number of filled (non-sentinel) obstacle slots considered this cycle. |
 
-The `status` field takes one of the following constants, mirroring PROXQP's `QPSolverOutput`.
+The `status` field takes one of the following constants.
+They are this message's own contract, not a copy of PROXQP's `QPSolverOutput` ordering: the publisher maps the solver enum onto them explicitly, because proxsuite 0.6.5 inserted `PROXQP_SOLVED_CLOSEST_PRIMAL_FEASIBLE` in the middle of its enum and a mirrored value would have silently shifted meaning.
+New states are appended, so a recorded value never changes meaning.
 
 | Constant | Value | Meaning |
 | --- | --- | --- |
@@ -88,6 +90,8 @@ The `status` field takes one of the following constants, mirroring PROXQP's `QPS
 | `STATUS_PRIMAL_INFEASIBLE` | 2 | Primal infeasible. |
 | `STATUS_DUAL_INFEASIBLE` | 3 | Dual infeasible. |
 | `STATUS_NOT_RUN` | 4 | Solver was not run this cycle. |
+| `STATUS_SOLVED_CLOSEST_PRIMAL_FEASIBLE` | 5 | The closest (L2 sense) primal-feasible problem was solved. |
+| `STATUS_UNKNOWN` | 255 | A solver state this message does not model (an upstream enumerator added after the mapping was written). |
 
 ## Interface Contract
 

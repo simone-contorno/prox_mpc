@@ -4,7 +4,7 @@
 # and discards today. Publishers are opt-in: on by default in the standalone sim,
 # off by default and only-when-subscribed in the production controller plugin.
 
-# Control-cycle stamp.
+# Control-cycle stamp; frame_id is the robot base frame the cycle was solved in.
 std_msgs/Header header
 
 # Wall solve time measured around MPC::solve() [ms].

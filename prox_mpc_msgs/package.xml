@@ -3,9 +3,11 @@
 <package format="3">
   <name>prox_mpc_msgs</name>
   <version>1.0.0</version>
-  <description>Message contract between the ProxMPC obstacle tracker and the Nav2
-  controller plugin: Obstacle and ObstacleArray carry tracked-obstacle id,
-  position, velocity, radius, and covariances. Interface-only package; no node.</description>
+  <description>Message contract for the ProxMPC stack: Obstacle and ObstacleArray
+  carry tracked-obstacle id, position, velocity, radius, covariances, and sampled
+  predicted positions from the obstacle tracker to the Nav2 controller plugin;
+  SolverDiagnostics carries per-control-cycle NMPC/QP solver telemetry.
+  Interface-only package; no node.</description>
   <maintainer email="simone.contorno@outlook.it">Simone Contorno</maintainer>
   <license>Apache-2.0</license>
   <url type="repository">https://github.com/simone-contorno/prox_mpc</url>
