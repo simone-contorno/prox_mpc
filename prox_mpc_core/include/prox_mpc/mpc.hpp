@@ -22,7 +22,7 @@ class MPC : public ProbDim, private MPCParams
 {
 public:
   /* Constructor. */
-  MPC() {}
+  MPC() {qp_info.status = proxsuite::proxqp::QPSolverOutput::PROXQP_NOT_RUN;}
 
   /* Initialization */
 
@@ -96,9 +96,13 @@ public:
   static constexpr double kObsFarSentinel = 1e6;
 
   /* Variables */
-  proxsuite::proxqp::Info<double> qp_info;  // QP information.
-  size_t qp_iter_ext;                       // Total QP external iterations (summed over SQP).
-  size_t sqp_iter;                          // SQP total iterations.
+  // Info is a plain aggregate with no default member initializers; value-initialize
+  // it so a read before the first solve() is not indeterminate. The zero-valued
+  // QPSolverOutput enumerator is PROXQP_SOLVED, so the constructor overrides the
+  // status with PROXQP_NOT_RUN.
+  proxsuite::proxqp::Info<double> qp_info{};  // QP information.
+  size_t qp_iter_ext = 0;                     // Total QP external iterations (summed over SQP).
+  size_t sqp_iter = 0;                        // SQP total iterations.
 
 protected:
   /* Robot model. */

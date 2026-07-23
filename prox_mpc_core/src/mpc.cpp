@@ -5,6 +5,7 @@
 #include <prox_mpc/mpc.hpp>
 
 #include <chrono>
+#include <memory>
 #include <stdexcept>
 
 namespace prox_mpc
@@ -334,7 +335,15 @@ void MPC::setQPtype(bool qp_type) {this->qp_type = qp_type;}
  * Must be set before init()/configProxQP().
  * @param cbf_gamma rate in (0, 1]; 1.0 reduces to the pointwise constraint.
  */
-void MPC::setCbfGamma(double cbf_gamma) {this->cbf_gamma = cbf_gamma;}
+void MPC::setCbfGamma(double cbf_gamma)
+{
+  // Validated here as well as in ProxQP so a bad value fails at configuration
+  // time rather than on the first init().
+  if (!(cbf_gamma > 0.0 && cbf_gamma <= 1.0)) {
+    throw std::invalid_argument("MPC::setCbfGamma: cbf_gamma must be in (0, 1]");
+  }
+  this->cbf_gamma = cbf_gamma;
+}
 
 /*!
  * Set the obstacle-slot capacity K per predicted node (0 disables avoidance).

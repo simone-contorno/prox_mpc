@@ -212,32 +212,3 @@ between ProxQP's own cheap starts: the equality-constrained guess (`true`, the
 default) or no initial guess (`false`).
 The warm start that matters is at trajectory level in `MPC::solve`, which slides
 the previous solution forward one step before re-linearizing.
-
-### Why the QP is not warm started across cycles
-
-A cross-cycle warm start - building the ProxQP workspace once and updating it in
-place so the factorization and the previous iterate carry over - was implemented
-and measured. It does not pay on this formulation and is not part of the shipped
-solver; the implementation lives on the `feat/qp-warm-start` branch.
-
-The QP external iteration count is flat at 9.5-9.9 whether the previous iterate is
-carried or not, across problem sizes from 123 to 723 decision variables, and the
-warm path runs at 0.91-1.00x the cold wall-clock time. Over the full benchmark it
-raised mean external iterations from 7.4 to 8.4 and the worst single cycle from
-321 ms to 565 ms.
-
-The reason is structural. This QP solves for **increments**, so its solution tends
-to zero as the SQP converges and a cold start already begins in the neighbourhood
-of the answer. Warm starting pays when consecutive solutions are similar *and* far
-from the solver's default starting point; the second condition does not hold here.
-A formulation solving for absolute states rather than increments would not share
-this property.
-
-Two ProxQP details are worth recording for anyone revisiting it. The sparse
-backend applies `update()` only when the matrices keep the sparsity structure the
-workspace was built with (`sparse/wrapper.hpp`), and a pattern taken from
-`sparseView()` does not: the obstacle half-plane normals and the model Jacobians
-pass through zero as the trajectory evolves, silently dropping the keep-out rows.
-And `WARM_START_WITH_PREVIOUS_RESULT` keeps the proximal step sizes between solves
-where `WARM_START` resets them (`sparse/solver.hpp`), which interacts badly with
-the far sentinel padding unused obstacle slots.

@@ -12,6 +12,7 @@
 //   - multiple obstacles: K=2 keeps clearance from both, and a sentinel slot
 //     reduces the result to the single-obstacle case.
 
+#include <algorithm>
 #include <cmath>
 #include <limits>
 #include <memory>
@@ -236,6 +237,24 @@ TEST(ObstacleK, SetObsRejectsWrongShape)
   EXPECT_THROW(solver->setObs(MatrixXd::Zero(10, 3)), std::invalid_argument);       // too few rows
   EXPECT_THROW(solver->setObs(MatrixXd::Zero(kNp * 2, 2)), std::invalid_argument);  // wrong cols
   EXPECT_NO_THROW(solver->setObs(makeObs(kNp, 2)));                                  // correct shape
+}
+
+// cbf_gamma outside (0, 1] is rejected at both layers. Outside that range the
+// bound (1 - gamma) * h_prev - h - w turns positive for the far sentinel, so
+// unused slots would become hard-binding at sentinel magnitude.
+TEST(ObstacleK, CbfGammaRejectsOutOfRange)
+{
+  prox_mpc::MPC mpc;
+  EXPECT_THROW(mpc.setCbfGamma(0.0), std::invalid_argument);
+  EXPECT_THROW(mpc.setCbfGamma(-0.1), std::invalid_argument);
+  EXPECT_THROW(mpc.setCbfGamma(1.5), std::invalid_argument);
+  EXPECT_NO_THROW(mpc.setCbfGamma(1e-3));
+  EXPECT_NO_THROW(mpc.setCbfGamma(1.0));
+
+  prox_mpc::ProxQP solver;
+  EXPECT_THROW(solver.setCbfGamma(0.0), std::invalid_argument);
+  EXPECT_THROW(solver.setCbfGamma(1.5), std::invalid_argument);
+  EXPECT_NO_THROW(solver.setCbfGamma(0.5));
 }
 
 // K=0 reproduces the obstacle-off result exactly, and K=1 with every slot at the

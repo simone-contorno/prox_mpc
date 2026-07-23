@@ -5,8 +5,10 @@
 #include <prox_mpc/proxqp.hpp>
 
 
+#include <algorithm>
 #include <cmath>
 #include <limits>
+#include <memory>
 #include <stdexcept>
 #include <vector>
 
@@ -154,10 +156,9 @@ void ProxQP::init(std::shared_ptr<Model> model)
  * external guess (or WARM_START_WITH_PREVIOUS_RESULT) after a fresh init mixes a
  * stale guess with a reset state, which proxsuite 0.6.5 answers by diverging.
  *
- * Warm starting the QP across cycles is planned: it is factorization reuse that
- * pays, not fewer iterations, and it needs init-once plus update() against a
- * declared sparsity pattern. See "Planned work" in the repository README before
- * reintroducing a guess here.
+ * A cross-cycle warm start was measured and does not pay here: the QP solves for
+ * increments, whose solution tends to zero as the SQP converges, so the external
+ * iteration count is flat whether or not the previous iterate is carried.
  */
 proxsuite::proxqp::InitialGuessStatus ProxQP::initialGuessPolicy() const
 {
@@ -244,8 +245,9 @@ void ProxQP::setH()
   // Final state
   H.block(u_start - n, u_start - n, n, n) = 2 * S;
 
-  // Control inputs
-  for (size_t i = u_start; i < w_start - m; i += m) {
+  // Control inputs. All Nc blocks carry R; unlike the state path there is no
+  // separate terminal-control weight to exclude the last one for.
+  for (size_t i = u_start; i < w_start; i += m) {
     H.block(i, i, m, m) = 2 * R;
   }
 
@@ -280,9 +282,9 @@ void ProxQP::setc(
   // Final state
   c.segment(u_start - n, n) = 2 * S * (x.row(count) - goal_x.row(count)).transpose();
 
-  // Control inputs
+  // Control inputs. Matches setH: all Nc blocks, so goal_u's last row is read.
   count = 0;
-  for (size_t i = u_start; i < w_start - m; i += m) {
+  for (size_t i = u_start; i < w_start; i += m) {
     c.segment(i, m) = 2 * R * (u.row(count).transpose() - goal_u.row(count).transpose());
     count++;
   }
@@ -368,9 +370,12 @@ void ProxQP::setC(const MatrixXd & x)
   size_t idx;
   size_t col;
 
-  /* First control input's constraint */
+  /* First control input's constraint. Row j carries the bound declared by entry j
+   * of the "du" map, so it must select that entry's control component, which is
+   * not the map key when a model declares its rate bounds out of index order. */
   for (size_t j = 0; j < model->getIneq("du").size(); j++) {
-    C(j, u_start + j) = 1;
+    idx = u_start + static_cast<size_t>(model->getIneq("du").at(j)[0]);
+    C(j, idx) = 1;
   }
 
   /* States' constraints */
@@ -638,7 +643,16 @@ void ProxQP::setGuess(bool guess) {this->guess = guess;}
  * Set the discrete-time CBF rate for the obstacle coupling.
  * @param cbf_gamma rate in (0, 1]; 1.0 reduces to the pointwise constraint.
  */
-void ProxQP::setCbfGamma(double cbf_gamma) {this->cbf_gamma = cbf_gamma;}
+void ProxQP::setCbfGamma(double cbf_gamma)
+{
+  // Outside (0, 1] the bound (1 - gamma) * h_prev - h - w turns positive for the
+  // far sentinel padding unused slots, making empty slots hard-binding at ~1e6
+  // and destroying the solve.
+  if (!(cbf_gamma > 0.0 && cbf_gamma <= 1.0)) {
+    throw std::invalid_argument("ProxQP::setCbfGamma: cbf_gamma must be in (0, 1]");
+  }
+  this->cbf_gamma = cbf_gamma;
+}
 
 /*!
  * Set the obstacle-slot capacity K per predicted node (0 disables avoidance).

@@ -9,6 +9,7 @@
 // obstacle-off solver path.
 
 #include <memory>
+#include <tuple>
 
 #include <gtest/gtest.h>
 
@@ -27,9 +28,9 @@ namespace
 // reference build; kTol leaves margin for floating-point/platform variation
 // while staying far tighter than any real logic change would move the solution.
 // The reference constants below were captured against the locally provisioned
-// ProxSuite; the canonical reproducible dependency is the apt key
-// ros-jazzy-proxsuite (see ../../THIRD_PARTY_LICENSES.md). CI provisions it via
-// rosdep, so a divergence surfaces here rather than as a false green.
+// ProxSuite; the canonical reproducible dependency is the apt package
+// ros-jazzy-proxsuite, which CI provisions via rosdep, so a divergence surfaces
+// here rather than as a false green.
 constexpr double kTol = 1e-6;
 
 // Build the demo's obstacle-off configuration and run one solve() from pose 0.

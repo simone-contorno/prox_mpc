@@ -8,6 +8,7 @@
 
 #include <cmath>
 #include <map>
+#include <stdexcept>
 #include <string>
 
 #include <gtest/gtest.h>
@@ -222,6 +223,18 @@ TEST(ModelInterface, ConfigureKeepsLiteralsAndOverrides)
   getBound(model, "u", 0, low, upp);
   EXPECT_NEAR(low, -0.5, kTol);
   EXPECT_NEAR(upp, 0.5, kTol);
+}
+
+// The wheelbase divides the bicycle's yaw and steering Jacobians, so a
+// non-positive override is rejected rather than producing a non-finite QP.
+TEST(ModelInterface, BicycleRejectsNonPositiveWheelbase)
+{
+  Bicycle model;
+
+  EXPECT_THROW(model.configure({{"L", 0.0}}), std::invalid_argument);
+  EXPECT_THROW(model.configure({{"L", -1.5}}), std::invalid_argument);
+  EXPECT_NO_THROW(model.configure({{"L", 1.6}}));
+  EXPECT_NEAR(model.getParams()(0), 1.6, kTol);
 }
 
 // Each model maps its control vector to the expected body Twist.

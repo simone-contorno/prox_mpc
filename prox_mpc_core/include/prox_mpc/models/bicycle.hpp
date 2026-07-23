@@ -5,6 +5,7 @@
 #define PROX_MPC__MODELS__BICYCLE_HPP_
 
 #include <map>
+#include <stdexcept>
 #include <string>
 
 #include <geometry_msgs/msg/twist.hpp>
@@ -54,6 +55,11 @@ public:
   void configure(const std::map<std::string, double> & params) override
   {
     if (params.count("L") > 0) {
+      // The wheelbase divides the yaw and steering Jacobians; a non-positive
+      // value makes A, B and c non-finite and poisons the whole QP.
+      if (!(params.at("L") > 0.0)) {
+        throw std::invalid_argument("Bicycle::configure: L must be > 0");
+      }
       VectorXd p(1);
       p << params.at("L");
       setParams(p);

@@ -24,7 +24,7 @@ class ProxQP : public MPCParams
 {
 public:
   /* Constructor. */
-  ProxQP() {}
+  ProxQP() {qp_info.status = proxsuite::proxqp::QPSolverOutput::PROXQP_NOT_RUN;}
 
   /* Initialization */
 
@@ -107,35 +107,39 @@ private:
   VectorXd low;  // Inequality constraints lower bounds vector.
 
   /* Constraints */
-  size_t n_eq;                   // Number of equalities.
-  size_t n_ineq;                 // Number of inequalities.
-  std::vector<size_t> eq_idx;    // Equalities indices.
-  std::vector<size_t> ineq_idx;  // Inequalities indices.
-  size_t eq_tot;                 // Total number of equalities.
-  size_t ineq_tot;               // Total number of inequalities.
+  size_t n_eq = 0;                   // Number of equalities.
+  size_t n_ineq = 0;                 // Number of inequalities.
+  std::vector<size_t> eq_idx;        // Equalities indices.
+  std::vector<size_t> ineq_idx;      // Inequalities indices.
+  size_t eq_tot = 0;                 // Total number of equalities.
+  size_t ineq_tot = 0;               // Total number of inequalities.
 
   /* Problem dimensions */
-  size_t n;   // State dimension.
-  size_t m;   // Control dimension.
-  size_t Np;  // Prediction horizon shooting nodes.
-  size_t Nc;  // Control horizon shooting nodes.
-  double dt;  // Step size.
+  size_t n = 0;     // State dimension.
+  size_t m = 0;     // Control dimension.
+  size_t Np = 0;    // Prediction horizon shooting nodes.
+  size_t Nc = 0;    // Control horizon shooting nodes.
+  double dt = 0.0;  // Step size.
 
   /* Decision variables */
-  size_t n_dvars;  // Total number of decision variables.
-  size_t x_start;  // State starting index.
-  size_t u_start;  // Control starting index.
-  size_t w_start;  // Slack variable starting index.
+  size_t n_dvars = 0;  // Total number of decision variables.
+  size_t x_start = 0;  // State starting index.
+  size_t u_start = 0;  // Control starting index.
+  size_t w_start = 0;  // Slack variable starting index.
 
-  /* Settings */
-  bool qp_type;         // Sparse (false) / dense (true) problem.
-  bool guess;           // Use (true) / don't use (false) warm start for initial guesses.
-  size_t max_out_iter;  // Maximum number of outer iterations.
-  size_t max_inn_iter;  // Maximum number of inner iterations (proximal operator).
+  /* Settings (mirror the MPC defaults; MPC overwrites them all before init()). */
+  bool qp_type = false;         // Sparse (false) / dense (true) problem.
+  bool guess = true;            // Use (true) / don't use (false) warm start for initial guesses.
+  size_t max_out_iter = 10000;  // Maximum number of outer iterations.
+  size_t max_inn_iter = 1500;   // Maximum number of inner iterations (proximal operator).
 
   /* Results */
   proxsuite::proxqp::sparse::Vec<double> result_x;       // Optimal decision variables.
-  proxsuite::proxqp::Info<double> qp_info;               // QP information.
+  // Info is a plain aggregate with no default member initializers; value-initialize
+  // it so a read before the first solve() is not indeterminate. The zero-valued
+  // QPSolverOutput enumerator is PROXQP_SOLVED, so the constructor overrides the
+  // status with PROXQP_NOT_RUN.
+  proxsuite::proxqp::Info<double> qp_info{};
 
   /* Obstacle avoidance: linearized signed-distance half-plane, K slots per node. */
   size_t max_obs = 0;             // Capacity K of obstacle slots per predicted node (0 = disabled).

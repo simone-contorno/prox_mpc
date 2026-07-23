@@ -7,12 +7,14 @@
 // pure-virtual hooks mean a model that omits an override does not compile; an
 // opt-in negative compile check demonstrating this is included at the bottom.
 
+#include <cmath>
 #include <memory>
 
 #include <gtest/gtest.h>
 
 #include <prox_mpc/mpc.hpp>
 #include <prox_mpc/model.hpp>
+#include <prox_mpc/proxqp.hpp>
 
 using prox_mpc::MPC;
 using prox_mpc::Model;
@@ -52,9 +54,49 @@ public:
   }
 };
 
+// Same single integrator, but the only control-rate bound is declared for
+// control index 1, so the first "du" entry does not sit at map key 1's index.
+class DuOnSecondControl : public DummyLinear
+{
+public:
+  DuOnSecondControl()
+  {
+    setName("du_on_second_control");
+    setIneq("du", 1, -0.5, 0.5);
+  }
+};
+
 bool isFinite(const MatrixXd & m)
 {
   return m.allFinite();
+}
+
+// Build a solved MPC for the given model with a simple position goal.
+std::shared_ptr<MPC> solveTowardGoal(const std::shared_ptr<Model> & model, size_t np)
+{
+  const size_t n = model->getN();
+  const size_t m = model->getM();
+
+  auto mpc = std::make_shared<MPC>();
+  mpc->setNp(np);
+  mpc->setNc(np);
+  mpc->setdt(0.1);
+  mpc->setQ(10.0 * MatrixXd::Identity(n, n));
+  mpc->setS(20.0 * MatrixXd::Identity(n, n));
+  mpc->setR(0.1 * MatrixXd::Identity(m, m));
+  mpc->setW(MatrixXd::Constant(1, 1, 100.0));
+  mpc->init(model);
+
+  MatrixXd goal_x = MatrixXd::Zero(np + 1, n);
+  for (size_t k = 0; k <= np; k++) {
+    goal_x(k, 0) = 3.0;
+    goal_x(k, 1) = 4.0;
+  }
+  mpc->setGoalX(goal_x);
+  mpc->setGoalU(MatrixXd::Zero(np, m));
+  mpc->setPose(VectorXd::Zero(n));
+  mpc->solve();
+  return mpc;
 }
 }  // namespace
 
@@ -164,6 +206,60 @@ TEST(CustomModel, MoveBlockingNpGreaterThanNc)
   const double d_start = std::hypot(x(0, 0) - goal_px, x(0, 1) - goal_py);
   const double d_end = std::hypot(x(np, 0) - goal_px, x(np, 1) - goal_py);
   EXPECT_LT(d_end, d_start);
+}
+
+// The first-control-rate row applies the bound to the control component the
+// "du" entry declares, not to the entry's position in the map. A model that
+// rate-limits only its second control must constrain u[1], not u[0].
+TEST(CustomModel, FirstControlRateRowUsesDeclaredControlIndex)
+{
+  const size_t np = 10;
+  auto model = std::make_shared<DuOnSecondControl>();
+  const size_t m = model->getM();
+  auto mpc = solveTowardGoal(model, np);
+
+  auto solver = mpc->getSolver();
+  const MatrixXd & C = solver->getC();
+  const size_t u_start = solver->getWStart() - np * m;   // Nc == np here
+
+  // One "du" entry -> exactly one first-control-rate row (row 0).
+  EXPECT_DOUBLE_EQ(C(0, u_start + 1), 1.0);   // acts on u[1], the rate-limited control
+  EXPECT_DOUBLE_EQ(C(0, u_start + 0), 0.0);   // and not on u[0], which declares no rate bound
+}
+
+// Every one of the Nc control blocks carries R, matching the documented cost
+// sum over k = 0..Nc-1. With the state weights zeroed the control tracking term
+// is the only cost, so an unweighted terminal block would leave the last
+// control sitting at its linearization point instead of on goal_u.
+TEST(CustomModel, TerminalControlBlockCarriesTheControlWeight)
+{
+  auto model = std::make_shared<DummyLinear>();
+  const size_t n = model->getN();
+  const size_t m = model->getM();
+  const size_t np = 5;
+  constexpr double kGoalU = 1.0;
+
+  auto mpc = std::make_shared<MPC>();
+  mpc->setNp(np);
+  mpc->setNc(np);
+  mpc->setdt(0.1);
+  mpc->setQ(MatrixXd::Zero(n, n));
+  mpc->setS(MatrixXd::Zero(n, n));
+  mpc->setR(MatrixXd::Identity(m, m));
+  mpc->setW(MatrixXd::Constant(1, 1, 100.0));
+  mpc->init(model);
+
+  mpc->setGoalX(MatrixXd::Zero(np + 1, n));
+  mpc->setGoalU(MatrixXd::Constant(np, m, kGoalU));
+  mpc->setPose(VectorXd::Zero(n));
+
+  const auto [x, u] = mpc->solve();
+  ASSERT_EQ(static_cast<size_t>(u.rows()), np);
+  for (size_t k = 0; k < np; k++) {
+    for (size_t j = 0; j < m; j++) {
+      EXPECT_NEAR(u(k, j), kGoalU, 1e-3) << "control row " << k << ", column " << j;
+    }
+  }
 }
 
 // Negative compile check: a model that omits an override stays abstract and

@@ -43,8 +43,8 @@ struct MPCParams
 struct ModelInfo
 {
   std::string name;  // Model name.
-  size_t n;          // State vector dimension.
-  size_t m;          // Control vector dimension.
+  size_t n{0};       // State vector dimension.
+  size_t m{0};       // Control vector dimension.
   VectorXd params;   // Model parameters.
   VectorXd x;        // State vector.
   VectorXd u;        // Control vector.
