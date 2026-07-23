@@ -151,14 +151,10 @@ void ProxQP::init(std::shared_ptr<Model> model)
 /*!
  * @brief Initial-guess policy for the QP sub-problem.
  *
- * ProxQP's own cheap starts only. The sub-problem is rebuilt each solve, so there
- * is no preserved workspace for a warm start to attach to: handing proxsuite an
- * external guess (or WARM_START_WITH_PREVIOUS_RESULT) after a fresh init mixes a
+ * The sub-problem is rebuilt with fresh matrices each solve, so only ProxQP's own
+ * cheap starts apply: the equality-constrained guess (the default) or no guess.
+ * An external initial guess handed to a freshly initialized workspace mixes a
  * stale guess with a reset state, which proxsuite 0.6.5 answers by diverging.
- *
- * A cross-cycle warm start was measured and does not pay here: the QP solves for
- * increments, whose solution tends to zero as the SQP converges, so the external
- * iteration count is flat whether or not the previous iterate is carried.
  */
 proxsuite::proxqp::InitialGuessStatus ProxQP::initialGuessPolicy() const
 {

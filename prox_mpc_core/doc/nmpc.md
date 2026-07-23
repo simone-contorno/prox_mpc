@@ -210,5 +210,5 @@ exists for small problems (`qp_type = true`).
 The QP is re-initialized with fresh matrices each solve, and `guess` selects
 between ProxQP's own cheap starts: the equality-constrained guess (`true`, the
 default) or no initial guess (`false`).
-The warm start that matters is at trajectory level in `MPC::solve`, which slides
-the previous solution forward one step before re-linearizing.
+The trajectory-level warm start in `MPC::solve` slides the previous solution
+forward one step before re-linearizing.

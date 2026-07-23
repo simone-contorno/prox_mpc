@@ -21,7 +21,6 @@ converges in a single QP solve.
   - [Strengths](#strengths)
   - [Where it is weaker](#where-it-is-weaker)
 - [Known limits and future work](#known-limits-and-future-work)
-  - [QP warm starting across control cycles](#qp-warm-starting-across-control-cycles)
   - [Validation beyond the kinematic plant](#validation-beyond-the-kinematic-plant)
 - [Packages](#packages)
 - [Architecture and docs](#architecture-and-docs)
@@ -150,14 +149,6 @@ ProxMPC alone runs closer to moving obstacles than its peers do.
 
 What has been investigated and where the remaining headroom is. Contributions are
 welcome on any of it.
-
-### QP warm starting across control cycles
-
-A cross-cycle warm start - reusing the QP factorization and previous iterate
-instead of rebuilding the sub-problem each cycle - is prototyped on the
-`feat/qp-warm-start` branch. It is not shipped: the QP solves for **increments**,
-so its solution tends to zero as the SQP converges and a cold start already begins
-near the answer.
 
 ### Validation beyond the kinematic plant
 
