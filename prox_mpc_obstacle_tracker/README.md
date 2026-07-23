@@ -109,6 +109,13 @@ in the tracking frame.
 The full parameter and lifecycle reference is in
 [doc/architecture.md](doc/architecture.md).
 
+The detection-range cutoffs are validated as a pair: `max_detection_range` must be
+greater than `min_detection_range`, or `0.0` for "no cap" (the scan's own
+`range_max` applies).
+A reversed pair fails `on_configure` rather than bringing up a tracker that
+discards every scan; the same condition arising from the sensor's own
+`range_min`/`range_max` is logged as a throttled warning.
+
 ### IMM and prediction parameters
 
 Declared and validated in `on_configure` (out-of-range values fail the
@@ -120,9 +127,9 @@ source of truth.
 | --- | --- | --- | --- | --- | --- |
 | `imm_enabled` | bool | `true` | - | true/false | Run IMM(CV+CTRV); `false` = legacy single-CV KF path (single-switch rollback, no rebuild). |
 | `imm_p_cv_stay` | double | `0.95` | - | (0.0, 1.0) exclusive | Markov `P(CV -> CV)`; off-diagonal is `1 -` this. |
-| `imm_p_ctrv_stay` | double | `0.95` (`0.99` in config) | - | (0.0, 1.0) exclusive | Markov `P(CTRV -> CTRV)`; off-diagonal is `1 -` this. The shipped `0.99` keeps the turning model sticky on sustained orbits. |
-| `ctrv_process_noise_accel` | double | `1.0` | m²/s⁴ | ≥ 0.0 | CTRV linear-acceleration noise variance `σ_a²` (discrete white-noise form). |
-| `ctrv_process_noise_yaw_accel` | double | `1.0` | rad²/s⁴ | ≥ 0.0 | CTRV yaw-acceleration noise variance `σ_ω̇²` (drives the `ω` random walk). |
+| `imm_p_ctrv_stay` | double | `0.99` | - | (0.0, 1.0) exclusive | Markov `P(CTRV -> CTRV)`; off-diagonal is `1 -` this. The `0.99` default keeps the turning model sticky on sustained orbits. |
+| `ctrv_process_noise_accel` | double | `1.0` | m²/s⁴ | >= 0.0 | CTRV linear-acceleration noise variance `σ_a²` (discrete white-noise form). |
+| `ctrv_process_noise_yaw_accel` | double | `1.0` | rad²/s⁴ | >= 0.0 | CTRV yaw-acceleration noise variance `σ_ω̇²` (drives the `ω` random walk). |
 | `ctrv_init_omega_variance` | double | `1.0` | rad²/s² | > 0.0 | `ω` variance at track birth and in the CV -> CTRV mixing conversion. |
 | `prediction_steps` | int | `25` | samples | [0, 100] | Predicted positions published per obstacle; `0` publishes none (the controller falls back to straight-ray). |
 | `prediction_dt` | double | `0.1` | s | > 0.0 | Spacing between predicted samples. |
@@ -135,7 +142,7 @@ preset), so the controller always interpolates and never extrapolates there.
 
 | Name | Type | Default | Units | Range | Meaning |
 | --- | --- | --- | --- | --- | --- |
-| `cluster_center_offset_gain` | double | `0.0` | - | [0.0, 1.0] | Arc-centroid -> disc-centre correction: the cluster centroid is pushed away from the sensor along its ray by this fraction of the enclosing cluster radius. A lidar sees only the near arc of a compact obstacle, so the raw centroid is biased toward the sensor and slides around the disc as the viewpoint changes (fake tangential velocity during close passes). `0.5` matches the half-disc arc seen at close range; thin far arcs are under-corrected, which errs toward the sensor-facing surface (conservative). `0.0` disables (raw centroid). |
+| `cluster_center_offset_gain` | double | `0.5` | - | [0.0, 1.0] | Arc-centroid -> disc-centre correction: the cluster centroid is pushed away from the sensor along its ray by this fraction of the enclosing cluster radius. A lidar sees only the near arc of a compact obstacle, so the raw centroid is biased toward the sensor and slides around the disc as the viewpoint changes (fake tangential velocity during close passes). `0.5` matches the half-disc arc seen at close range; thin far arcs are under-corrected, which errs toward the sensor-facing surface (conservative). `0.0` disables (raw centroid). |
 
 ## Lifecycle
 

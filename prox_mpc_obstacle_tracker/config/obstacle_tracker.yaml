@@ -27,6 +27,8 @@ prox_mpc_obstacle_tracker:
     # Upper range cutoff [m]. Matches the benchmark costmap obstacle_max_range (3.0)
     # for equal perception there; the demo's predictive costmaps use 2.5.
     # Wall rejection is max_cluster_radius's job, not this cutoff's.
+    # Must be greater than min_detection_range, or 0 (no cap); a reversed pair
+    # fails on_configure instead of silently discarding every scan.
     max_detection_range: 3.0   # [m] upper range cutoff (0 -> use the scan range_max)
     # Arc-centroid -> disc-centre correction. A lidar sees only the near arc of
     # a compact obstacle, so the raw cluster centroid is biased toward the sensor

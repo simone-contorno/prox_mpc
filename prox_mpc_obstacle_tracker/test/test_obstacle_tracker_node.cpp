@@ -11,6 +11,7 @@
 // not plain Kalman - are covered by test_clustering / test_imm_filter /
 // test_tracker.
 
+#include <algorithm>
 #include <array>
 #include <chrono>
 #include <cmath>
@@ -94,6 +95,44 @@ TEST(ObstacleTrackerNode, ConfigureFailsOnInvalidParameter)
 {
   auto node = makeNode({rclcpp::Parameter("cluster_gap", -1.0)});   // must be > 0
   EXPECT_EQ(node->configure().id(), State::PRIMARY_STATE_UNCONFIGURED);
+}
+
+// max_tracks is validated as a signed int: a non-positive value fails configure
+// instead of wrapping to a huge std::size_t and removing the track cap.
+TEST(ObstacleTrackerNode, ConfigureFailsOnNonPositiveMaxTracks)
+{
+  for (const int max_tracks : {0, -1, -10}) {
+    auto node = makeNode({rclcpp::Parameter("max_tracks", max_tracks)});
+    EXPECT_EQ(node->configure().id(), State::PRIMARY_STATE_UNCONFIGURED)
+      << "max_tracks = " << max_tracks;
+  }
+}
+
+// The detection-range pair is validated as a pair: a reversed (or degenerate)
+// pair fails configure instead of activating a tracker that skips every scan.
+TEST(ObstacleTrackerNode, ConfigureFailsOnMisorderedDetectionRange)
+{
+  for (const double min_range : {4.0, 3.0}) {   // reversed, then equal
+    auto node = makeNode(
+    {
+      rclcpp::Parameter("min_detection_range", min_range),
+      rclcpp::Parameter("max_detection_range", 3.0),
+    });
+    EXPECT_EQ(node->configure().id(), State::PRIMARY_STATE_UNCONFIGURED)
+      << "min_detection_range = " << min_range;
+  }
+}
+
+// max_detection_range 0.0 means "no cap" (the scan's own range_max applies), so
+// it stays valid whatever the lower cutoff is.
+TEST(ObstacleTrackerNode, ConfiguresWithUncappedDetectionRange)
+{
+  auto node = makeNode(
+  {
+    rclcpp::Parameter("min_detection_range", 4.0),
+    rclcpp::Parameter("max_detection_range", 0.0),
+  });
+  EXPECT_EQ(node->configure().id(), State::PRIMARY_STATE_INACTIVE);
 }
 
 // Every log_level keyword (and an unrecognized value) is accepted at configure.

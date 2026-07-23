@@ -151,8 +151,8 @@ handler, cancels the spin, and runs a single checked finalize ladder
 
 All parameters are `double`, `int`, `bool`, or `string` per the project type rules
 and mirror [../config/obstacle_tracker.yaml](../config/obstacle_tracker.yaml).
-The defaults below are the values declared in the node; the shipped config sets
-operational values for some of them (noted).
+The defaults below are the values declared in the node, and the shipped config
+repeats them, so an invocation without a params file runs the same detector.
 
 ### Logging
 
@@ -176,18 +176,26 @@ operational values for some of them (noted).
 | `cluster_gap` | double | 0.3 | m | Euclidean gap that closes a cluster. |
 | `min_cluster_points` | int | 3 | count | Drop clusters with fewer member returns. |
 | `max_clusters` | int | 20 | count | Cap clusters per scan (largest kept). |
-| `max_cluster_radius` | double | 0.0 (`0.6` in config) | m | Drop clusters whose enclosing radius exceeds this (wall rejection); 0 disables it. |
+| `max_cluster_radius` | double | 0.6 | m | Drop clusters whose enclosing radius exceeds this (wall rejection); 0 disables it. |
 | `min_detection_range` | double | 0.0 | m | Lower range cutoff (0 uses the scan `range_min`). |
-| `max_detection_range` | double | 0.0 (`3.0` in config) | m | Upper range cutoff (0 uses the scan `range_max`). The shipped value matches the benchmark costmap `obstacle_max_range` (3.0), giving equal perception range there; the demo's predictive costmaps use 2.5, so the tracker sees 0.5 m farther in that stack. |
-| `cluster_center_offset_gain` | double | 0.0 (`0.5` in config) | - | Arc-centroid -> disc-centre correction on `[0, 1]`: the centroid is pushed away from the sensor along its ray by this fraction of the enclosing cluster radius. A lidar sees only the near arc of a compact obstacle, so the raw centroid is biased toward the sensor and slides around the disc as the viewpoint changes, adding a fake tangential velocity during close passes. `0.5` is exact for the close-range half-disc arc and under-corrects thin far arcs (conservative); 0 disables it. |
+| `max_detection_range` | double | 3.0 | m | Upper range cutoff (0 uses the scan `range_max`); any other value must exceed `min_detection_range`. The default matches the benchmark costmap `obstacle_max_range` (3.0), giving equal perception range there; the demo's predictive costmaps use 2.5, so the tracker sees 0.5 m farther in that stack. |
+| `cluster_center_offset_gain` | double | 0.5 | - | Arc-centroid -> disc-centre correction on `[0, 1]`: the centroid is pushed away from the sensor along its ray by this fraction of the enclosing cluster radius. A lidar sees only the near arc of a compact obstacle, so the raw centroid is biased toward the sensor and slides around the disc as the viewpoint changes, adding a fake tangential velocity during close passes. `0.5` is exact for the close-range half-disc arc and under-corrects thin far arcs (conservative); 0 disables it. |
+
+The two range cutoffs are validated as a pair: `max_detection_range` must be
+greater than `min_detection_range`, or `0.0` for "no cap".
+A reversed or degenerate pair fails `on_configure`, because it would otherwise
+configure and activate a tracker whose every scan yields an empty range window.
+The scan callback keeps the same guard for the sensor-driven case (the scan's own
+`range_min`/`range_max` overlap the cutoffs to nothing) and logs a throttled
+warning naming both values instead of skipping silently.
 
 ### Association and filter
 
 | Parameter | Type | Default | Unit | Description |
 | --- | --- | --- | --- | --- |
 | `association_gate` | double | 0.5 | m | Max track-to-cluster gating distance. |
-| `process_noise` | double | 1.0 (`0.1` in config) | m²/s⁴ | Acceleration spectral density. |
-| `measurement_noise` | double | 0.01 (`0.002` in config) | m² | Position measurement variance. The shipped value is calibrated to the centroid noise of the benchmark scan simulator; re-calibrate per sensor on real hardware. |
+| `process_noise` | double | 0.1 | m²/s⁴ | Acceleration spectral density. |
+| `measurement_noise` | double | 0.002 | m² | Position measurement variance. The default is calibrated to the centroid noise of the benchmark scan simulator; re-calibrate per sensor on real hardware. |
 | `initial_velocity_variance` | double | 1.0 | m²/s² | Initial vx/vy variance for a new track. |
 
 ### IMM and prediction
@@ -196,7 +204,7 @@ operational values for some of them (noted).
 | --- | --- | --- | --- | --- |
 | `imm_enabled` | bool | true | - | Run the IMM (CV+CTRV) filter; `false` selects the legacy single-CV Kalman path (single-switch rollback, no rebuild). |
 | `imm_p_cv_stay` | double | 0.95 | - | Markov `P(CV -> CV)` on `(0, 1)`; the off-diagonal is `1 -` this. |
-| `imm_p_ctrv_stay` | double | 0.95 (`0.99` in config) | - | Markov `P(CTRV -> CTRV)` on `(0, 1)`; the off-diagonal is `1 -` this. The shipped `0.99` keeps the turning model sticky on sustained orbits. |
+| `imm_p_ctrv_stay` | double | 0.99 | - | Markov `P(CTRV -> CTRV)` on `(0, 1)`; the off-diagonal is `1 -` this. The `0.99` default keeps the turning model sticky on sustained orbits. |
 | `ctrv_process_noise_accel` | double | 1.0 | m²/s⁴ | CTRV linear-acceleration noise variance `σ_a²` (discrete white-noise form). |
 | `ctrv_process_noise_yaw_accel` | double | 1.0 | rad²/s⁴ | CTRV yaw-acceleration noise variance `σ_ω̇²` (drives the `ω` random walk). |
 | `ctrv_init_omega_variance` | double | 1.0 | rad²/s² | `ω` variance at track birth and in the CV -> CTRV mixing conversion. |

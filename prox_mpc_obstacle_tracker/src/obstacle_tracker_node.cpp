@@ -4,8 +4,8 @@
 
 #include "prox_mpc_obstacle_tracker/obstacle_tracker_node.hpp"
 
+#include <algorithm>
 #include <cmath>
-#include <limits>
 #include <string>
 #include <vector>
 
@@ -92,7 +92,9 @@ ObstacleTrackerNode::CallbackReturn ObstacleTrackerNode::on_configure(
       declare_parameter<double>("initial_velocity_variance", 1.0);
     tp.confirm_count = declare_parameter<int>("confirm_count", 3);
     tp.drop_count = declare_parameter<int>("drop_count", 3);
-    tp.max_tracks = static_cast<std::size_t>(declare_parameter<int>("max_tracks", 10));
+    // Validated as a signed int before the cast: a negative value would wrap to
+    // a huge std::size_t and silently remove the track cap.
+    const int max_tracks = declare_parameter<int>("max_tracks", 10);
 
     tp.imm_enabled = declare_parameter<bool>("imm_enabled", true);
     tp.imm_p_cv_stay = declare_parameter<double>("imm_p_cv_stay", 0.95);
@@ -118,6 +120,10 @@ ObstacleTrackerNode::CallbackReturn ObstacleTrackerNode::on_configure(
       max_cluster_radius_ >= 0.0 &&
       min_detection_range_ >= 0.0 &&
       max_detection_range_ >= 0.0 &&
+      // The pair must leave a non-empty window: 0.0 means "no cap" (the scan's
+      // own range_max applies), any other value must exceed the lower cutoff.
+      // A reversed pair would otherwise configure and then skip every scan.
+      (max_detection_range_ == 0.0 || max_detection_range_ > min_detection_range_) &&
       cluster_center_offset_gain_ >= 0.0 && cluster_center_offset_gain_ <= 1.0 &&
       transform_timeout_ >= 0.0 &&
       tp.process_noise >= 0.0 &&
@@ -126,7 +132,7 @@ ObstacleTrackerNode::CallbackReturn ObstacleTrackerNode::on_configure(
       tp.initial_velocity_variance >= 0.0 &&
       tp.confirm_count >= 1 &&
       tp.drop_count >= 0 &&
-      tp.max_tracks >= 1 &&
+      max_tracks >= 1 &&
       in_open_unit(tp.imm_p_cv_stay) &&
       in_open_unit(tp.imm_p_ctrv_stay) &&
       tp.ctrv_process_noise_accel >= 0.0 &&
@@ -139,6 +145,7 @@ ObstacleTrackerNode::CallbackReturn ObstacleTrackerNode::on_configure(
       return CallbackReturn::FAILURE;
     }
 
+    tp.max_tracks = static_cast<std::size_t>(max_tracks);
     tracker_ = std::make_unique<Tracker>(tp);
 
     tf_buffer_ = std::make_shared<tf2_ros::Buffer>(get_clock());
@@ -242,7 +249,15 @@ void ObstacleTrackerNode::scanCallback(sensor_msgs::msg::LaserScan::ConstSharedP
   const double range_min = std::max(static_cast<double>(msg->range_min), min_detection_range_);
   double range_max = static_cast<double>(msg->range_max);
   if (max_detection_range_ > 0.0) {range_max = std::min(range_max, max_detection_range_);}
-  if (!(range_max > range_min)) {return;}
+  // Configure rejects a reversed parameter pair, so an empty window here comes
+  // from the sensor's own range_min/range_max; report it rather than going blind.
+  if (!(range_max > range_min)) {
+    RCLCPP_WARN_THROTTLE(
+      get_logger(), *get_clock(), 5000,
+      "Empty detection window (range_min %.2f m >= range_max %.2f m); skipping scan.",
+      range_min, range_max);
+    return;
+  }
 
   const std::vector<Point2> points = scan_to_points(
     msg->ranges, msg->angle_min, msg->angle_increment, range_min, range_max);

@@ -49,7 +49,14 @@ void finalize(const std::shared_ptr<ObstacleTrackerNode> & node) noexcept
       node->deactivate();
     }
     if (node->get_current_state().id() == State::PRIMARY_STATE_INACTIVE) {
-      node->cleanup();
+      // A failed cleanup lands in Finalized-via-error, which the shutdown step
+      // below cannot distinguish from a clean finalize; report it here.
+      const auto cleaned_state = node->cleanup();
+      if (cleaned_state.id() != State::PRIMARY_STATE_UNCONFIGURED) {
+        RCLCPP_ERROR(
+          node->get_logger(), "finalize: cleanup() did not reach Unconfigured (state id %u).",
+          cleaned_state.id());
+      }
     }
     // shutdown() resolves to LifecycleNode::shutdown() (the node hides no such
     // name); it drives whatever state remains to Finalized.
@@ -92,6 +99,7 @@ int main(int argc, char ** argv)
   }
 
   bool added = false;
+  bool spin_failed = false;
   std::thread watcher;
   if (brought_up && !g_stop.load(std::memory_order_relaxed)) {
     exec.add_node(node->get_node_base_interface());
@@ -107,7 +115,14 @@ int main(int argc, char ** argv)
         }
         exec.cancel();
       });
-    exec.spin();
+    // An exception escaping a callback (publish, allocation) must still reach the
+    // teardown ladder below instead of std::terminate()ing with the node active.
+    try {
+      exec.spin();
+    } catch (const std::exception & e) {
+      RCLCPP_FATAL(node->get_logger(), "executor spin terminated by exception: %s", e.what());
+      spin_failed = true;
+    }
   }
 
   g_stop.store(true, std::memory_order_relaxed);  // release the watcher
@@ -117,5 +132,5 @@ int main(int argc, char ** argv)
   if (added) {exec.remove_node(node->get_node_base_interface());}
   node.reset();  // destroy the node before shutting the context down
   rclcpp::shutdown();
-  return brought_up ? EXIT_SUCCESS : EXIT_FAILURE;
+  return brought_up && !spin_failed ? EXIT_SUCCESS : EXIT_FAILURE;
 }
