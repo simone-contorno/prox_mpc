@@ -148,12 +148,6 @@ ObstacleTrackerNode::CallbackReturn ObstacleTrackerNode::on_configure(
     tp.max_tracks = static_cast<std::size_t>(max_tracks);
     tracker_ = std::make_unique<Tracker>(tp);
 
-    tf_buffer_ = std::make_shared<tf2_ros::Buffer>(get_clock());
-    // spin_thread = true: a dedicated thread services /tf and /tf_static so the
-    // scan callback can lookupTransform at the scan stamp with a timeout (without
-    // it tf2 logs a per-scan error and the timed lookup always fails).
-    tf_listener_ = std::make_shared<tf2_ros::TransformListener>(*tf_buffer_, this, true);
-
     obstacle_pub_ = create_publisher<prox_mpc_msgs::msg::ObstacleArray>(
       output_topic_, rclcpp::QoS(rclcpp::KeepLast(5)));
 
@@ -176,6 +170,12 @@ ObstacleTrackerNode::CallbackReturn ObstacleTrackerNode::on_activate(
   try {
     LifecycleNode::on_activate(state);  // activates managed entities (the publisher)
     if (tracker_) {tracker_->reset();}  // start the velocity estimate fresh
+
+    // TF is only read by the scan callback, so it lives with the active state (not
+    // configure). spin_thread = true: a dedicated thread services /tf and /tf_static
+    // so the callback can lookupTransform at the scan stamp with a timeout.
+    tf_buffer_ = std::make_shared<tf2_ros::Buffer>(get_clock());
+    tf_listener_ = std::make_shared<tf2_ros::TransformListener>(*tf_buffer_, this, true);
 
     // Depth 1 (large-sensor profile): keep only the freshest scan and minimize
     // memory, rather than the SensorDataQoS default of KeepLast(5).
@@ -201,6 +201,13 @@ ObstacleTrackerNode::CallbackReturn ObstacleTrackerNode::on_deactivate(
   try {
     active_.store(false);
     scan_sub_.reset();
+    // Release TF (its dedicated thread) with the active state; serialize against an
+    // in-flight scan callback before dropping the buffer it reads.
+    {
+      std::lock_guard<std::mutex> lock(state_mutex_);
+      tf_listener_.reset();
+      tf_buffer_.reset();
+    }
     LifecycleNode::on_deactivate(state);  // deactivates the publisher (fail-safe: stop output)
     RCLCPP_INFO(get_logger(), "Deactivated prox_mpc_obstacle_tracker.");
     return CallbackReturn::SUCCESS;

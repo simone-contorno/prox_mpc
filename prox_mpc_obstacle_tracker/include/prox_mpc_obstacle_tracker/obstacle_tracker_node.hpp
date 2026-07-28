@@ -38,14 +38,14 @@ public:
   explicit ObstacleTrackerNode(
     const rclcpp::NodeOptions & options = rclcpp::NodeOptions());
 
-  /// Declare and validate parameters; create the publisher, TF buffer/listener,
-  /// and the tracker. No subscription yet (created on activate).
+  /// Declare and validate parameters; create the publisher and the tracker. No
+  /// subscription or TF listener yet (both created on activate).
   CallbackReturn on_configure(const rclcpp_lifecycle::State & state) override;
 
-  /// Activate the publisher and subscribe to the scan so processing begins.
+  /// Create the TF listener, activate the publisher, and subscribe to the scan.
   CallbackReturn on_activate(const rclcpp_lifecycle::State & state) override;
 
-  /// Stop processing: drop the subscription and deactivate the publisher.
+  /// Stop processing: drop the subscription and TF listener, deactivate the publisher.
   CallbackReturn on_deactivate(const rclcpp_lifecycle::State & state) override;
 
   /// Release the publisher, TF, and tracker, returning to unconfigured.
