@@ -111,9 +111,9 @@ The linear term is the gradient of the tracking cost at the current iterate:
 $$
 c =
 \begin{bmatrix}
-2Q\,(x_k - x_k^{\text{goal}}) \\[2pt]
-2S\,(x_{N_p} - x_{N_p}^{\text{goal}}) \\[2pt]
-2R\,(u_k - u_k^{\text{goal}}) \\[2pt]
+2Q\,(x_k - x_k^{\text{goal}}) \\
+2S\,(x_{N_p} - x_{N_p}^{\text{goal}}) \\
+2R\,(u_k - u_k^{\text{goal}}) \\
 2W\,w_k
 \end{bmatrix}.
 $$
