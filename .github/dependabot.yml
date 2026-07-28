@@ -13,6 +13,11 @@ updates:
       - dependencies
       - ci
     open-pull-requests-limit: 5
+    # Bundle every action bump into one PR instead of one branch per action.
+    groups:
+      github-actions:
+        patterns:
+          - "*"
 
 # ROS/apt dependencies are declared in package.xml and resolved by rosdep, which
 # Dependabot does not understand. Those are covered by the license-inventory
