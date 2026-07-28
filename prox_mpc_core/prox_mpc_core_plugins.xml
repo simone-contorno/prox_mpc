@@ -1,4 +1,4 @@
-<library path="prox_mpc_core">
+<library path="prox_mpc_core_models">
   <class
     name="prox_mpc_core/Bicycle"
     type="prox_mpc::Bicycle"

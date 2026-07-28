@@ -9,7 +9,7 @@ The YAML config is the single source of truth: it is loaded into the node via
 logger verbosity is set (not the global or RMW level).
 
 Launch arguments:
-  ``model`` (``bike`` | ``r2d2``, default ``bike``) selects the kinematic model.
+  ``model`` (``bicycle`` | ``unicycle``, default ``bicycle``) selects the kinematic model.
     It overrides the YAML ``model`` parameter and picks the matching URDF.
   ``rviz`` (default ``false``) launches RViz, ``robot_state_publisher`` and
     ``joint_state_publisher`` so the chosen robot is visualized.
@@ -41,7 +41,10 @@ def launch_setup(context, *args, **kwargs):
     model = LaunchConfiguration('model').perform(context)
     use_rviz = LaunchConfiguration('rviz')
 
-    urdf_path = os.path.join(pkg_share, 'urdf', f'{model}.urdf')
+    # The kinematic model selects its visual body: the R2D2-derived body for the
+    # unicycle, and the self-authored blue bicycle for the bicycle.
+    urdf_by_model = {'unicycle': 'r2d2.urdf', 'bicycle': 'bike.urdf'}
+    urdf_path = os.path.join(pkg_share, 'urdf', urdf_by_model.get(model, 'r2d2.urdf'))
     with open(urdf_path, 'r') as f:
         robot_description = f.read()
 
@@ -88,9 +91,9 @@ def generate_launch_description():
         [
             DeclareLaunchArgument(
                 'model',
-                default_value='bike',
-                choices=['bike', 'r2d2'],
-                description='Kinematic model and URDF: bike (bicycle) or r2d2 (unicycle).',
+                default_value='bicycle',
+                choices=['bicycle', 'unicycle'],
+                description='Kinematic model and URDF: bicycle (4-state) or unicycle (3-state).',
             ),
             DeclareLaunchArgument(
                 'rviz',

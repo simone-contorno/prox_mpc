@@ -1,0 +1,17 @@
+scenario:
+  name: dynamic_circle
+  description: "A single obstacle orbiting near the mid-path; ProxMPC must yield and recover."
+  map:
+    base: prox_mpc_open
+    scale: 1.0
+  # Endpoints at +/-2.5 keep the mode (b2) plan inside the navigable interior
+  # ([-2.95, 2.95] m); the obstacle orbits (1, 0), still crossing the path.
+  start: {x: -2.5, y: 0.0, yaw: 0.0}
+  goals:
+    - {x: 2.5, y: 0.0, yaw: 0.0}
+  obstacles:
+    # center / radius / speed (sign = ccw/cw). Orbits around (1, 0) crossing the path.
+    - {type: dynamic, motion: circle, center: {x: 1.0, y: 0.0}, radius: 0.8, speed: 0.5, clearance: 0.45}
+  models: [unicycle, bicycle]
+  controllers: [proxmpc, dwb, mppi, regulated_pure_pursuit, graceful, vector_pursuit]   # cross-controller set (b2)
+  run: {repeats: 5, timeout_s: 60, seed: 0}

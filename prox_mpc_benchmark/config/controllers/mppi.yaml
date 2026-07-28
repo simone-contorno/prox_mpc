@@ -1,0 +1,40 @@
+# MPPI controller preset (FollowPath block) for cross-controller comparison.
+# Stock nav2_mppi_controller params trimmed to the diff-drive case.
+# batch_size is MPPI's count of sampled candidate trajectories per cycle (its
+# dominant cost knob, no equivalent in the other controllers); it is left at the
+# upstream default. The fair-tuning lever is the prediction horizon: time_steps *
+# model_dt = 40 * 0.05 = 2.0 s, matching ProxMPC (np*dt) and DWB (sim_time).
+# Obstacle avoidance is the CostCritic (below), left at its upstream default
+# strength (cost_weight 3.81) and fed the same costmap + inflation as every other
+# controller. MPPI is the one stochastic controller and Nav2 Jazzy exposes no RNG
+# seed, so its repeats capture real sampling variance (reported as mean +/- std),
+# not reproducibility; the obstacle scenarios use extra repeats for it accordingly.
+FollowPath:
+  plugin: "nav2_mppi_controller::MPPIController"
+  time_steps: 40          # fair tuning: 40 * model_dt = 2.0 s horizon
+  model_dt: 0.05
+  batch_size: 2000
+  vx_std: 0.2
+  vy_std: 0.2
+  wz_std: 0.4
+  vx_max: 0.5
+  vx_min: -0.35
+  vy_max: 0.5
+  wz_max: 1.9
+  iteration_count: 1
+  prune_distance: 1.7
+  transform_tolerance: 0.1
+  temperature: 0.3
+  gamma: 0.015
+  motion_model: "DiffDrive"
+  visualize: false
+  TrajectoryVisualizer:
+    trajectory_step: 5
+    time_step: 3
+  critics: ["ConstraintCritic", "CostCritic", "GoalCritic", "GoalAngleCritic", "PathAlignCritic", "PathFollowCritic", "PathAngleCritic", "PreferForwardCritic"]
+  # CostCritic obstacle weight left at the upstream default; the tuning pass is
+  # recorded in the comparison document.
+  CostCritic:
+    enabled: true
+    cost_weight: 3.81
+    critical_cost: 300.0

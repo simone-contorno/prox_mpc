@@ -1,0 +1,97 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>prox_mpc_benchmark</name>
+  <version>1.0.0</version>
+  <description>
+    Scenario-driven benchmarking harness for the ProxMPC stack: a controller-
+    agnostic C++ live metrics node (cross-track / goal error + solver-diagnostics
+    tap) plus installed Python tooling to orchestrate the scenario x model x
+    controller x mode matrix, compute per-run metrics, and aggregate them. Reuses
+    the demo worlds/maps/models; owns the result artifacts (gitignored).
+  </description>
+  <maintainer email="simone.contorno@outlook.it">Simone Contorno</maintainer>
+  <license>Apache-2.0</license>
+  <url type="repository">https://github.com/simone-contorno/prox_mpc</url>
+  <url type="bugtracker">https://github.com/simone-contorno/prox_mpc/issues</url>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+  <buildtool_depend>ament_cmake_python</buildtool_depend>
+
+  <!-- C++ live metrics node. -->
+  <depend>rclcpp</depend>
+  <depend>std_msgs</depend>
+  <depend>geometry_msgs</depend>
+  <depend>nav_msgs</depend>
+  <depend>sensor_msgs</depend>
+  <depend>tf2</depend>
+  <depend>tf2_ros</depend>
+  <depend>prox_mpc_msgs</depend>
+
+  <!-- Timing decorator: a nav2_core::Controller plugin wrapping the controller under test. -->
+  <depend>rclcpp_lifecycle</depend>
+  <depend>nav2_core</depend>
+  <depend>nav2_costmap_2d</depend>
+  <depend>pluginlib</depend>
+
+  <!-- Python orchestration / metric tooling (installed, not built). -->
+  <exec_depend>rclpy</exec_depend>
+  <exec_depend>ament_index_python</exec_depend>
+  <!-- ParameterDescriptor / Duration used by the obstacle publisher and markers. -->
+  <exec_depend>rcl_interfaces</exec_depend>
+  <exec_depend>builtin_interfaces</exec_depend>
+  <exec_depend>launch</exec_depend>
+  <exec_depend>launch_ros</exec_depend>
+  <exec_depend>nav2_msgs</exec_depend>
+  <exec_depend>python3-yaml</exec_depend>
+  <exec_depend>python3-numpy</exec_depend>
+  <exec_depend>ros2bag</exec_depend>
+  <exec_depend>rosbag2_py</exec_depend>
+
+  <!-- Stacks the matrix drives (mode a / b1 / b2). Reused, not duplicated. -->
+  <exec_depend>prox_mpc_demo</exec_depend>
+  <exec_depend>prox_mpc_controller</exec_depend>
+  <exec_depend>prox_mpc_obstacle_tracker</exec_depend>
+  <exec_depend>nav2_bringup</exec_depend>
+  <exec_depend>ros_gz_sim</exec_depend>
+  <exec_depend>ros_gz_bridge</exec_depend>
+  <exec_depend>xacro</exec_depend>
+
+  <!-- Mode (b2) Nav2 servers and the cross-controller set the launch starts. -->
+  <exec_depend>nav2_map_server</exec_depend>
+  <exec_depend>nav2_planner</exec_depend>
+  <!-- The GridBased planner plugin nav2_b2_base.yaml selects. -->
+  <exec_depend>nav2_navfn_planner</exec_depend>
+  <exec_depend>nav2_controller</exec_depend>
+  <exec_depend>nav2_behaviors</exec_depend>
+  <exec_depend>nav2_bt_navigator</exec_depend>
+  <exec_depend>nav2_lifecycle_manager</exec_depend>
+  <exec_depend>dwb_core</exec_depend>
+  <!-- The trajectory critics config/controllers/dwb.yaml selects. -->
+  <exec_depend>dwb_critics</exec_depend>
+  <exec_depend>nav2_mppi_controller</exec_depend>
+  <exec_depend>nav2_regulated_pure_pursuit_controller</exec_depend>
+  <exec_depend>nav2_graceful_controller</exec_depend>
+  <!-- External fair peer: Apache-2.0, apt ros-jazzy-vector-pursuit-controller v2.0.0;
+       a runtime pluginlib plugin (loaded, not linked). License-reviewed in
+       THIRD_PARTY_LICENSES.md. -->
+  <exec_depend>vector_pursuit_controller</exec_depend>
+
+  <!-- Demo-video capture (record_scenarios.py / combine_grid.sh): the RViz view,
+       the path-corrected waffle RobotModel (URDF from nav2_minimal_tb3_sim), and
+       ffmpeg as the x11grab recorder + xstack grid combiner. -->
+  <exec_depend>robot_state_publisher</exec_depend>
+  <exec_depend>joint_state_publisher</exec_depend>
+  <exec_depend>visualization_msgs</exec_depend>
+  <exec_depend>rviz2</exec_depend>
+  <exec_depend>nav2_minimal_tb3_sim</exec_depend>
+  <exec_depend>ffmpeg</exec_depend>
+
+  <test_depend>ament_lint_auto</test_depend>
+  <test_depend>ament_lint_common</test_depend>
+  <test_depend>ament_cmake_gtest</test_depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>

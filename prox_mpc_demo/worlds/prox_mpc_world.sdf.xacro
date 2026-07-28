@@ -1,0 +1,176 @@
+<?xml version="1.0"?>
+<!--
+  ProxMPC Gazebo Harmonic world.
+
+  Mirrors nav2_minimal_tb3_sim/worlds/tb3_sandbox.sdf.xacro (so the stock
+  `tb3_sandbox` map still aligns and AMCL localizes), and adds, behind the
+  `obstacles` xacro arg, obstacles the static map does NOT contain:
+    * two static boxes (sensed by the lidar, so the local/global costmaps and the
+      ProxMPC obstacle term must avoid them), and
+    * one dynamic obstacle: a trajectory-animated actor carrying a collision box
+      that patrols across the corridor. No external skin mesh is referenced, so
+      the world loads offline; the gpu_lidar senses the actor's box.
+
+  Custom robot models and extra obstacles can also be spawned into the running
+  world at runtime with `ros2 run ros_gz_sim create ...` (the UserCommands system
+  below enables runtime insertion). See doc/nav2-simulation.md.
+
+  Args:
+    headless   (default true)  : drop the SceneBroadcaster when headless.
+    obstacles  (default true)  : include the extra static + dynamic obstacles.
+-->
+<sdf version="1.6" xmlns:xacro="http://www.ros.org/wiki/xacro">
+  <xacro:arg name="headless" default="true"/>
+  <xacro:arg name="obstacles" default="true"/>
+
+  <world name="default">
+    <plugin
+      filename="gz-sim-physics-system"
+      name="gz::sim::systems::Physics">
+    </plugin>
+    <plugin
+      filename="gz-sim-user-commands-system"
+      name="gz::sim::systems::UserCommands">
+    </plugin>
+  <xacro:unless value="$(arg headless)">
+    <plugin
+      filename="gz-sim-scene-broadcaster-system"
+      name="gz::sim::systems::SceneBroadcaster">
+    </plugin>
+  </xacro:unless>
+    <plugin
+      filename="gz-sim-sensors-system"
+      name="gz::sim::systems::Sensors">
+      <render_engine>ogre2</render_engine>
+    </plugin>
+    <plugin
+      filename="gz-sim-imu-system"
+      name="gz::sim::systems::Imu">
+    </plugin>
+
+    <light name='sun' type='directional'>
+        <cast_shadows>0</cast_shadows>
+        <pose>0 0 10 0 0 0</pose>
+        <diffuse>0.8 0.8 0.8 1</diffuse>
+        <specular>0.8 0.8 0.8 1</specular>
+        <attenuation>
+            <range>1000</range>
+            <constant>0.9</constant>
+            <linear>0.01</linear>
+            <quadratic>0.001</quadratic>
+        </attenuation>
+        <direction>-0.5 0.1 -0.9</direction>
+    </light>
+    <model name='ground_plane'>
+        <static>1</static>
+        <link name='link'>
+            <collision name='collision'>
+                <geometry>
+                    <plane>
+                        <normal>0 0 1</normal>
+                        <size>100 100</size>
+                    </plane>
+                </geometry>
+                <max_contacts>10</max_contacts>
+            </collision>
+            <visual name='visual'>
+                <geometry>
+                    <plane>
+                        <normal>0 0 1</normal>
+                        <size>100 100</size>
+                    </plane>
+                </geometry>
+                <material>
+                    <ambient>0.8 0.8 0.8 1</ambient>
+                    <diffuse>0.8 0.8 0.8 1</diffuse>
+                    <specular>0.8 0.8 0.8 1</specular>
+                </material>
+            </visual>
+        </link>
+    </model>
+
+    <scene>
+      <shadows>0</shadows>
+    </scene>
+
+    <physics name='3ms' type='ode'>
+        <max_step_size>0.003</max_step_size>
+        <real_time_factor>1</real_time_factor>
+    </physics>
+
+    <model name="turtlebot3_world">
+      <static>1</static>
+      <include>
+        <uri>model://turtlebot3_world</uri>
+      </include>
+    </model>
+
+  <xacro:if value="$(arg obstacles)">
+    <!-- Unmapped static obstacle 1: a box the static map does not contain. -->
+    <model name="prox_mpc_static_box_1">
+      <static>1</static>
+      <pose>0.0 1.25 0.25 0 0 0</pose>
+      <link name="link">
+        <collision name="collision">
+          <geometry><box><size>0.4 0.4 0.5</size></box></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><box><size>0.4 0.4 0.5</size></box></geometry>
+          <material>
+            <ambient>0.8 0.2 0.2 1</ambient>
+            <diffuse>0.8 0.2 0.2 1</diffuse>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- Unmapped static obstacle 2. -->
+    <model name="prox_mpc_static_box_2">
+      <static>1</static>
+      <pose>-1.0 1.0 0.25 0 0 0</pose>
+      <link name="link">
+        <collision name="collision">
+          <geometry><box><size>0.4 0.4 0.5</size></box></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><box><size>0.4 0.4 0.5</size></box></geometry>
+          <material>
+            <ambient>0.8 0.2 0.2 1</ambient>
+            <diffuse>0.8 0.2 0.2 1</diffuse>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- Dynamic obstacle: an actor carrying a collision box, patrolling along y
+         near x = 0. Poses in the script are relative to the actor's initial
+         pose; the loop returns to the start so the motion repeats seamlessly. -->
+    <actor name="prox_mpc_dynamic_obstacle">
+      <pose>0.0 -1.6 0.5 0 0 0</pose>
+      <link name="link">
+        <collision name="collision">
+          <geometry><box><size>0.4 0.4 1.0</size></box></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><box><size>0.4 0.4 1.0</size></box></geometry>
+          <material>
+            <ambient>0.2 0.2 0.8 1</ambient>
+            <diffuse>0.2 0.2 0.8 1</diffuse>
+          </material>
+        </visual>
+      </link>
+      <script>
+        <loop>true</loop>
+        <delay_start>0.0</delay_start>
+        <auto_start>true</auto_start>
+        <trajectory id="0" type="patrol">
+          <waypoint><time>0.0</time><pose>0 0 0.5 0 0 0</pose></waypoint>
+          <waypoint><time>6.0</time><pose>0 2.4 0.5 0 0 0</pose></waypoint>
+          <waypoint><time>12.0</time><pose>0 0 0.5 0 0 0</pose></waypoint>
+        </trajectory>
+      </script>
+    </actor>
+  </xacro:if>
+
+  </world>
+</sdf>

@@ -1,0 +1,21 @@
+scenario:
+  name: dynamic_multi
+  description: "Held-out generalization cell: two simultaneous dynamic obstacles (a line-crossing patrol and an orbiter), neither used to tune the controller or tracker. Exercises the max_dynamic_obstacles=2 slot limit with two tracks live at once."
+  map:
+    base: prox_mpc_open
+    yaml: prox_mpc_open.yaml
+    scale: 1.0
+  # Same +/-2.5 corridor as the single-obstacle cells (navigable interior
+  # [-2.95, 2.95] m). Two well-separated moving threats met in sequence: a
+  # vertical patrol crossing at x=-0.7 (the line cell's obstacle, shifted) and an
+  # orbiter around (1.0, 0) (the dynamic_circle obstacle). Combining them holds
+  # two tracks live at once, at the max_dynamic_obstacles=2 slot limit.
+  start: {x: -2.5, y: 0.0, yaw: 0.0}
+  goals:
+    - {x: 2.5, y: 0.0, yaw: 0.0}
+  obstacles:
+    - {type: dynamic, motion: line, from: {x: -0.7, y: -1.8}, to: {x: -0.7, y: 1.8}, speed: 0.6, clearance: 0.45}
+    - {type: dynamic, motion: circle, center: {x: 1.0, y: 0.0}, radius: 0.8, speed: 0.5, clearance: 0.45}
+  models: [unicycle]
+  controllers: [proxmpc_pred, proxmpc, dwb, mppi, regulated_pure_pursuit, graceful, vector_pursuit]
+  run: {repeats: 5, timeout_s: 60, seed: 0}

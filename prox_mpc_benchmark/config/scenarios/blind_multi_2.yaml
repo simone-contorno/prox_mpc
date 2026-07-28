@@ -1,0 +1,16 @@
+scenario:
+  name: blind_multi_2
+  description: "BLIND held-out two-mover cell (seeded generator, not author-screened). Line patrol at x=-0.879 and an orbiter at (0.81, 0.183)."
+  map:
+    base: prox_mpc_open
+    yaml: prox_mpc_open.yaml
+    scale: 1.0
+  start: {x: -2.5, y: 0.0, yaw: 0.0}
+  goals:
+    - {x: 2.5, y: 0.0, yaw: 0.0}
+  obstacles:
+    - {type: dynamic, motion: line, from: {x: -0.879, y: -1.8}, to: {x: -0.879, y: 1.8}, speed: -0.567, clearance: 0.45}
+    - {type: dynamic, motion: circle, center: {x: 0.81, y: 0.183}, radius: 0.828, speed: -0.545, clearance: 0.45}
+  models: [unicycle]
+  controllers: [proxmpc_pred, proxmpc, dwb, mppi, regulated_pure_pursuit, graceful, vector_pursuit]
+  run: {repeats: 5, timeout_s: 60, seed: 0}

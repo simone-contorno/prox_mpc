@@ -1,0 +1,22 @@
+scenario:
+  name: dynamic_multi_noise
+  description: "The dynamic_multi held-out cell with a realistic 2D-lidar range-noise model on /scan (0.02 m std, RPLIDAR/Hokuyo class). Tests robustness to non-ideal perception, since the tracker's measurement_noise was calibrated to the ideal simulator."
+  map:
+    base: prox_mpc_open
+    yaml: prox_mpc_open.yaml
+    scale: 1.0
+  start: {x: -2.5, y: 0.0, yaw: 0.0}
+  goals:
+    - {x: 2.5, y: 0.0, yaw: 0.0}
+  obstacles:
+    - {type: dynamic, motion: line, from: {x: -0.7, y: -1.8}, to: {x: -0.7, y: 1.8}, speed: 0.6, clearance: 0.45}
+    - {type: dynamic, motion: circle, center: {x: 1.0, y: 0.0}, radius: 0.8, speed: 0.5, clearance: 0.45}
+  # Gaussian range noise [m std] applied to obstacle returns on /scan. 0.02 m is
+  # representative of common indoor 2D lidars (Hokuyo UTM/URG ~15-20 mm, RPLIDAR
+  # ~12-40 mm growing with range). Noise enters every controller through the
+  # shared costmap and, for proxmpc_pred, additionally through the tracker.
+  sensor:
+    range_noise_std: 0.02
+  models: [unicycle]
+  controllers: [proxmpc_pred, proxmpc, dwb, mppi, regulated_pure_pursuit, graceful, vector_pursuit]
+  run: {repeats: 5, timeout_s: 60, seed: 0}

@@ -1,0 +1,43 @@
+cff-version: 1.2.0
+title: >-
+  ProxMPC: Nonlinear Model Predictive Control for ROS 2, as a
+  reusable core and a Nav2 controller plugin
+message: If you use this software, please cite it as below.
+type: software
+authors:
+  - given-names: Simone
+    family-names: Contorno
+    email: simone.contorno@outlook.it
+    orcid: 'https://orcid.org/0009-0002-4187-2166'
+repository-code: 'https://github.com/simone-contorno/prox_mpc'
+abstract: >-
+  ProxMPC solves the nonlinear optimal-control problem with a Sequential
+  Quadratic Programming scheme over the ProxQP solver, packaged as a reusable
+  C++ core and a Nav2 controller plugin for ROS 2 Jazzy. Obstacles enter the
+  optimisation as linearised signed-distance half-planes with a discrete-time
+  Control Barrier Function coupling, making keep-out a hard constraint rather
+  than a cost penalty. The repository also provides a lidar obstacle tracker
+  based on an Interacting Multiple Model filter (constant-velocity and
+  constant-turn-rate), a Gazebo Harmonic demonstration, and a benchmarking
+  harness that compares the controller against the stock Nav2 local controllers
+  under matched speed caps, prediction horizons, and perception.
+keywords:
+  - robotics
+  - ROS 2
+  - Nav2
+  - model predictive control
+  - nonlinear optimisation
+  - motion planning
+  - obstacle avoidance
+  - mobile robots
+license: Apache-2.0
+version: 1.0.0
+date-released: '2026-07-19'
+references:
+  - type: software
+    title: 'ProxSuite: a scalable and efficient QP solver'
+    abstract: The QP solver ProxMPC builds each control cycle's sub-problem for.
+    authors:
+      - name: The Simple-Robotics team, INRIA
+    repository-code: 'https://github.com/Simple-Robotics/proxsuite'
+    license: BSD-2-Clause

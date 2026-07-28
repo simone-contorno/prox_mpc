@@ -1,0 +1,417 @@
+# Nav2 parameters for the ProxMPC controller simulation - predictive variant.
+#
+# Identical to nav2_prox_mpc.yaml except the FollowPath obstacle block, which
+# enables the predictive (dynamic) obstacle-avoidance feature (max_obstacles > 0,
+# predict_obstacles: true, with the wall-rejection guards). Selected by the launch
+# `predictive:=True` switch, which also starts the obstacle tracker. The baseline
+# nav2_prox_mpc.yaml keeps the feature off.
+#
+# This file is a copy of the stock nav2_bringup `nav2_params.yaml` (Jazzy) with
+# the changes below, so the rest of the navigation stack is the proven,
+# plugin-agnostic reference:
+#   1. controller_server -> FollowPath is repointed from the default MPPI
+#      controller to `prox_mpc_controller::ProxMpcController`, using the Unicycle
+#      model whose body twist [v, omega] matches the diff-drive TurtleBot3 waffle.
+#   2. amcl is seeded with an initial pose so headless runs localize without a
+#      manual "2D Pose Estimate" (the /initialpose path still works).
+# Everything else (planner, costmaps, smoother, collision monitor, BT, behaviors)
+# is unchanged from the stock file. The cmd_vel chain
+# controller_server(cmd_vel_nav) -> velocity_smoother(cmd_vel_smoothed)
+# -> collision_monitor(cmd_vel) -> ros_gz bridge is therefore preserved.
+amcl:
+  ros__parameters:
+    alpha1: 0.2
+    alpha2: 0.2
+    alpha3: 0.2
+    alpha4: 0.2
+    alpha5: 0.2
+    base_frame_id: "base_footprint"
+    beam_skip_distance: 0.5
+    beam_skip_error_threshold: 0.9
+    beam_skip_threshold: 0.3
+    do_beamskip: false
+    global_frame_id: "map"
+    lambda_short: 0.1
+    laser_likelihood_max_dist: 2.0
+    laser_max_range: 100.0
+    laser_min_range: -1.0
+    laser_model_type: "likelihood_field"
+    max_beams: 60
+    max_particles: 2000
+    min_particles: 500
+    odom_frame_id: "odom"
+    pf_err: 0.05
+    pf_z: 0.99
+    recovery_alpha_fast: 0.0
+    recovery_alpha_slow: 0.0
+    resample_interval: 1
+    robot_model_type: "nav2_amcl::DifferentialMotionModel"
+    save_pose_rate: 0.5
+    sigma_hit: 0.2
+    tf_broadcast: true
+    transform_tolerance: 1.0
+    update_min_a: 0.2
+    update_min_d: 0.25
+    z_hit: 0.5
+    z_max: 0.05
+    z_rand: 0.5
+    z_short: 0.05
+    scan_topic: scan
+    # Seed localization at the robot spawn pose so headless runs do not need a
+    # manual "2D Pose Estimate". Matches the default spawn pose in the launch.
+    set_initial_pose: true
+    initial_pose:
+      x: -2.0
+      y: -0.5
+      z: 0.0
+      yaw: 0.0
+
+bt_navigator:
+  ros__parameters:
+    global_frame: map
+    robot_base_frame: base_link
+    odom_topic: /odom
+    bt_loop_duration: 10
+    default_server_timeout: 20
+    wait_for_service_timeout: 1000
+    action_server_result_timeout: 900.0
+    navigators: ["navigate_to_pose", "navigate_through_poses"]
+    navigate_to_pose:
+      plugin: "nav2_bt_navigator::NavigateToPoseNavigator"
+    navigate_through_poses:
+      plugin: "nav2_bt_navigator::NavigateThroughPosesNavigator"
+    error_code_names:
+      - compute_path_error_code
+      - follow_path_error_code
+
+controller_server:
+  ros__parameters:
+    controller_frequency: 20.0
+    costmap_update_timeout: 0.30
+    min_x_velocity_threshold: 0.001
+    min_y_velocity_threshold: 0.5
+    min_theta_velocity_threshold: 0.001
+    failure_tolerance: 0.3
+    progress_checker_plugins: ["progress_checker"]
+    goal_checker_plugins: ["general_goal_checker"]
+    controller_plugins: ["FollowPath"]
+    use_realtime_priority: false
+
+    progress_checker:
+      plugin: "nav2_controller::SimpleProgressChecker"
+      required_movement_radius: 0.5
+      movement_time_allowance: 10.0
+    general_goal_checker:
+      stateful: True
+      plugin: "nav2_controller::SimpleGoalChecker"
+      xy_goal_tolerance: 0.25
+      yaw_goal_tolerance: 0.25
+
+    # ProxMPC controller plugin. The keys mirror config/prox_mpc_controller.yaml
+    # (the plugin's source of truth) but the model and a few limits are adapted to
+    # the diff-drive waffle so the commanded body twist is realizable.
+    FollowPath:
+      plugin: "prox_mpc_controller::ProxMpcController"
+
+      # Unicycle: control [v, omega] maps 1:1 onto a diff-drive cmd_vel.
+      model_plugin: "prox_mpc_core/Unicycle"
+      model_params:
+        L: 0.0              # unused by the unicycle; kept for interface symmetry
+
+      # Horizons and step.
+      np: 20
+      nc: 20
+      dt: 0.1
+
+      # Cruise speed [m/s] the global plan is sampled at. Set to the velocity
+      # smoother's 0.5 m/s cap so the reference sits ~1 m ahead over the horizon
+      # and forward motion dominates heading tracking.
+      desired_linear_vel: 0.5
+
+      # Cost weights. q_theta keeps the robot tight on the collision-free global
+      # path once forward motion dominates.
+      q_pos: 10.0
+      q_theta: 1.0
+      s_factor: 2.0
+      r_weight: 0.1
+      # Obstacle keep-out slack penalty (quadratic). At 1000, small violations of
+      # the inflated margin stay cheap enough to close the goal while cutting into
+      # the physical keep-out stays uneconomical.
+      w_weight: 1000.0
+
+      # Solver limits (core defaults).
+      max_int_iter_qp: 1500
+      max_ext_iter_qp: 10000
+      max_iter_sqp: 100
+      qp_type: false
+      guess: true
+      max_solver_failures: 3
+
+      # Obstacle avoidance - predictive feature enabled. The in-loop NMPC obstacle
+      # term runs alongside Nav2 (Nav2 still replans the global path). Tuned for
+      # single-/sparse-obstacle worlds:
+      #  * costmap_cost_threshold 253: ingest only lethal/inscribed cells. A lower
+      #    threshold also ingests the inflation ring, which then adds
+      #    robot_radius + safety_margin around each cell - double-counting the
+      #    robot radius into a phantom keep-out the robot stalls against. 253 adds
+      #    the keep-out exactly once.
+      #  * cbf_gamma 1.0: pointwise keep-out. A dense field may instead prefer a
+      #    lower gamma; this value targets the open-world single/dynamic cells.
+      #  * max_obstacles 4: capture the box plus adjacent wall cells.
+      max_obstacles: 4
+      safety_margin: 0.1
+      robot_radius: 0.22
+      cbf_gamma: 1.0
+      costmap_cost_threshold: 253
+      obstacle_cluster_radius: 0.3
+
+      # Predictive (dynamic) obstacle avoidance. The launch starts the tracker on
+      # /scan; a confirmed *moving* track is propagated over the horizon and bound
+      # to a dynamic slot, the static box/walls keep coming from the costmap
+      # (hybrid). max_dynamic_obstacle_radius rejects any extended track (a wall
+      # mis-reported as moving) from the predictive path so it cannot inflate the
+      # keep-out or erase real costmap cells - the tracker's max_cluster_radius is
+      # the first line of defense; this is the controller-side backstop.
+      predict_obstacles: true
+      obstacle_topic: "tracked_obstacles"
+      obstacle_timeout: 0.5
+      dynamic_speed_threshold: 0.2
+      # Small hedge (m/s) against residual prediction error as the sample ages.
+      prediction_uncertainty_growth: 0.05
+      # After an association break (obstacle direction reversal) the old track
+      # coasts as a phantom while the real obstacle is re-acquired as a new track;
+      # with a single slot the phantom can outrank the real track and the solver
+      # goes blind to it. Matters for dynamic obstacles, inert for the static box.
+      max_dynamic_obstacles: 2
+      max_dynamic_obstacle_radius: 0.5
+
+      log_level: "info"
+
+local_costmap:
+  local_costmap:
+    ros__parameters:
+      update_frequency: 5.0
+      publish_frequency: 2.0
+      global_frame: odom
+      robot_base_frame: base_link
+      rolling_window: true
+      width: 3
+      height: 3
+      resolution: 0.05
+      robot_radius: 0.22
+      plugins: ["voxel_layer", "inflation_layer"]
+      inflation_layer:
+        plugin: "nav2_costmap_2d::InflationLayer"
+        cost_scaling_factor: 3.0
+        inflation_radius: 0.70
+      voxel_layer:
+        plugin: "nav2_costmap_2d::VoxelLayer"
+        enabled: True
+        publish_voxel_map: True
+        origin_z: 0.0
+        z_resolution: 0.05
+        z_voxels: 16
+        max_obstacle_height: 2.0
+        mark_threshold: 0
+        observation_sources: scan
+        scan:
+          topic: /scan
+          max_obstacle_height: 2.0
+          clearing: True
+          marking: True
+          data_type: "LaserScan"
+          raytrace_max_range: 3.0
+          raytrace_min_range: 0.0
+          obstacle_max_range: 2.5
+          obstacle_min_range: 0.0
+      static_layer:
+        plugin: "nav2_costmap_2d::StaticLayer"
+        map_subscribe_transient_local: True
+      always_send_full_costmap: True
+
+global_costmap:
+  global_costmap:
+    ros__parameters:
+      update_frequency: 1.0
+      publish_frequency: 1.0
+      global_frame: map
+      robot_base_frame: base_link
+      robot_radius: 0.22
+      resolution: 0.05
+      track_unknown_space: true
+      plugins: ["static_layer", "obstacle_layer", "inflation_layer"]
+      obstacle_layer:
+        plugin: "nav2_costmap_2d::ObstacleLayer"
+        enabled: True
+        observation_sources: scan
+        scan:
+          topic: /scan
+          max_obstacle_height: 2.0
+          clearing: True
+          marking: True
+          data_type: "LaserScan"
+          raytrace_max_range: 3.0
+          raytrace_min_range: 0.0
+          obstacle_max_range: 2.5
+          obstacle_min_range: 0.0
+      static_layer:
+        plugin: "nav2_costmap_2d::StaticLayer"
+        map_subscribe_transient_local: True
+      inflation_layer:
+        plugin: "nav2_costmap_2d::InflationLayer"
+        cost_scaling_factor: 3.0
+        inflation_radius: 0.7
+      always_send_full_costmap: True
+
+map_saver:
+  ros__parameters:
+    save_map_timeout: 5.0
+    free_thresh_default: 0.25
+    occupied_thresh_default: 0.65
+    map_subscribe_transient_local: True
+
+planner_server:
+  ros__parameters:
+    expected_planner_frequency: 20.0
+    planner_plugins: ["GridBased"]
+    costmap_update_timeout: 1.0
+    GridBased:
+      plugin: "nav2_navfn_planner::NavfnPlanner"
+      tolerance: 0.5
+      use_astar: false
+      allow_unknown: true
+
+smoother_server:
+  ros__parameters:
+    smoother_plugins: ["simple_smoother"]
+    simple_smoother:
+      plugin: "nav2_smoother::SimpleSmoother"
+      tolerance: 1.0e-10
+      max_its: 1000
+      do_refinement: True
+
+behavior_server:
+  ros__parameters:
+    local_costmap_topic: local_costmap/costmap_raw
+    global_costmap_topic: global_costmap/costmap_raw
+    local_footprint_topic: local_costmap/published_footprint
+    global_footprint_topic: global_costmap/published_footprint
+    cycle_frequency: 10.0
+    behavior_plugins: ["spin", "backup", "drive_on_heading", "assisted_teleop", "wait"]
+    spin:
+      plugin: "nav2_behaviors::Spin"
+    backup:
+      plugin: "nav2_behaviors::BackUp"
+    drive_on_heading:
+      plugin: "nav2_behaviors::DriveOnHeading"
+    wait:
+      plugin: "nav2_behaviors::Wait"
+    assisted_teleop:
+      plugin: "nav2_behaviors::AssistedTeleop"
+    local_frame: odom
+    global_frame: map
+    robot_base_frame: base_link
+    transform_tolerance: 0.1
+    simulate_ahead_time: 2.0
+    max_rotational_vel: 1.0
+    min_rotational_vel: 0.4
+    rotational_acc_lim: 3.2
+
+waypoint_follower:
+  ros__parameters:
+    loop_rate: 20
+    stop_on_failure: false
+    action_server_result_timeout: 900.0
+    waypoint_task_executor_plugin: "wait_at_waypoint"
+    wait_at_waypoint:
+      plugin: "nav2_waypoint_follower::WaitAtWaypoint"
+      enabled: True
+      waypoint_pause_duration: 200
+
+velocity_smoother:
+  ros__parameters:
+    smoothing_frequency: 20.0
+    stamp_smoothed_velocity_with_smoothing_time: False
+    scale_velocities: False
+    feedback: "OPEN_LOOP"
+    max_velocity: [0.5, 0.0, 2.0]
+    min_velocity: [-0.5, 0.0, -2.0]
+    max_accel: [2.5, 0.0, 3.2]
+    max_decel: [-2.5, 0.0, -3.2]
+    odom_topic: "odom"
+    odom_duration: 0.1
+    deadband_velocity: [0.0, 0.0, 0.0]
+    velocity_timeout: 1.0
+
+collision_monitor:
+  ros__parameters:
+    base_frame_id: "base_footprint"
+    odom_frame_id: "odom"
+    cmd_vel_in_topic: "cmd_vel_smoothed"
+    cmd_vel_out_topic: "cmd_vel"
+    state_topic: "collision_monitor_state"
+    transform_tolerance: 0.2
+    source_timeout: 1.0
+    base_shift_correction: True
+    stop_pub_timeout: 2.0
+    polygons: ["FootprintApproach"]
+    FootprintApproach:
+      type: "polygon"
+      action_type: "approach"
+      footprint_topic: "/local_costmap/published_footprint"
+      time_before_collision: 1.2
+      simulation_time_step: 0.1
+      min_points: 6
+      visualize: False
+      enabled: True
+    observation_sources: ["scan"]
+    scan:
+      type: "scan"
+      topic: "scan"
+      min_height: 0.15
+      max_height: 2.0
+      enabled: True
+
+# Kept from the stock nav2_params.yaml: the navigation lifecycle manager brings up
+# docking_server, and it fails configure() (aborting the whole navigation bringup)
+# unless dock_plugins is provided. Unused by this demo but required to activate.
+docking_server:
+  ros__parameters:
+    controller_frequency: 50.0
+    initial_perception_timeout: 5.0
+    wait_charge_timeout: 5.0
+    dock_approach_timeout: 30.0
+    undock_linear_tolerance: 0.05
+    undock_angular_tolerance: 0.1
+    max_retries: 3
+    base_frame: "base_link"
+    fixed_frame: "odom"
+    dock_backwards: false
+    dock_prestaging_tolerance: 0.5
+    dock_plugins: ['simple_charging_dock']
+    simple_charging_dock:
+      plugin: 'opennav_docking::SimpleChargingDock'
+      docking_threshold: 0.05
+      staging_x_offset: -0.7
+      use_external_detection_pose: true
+      use_battery_status: false
+      use_stall_detection: false
+      external_detection_timeout: 1.0
+      external_detection_translation_x: -0.18
+      external_detection_translation_y: 0.0
+      external_detection_rotation_roll: -1.57
+      external_detection_rotation_pitch: -1.57
+      external_detection_rotation_yaw: 0.0
+      filter_coef: 0.1
+    controller:
+      k_phi: 3.0
+      k_delta: 2.0
+      v_linear_min: 0.15
+      v_linear_max: 0.15
+      use_collision_detection: true
+      costmap_topic: "local_costmap/costmap_raw"
+      footprint_topic: "local_costmap/published_footprint"
+      transform_tolerance: 0.1
+      projection_time: 5.0
+      simulation_step: 0.1
+      dock_collision_threshold: 0.3

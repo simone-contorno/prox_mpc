@@ -6,7 +6,6 @@ Panels:
         - /Global Options1
         - /RobotModel1
         - /Path1
-        - /MarkerArray1
       Splitter Ratio: 0.5
   - Class: rviz_common/Views
     Name: Views
@@ -58,16 +57,6 @@ Visualization Manager:
       Line Style: Lines
       Line Width: 0.03
       Alpha: 1
-    - Class: rviz_default_plugins/MarkerArray
-      Name: MarkerArray
-      Enabled: true
-      Topic:
-        Value: /prox_mpc/markers
-        Depth: 100
-        Durability Policy: Volatile
-        History Policy: Keep Last
-        Reliability Policy: Reliable
-      Namespaces: {}
   Global Options:
     Background Color: 48; 48; 48
     Fixed Frame: map

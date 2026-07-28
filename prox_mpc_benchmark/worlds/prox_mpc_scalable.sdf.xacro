@@ -1,0 +1,96 @@
+<?xml version="1.0"?>
+<!--
+  Scalable open-room world for the benchmark.
+
+  A room_x by room_y room centred on the origin; the four perimeter walls are
+  computed from room_x / room_y so the world matches a map produced by
+  generate_map.py with the same extent (origin [-room_x/2, -room_y/2]). World and
+  map are therefore generated from one source and cannot drift out of sync.
+
+  Args:
+    room_x, room_y : room extent [m] (presets 7 / 15 / 30).
+    headless       : drop the SceneBroadcaster when true (default true).
+-->
+<sdf version="1.6" xmlns:xacro="http://www.ros.org/wiki/xacro">
+  <xacro:arg name="room_x" default="7.0"/>
+  <xacro:arg name="room_y" default="7.0"/>
+  <xacro:arg name="headless" default="true"/>
+
+  <xacro:property name="rx" value="$(arg room_x)"/>
+  <xacro:property name="ry" value="$(arg room_y)"/>
+
+  <world name="default">
+    <plugin filename="gz-sim-physics-system" name="gz::sim::systems::Physics"/>
+    <plugin filename="gz-sim-user-commands-system" name="gz::sim::systems::UserCommands"/>
+  <xacro:unless value="$(arg headless)">
+    <plugin filename="gz-sim-scene-broadcaster-system" name="gz::sim::systems::SceneBroadcaster"/>
+  </xacro:unless>
+    <plugin filename="gz-sim-sensors-system" name="gz::sim::systems::Sensors">
+      <render_engine>ogre2</render_engine>
+    </plugin>
+    <plugin filename="gz-sim-imu-system" name="gz::sim::systems::Imu"/>
+
+    <light name='sun' type='directional'>
+      <cast_shadows>0</cast_shadows>
+      <pose>0 0 10 0 0 0</pose>
+      <diffuse>0.8 0.8 0.8 1</diffuse>
+      <specular>0.8 0.8 0.8 1</specular>
+      <attenuation>
+        <range>1000</range>
+        <constant>0.9</constant>
+        <linear>0.01</linear>
+        <quadratic>0.001</quadratic>
+      </attenuation>
+      <direction>-0.5 0.1 -0.9</direction>
+    </light>
+
+    <model name='ground_plane'>
+      <static>1</static>
+      <link name='link'>
+        <collision name='collision'>
+          <geometry><plane><normal>0 0 1</normal><size>100 100</size></plane></geometry>
+          <max_contacts>10</max_contacts>
+        </collision>
+        <visual name='visual'>
+          <geometry><plane><normal>0 0 1</normal><size>100 100</size></plane></geometry>
+          <material>
+            <ambient>0.8 0.8 0.8 1</ambient>
+            <diffuse>0.8 0.8 0.8 1</diffuse>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <scene><shadows>0</shadows></scene>
+    <physics name='3ms' type='ode'>
+      <max_step_size>0.003</max_step_size>
+      <real_time_factor>1</real_time_factor>
+    </physics>
+
+    <!-- Perimeter walls computed from room_x / room_y (origin-centred). -->
+    <xacro:macro name="wall" params="name x y sx sy">
+      <model name="${name}">
+        <static>1</static>
+        <pose>${x} ${y} 0.25 0 0 0</pose>
+        <link name="link">
+          <collision name="collision">
+            <geometry><box><size>${sx} ${sy} 0.5</size></box></geometry>
+          </collision>
+          <visual name="visual">
+            <geometry><box><size>${sx} ${sy} 0.5</size></box></geometry>
+            <material>
+              <ambient>0.6 0.6 0.6 1</ambient>
+              <diffuse>0.6 0.6 0.6 1</diffuse>
+            </material>
+          </visual>
+        </link>
+      </model>
+    </xacro:macro>
+
+    <xacro:wall name="wall_north" x="0.0"       y="${ry/2.0}"  sx="${rx+0.1}" sy="0.1"/>
+    <xacro:wall name="wall_south" x="0.0"       y="${-ry/2.0}" sx="${rx+0.1}" sy="0.1"/>
+    <xacro:wall name="wall_east"  x="${rx/2.0}"  y="0.0"       sx="0.1"       sy="${ry+0.1}"/>
+    <xacro:wall name="wall_west"  x="${-rx/2.0}" y="0.0"       sx="0.1"       sy="${ry+0.1}"/>
+
+  </world>
+</sdf>

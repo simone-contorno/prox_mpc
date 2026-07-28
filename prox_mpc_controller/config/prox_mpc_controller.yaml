@@ -1,7 +1,7 @@
 # ProxMpcController configuration. This file is the single source of truth for
-# the controller's parameters, mirroring the demo's parameter set. Defaults for
-# the non-obstacle parameters match the values validated in the core, so an
-# unconfigured controller reproduces the reference behaviour.
+# the controller's parameters. Defaults for the non-obstacle parameters match
+# the values validated in the core, so an unconfigured controller reproduces
+# the reference behavior.
 controller_server:
   ros__parameters:
     # Standard Nav2 controller_server wiring (update rates, goal and progress
@@ -11,14 +11,26 @@ controller_server:
 
       # Model loaded by name through pluginlib. Adding a model does not require
       # editing the core or this list; the controller configures it after loading.
+      # The model must declare a bound on its speed input (u[0]) and control-rate
+      # (du) bounds for both channels: they set the speed cap and the deceleration
+      # ramp, and a model missing either fails configure().
       model_plugin: "prox_mpc_core/Bicycle"
       model_params:        # forwarded to Model::configure(); absent keys keep the literals
         L: 1.6             # wheelbase [m]
+        v_max: 0.0         # [m/s] forward input bound; forwarded only when > 0, else the model literal
+        v_min: 0.0         # [m/s] reverse input bound; used only alongside a positive v_max (< 0, else -v_max)
 
       # Horizons and step (couple via Np / dt / T).
       np: 20
       nc: 20
       dt: 0.1
+
+      # Reference tracking. Cruise speed the global plan is sampled at to build
+      # the state/control reference; tapered toward zero near the plan end and
+      # clamped by any active speed limit. Must not exceed the model's speed
+      # bound (the bundled Bicycle/Unicycle default v_max to 3.0 m/s).
+      desired_linear_vel: 1.0   # [m/s]
+      curvature_gain: 0.0       # cruise reduction on path curvature; 0.0 disables it
 
       # Cost weights (assembled as in the demo).
       q_pos: 10.0
@@ -27,12 +39,16 @@ controller_server:
       r_weight: 0.1
       w_weight: 100.0
 
-      # Solver limits (defaults match the core).
+      # Solver limits (defaults match the core). The three iteration caps must be
+      # >= 1: 0 is rejected by ProxQP and a negative value wraps to an unbounded
+      # loop in the core, so either fails configure() rather than degrading to a
+      # QP that can never converge.
       max_int_iter_qp: 1500
       max_ext_iter_qp: 10000
       max_iter_sqp: 100
+      max_solve_time: 0.0   # [s] wall-clock budget for the SQP loop; 0 = disabled (iteration caps only)
       qp_type: false        # false = sparse, true = dense
-      guess: true           # warm start
+      guess: true           # true = ProxQP equality-constrained initial guess per QP; false = no initial guess
 
       # Consecutive non-converged solves tolerated before the controller raises a
       # recovery; each failure decelerates toward zero at the robot's limit.
@@ -42,12 +58,31 @@ controller_server:
       max_obstacles: 1
       safety_margin: 0.1    # [m] folded into d_safe by the controller
       robot_radius: 0.5     # [m] folded into d_safe by the controller
-      cbf_gamma: 1.0        # reserved for a control-barrier-function extension; 1.0 keeps the pointwise constraint
+      cbf_gamma: 1.0        # discrete-time CBF rate h(x_{k+1}) >= (1-gamma) h(x_k); 1.0 = pointwise constraint, <1 couples nodes for smoother avoidance
 
       # Obstacle-source settings used by the controller to reduce the local
       # costmap and sensors to at most K (o_x, o_y, d_safe) triples per node.
       costmap_cost_threshold: 200
       obstacle_cluster_radius: 0.3
+      max_obstacle_scan_cells: 50   # [cells] per-node costmap scan half-window cap
+
+      # Predictive (dynamic) obstacle avoidance. When enabled and a fresh
+      # tracked-obstacle message is available, each dynamic track is propagated
+      # over the horizon (constant velocity) and bound to a fixed obstacle slot
+      # across nodes, so the NMPC avoids where each obstacle will be; the rest of
+      # the K slots are filled from the costmap (hybrid). predict_obstacles=false
+      # (and any stale/missing tracking data) reproduces the costmap-only fill.
+      predict_obstacles: false              # opt-in; false selects the costmap-only obstacle fill
+      obstacle_topic: "tracked_obstacles"   # prox_mpc_msgs/ObstacleArray input
+      obstacle_timeout: 0.5                 # [s] staleness before costmap-only fallback
+      dynamic_speed_threshold: 0.1          # [m/s] speed above which a track is propagated
+      prediction_uncertainty_growth: 0.0    # [m/s] extra d_safe per second of prediction
+      max_dynamic_obstacles: 2              # slot budget reserved for dynamic tracks
+      max_dynamic_obstacle_radius: 0.0      # [m] skip tracks larger than this (walls); 0 = no limit
+
+      # Solver telemetry. Publishes prox_mpc_msgs/SolverDiagnostics on
+      # <plugin>/diagnostics (only when subscribed); off by default.
+      publish_diagnostics: false
 
       # Logging (node-only logger level).
       log_level: "info"     # debug | info | warn | error | fatal

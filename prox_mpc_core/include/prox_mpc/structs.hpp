@@ -16,15 +16,15 @@ namespace prox_mpc
 /* Problem dimensions. */
 struct ProbDim
 {
-  size_t dvars;   // Number of decision variables.
-  size_t Np;      // Prediction horizon shooting nodes.
-  size_t Nc;      // Control horizon shooting horizon.
-  size_t n;       // State variables number.
-  size_t m;       // Control variables number.
-  double dt;      // Step size.
-  double T;       // Prediction horizon.
-  size_t n_eq;    // Equalities number.
-  size_t n_ineq;  // Inequalities number.
+  size_t dvars{0};   // Number of decision variables.
+  size_t Np{0};      // Prediction horizon shooting nodes.
+  size_t Nc{0};      // Control horizon shooting nodes.
+  size_t n{0};       // State variables number.
+  size_t m{0};       // Control variables number.
+  double dt{0.0};    // Step size.
+  double T{0.0};     // Prediction horizon.
+  size_t n_eq{0};    // Equalities number.
+  size_t n_ineq{0};  // Inequalities number.
 };
 
 /* Model Predictive Control parameters. */
@@ -39,12 +39,12 @@ struct MPCParams
   MatrixXd W;   // Slack variables weight matrix.
 };
 
-/* Model informations. */
+/* Model information. */
 struct ModelInfo
 {
   std::string name;  // Model name.
-  size_t n;          // State vector dimension.
-  size_t m;          // Control vector dimension.
+  size_t n{0};       // State vector dimension.
+  size_t m{0};       // Control vector dimension.
   VectorXd params;   // Model parameters.
   VectorXd x;        // State vector.
   VectorXd u;        // Control vector.

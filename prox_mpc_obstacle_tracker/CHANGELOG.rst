@@ -1,0 +1,13 @@
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+Changelog for package prox_mpc_obstacle_tracker
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+1.0.0 (2026-07-28)
+------------------
+* Initial release: lifecycle node that clusters a 2D ``LaserScan``, associates
+  clusters to an IMM (constant-velocity + constant-turn-rate) filter in a fixed
+  frame, and publishes a ``prox_mpc_msgs/ObstacleArray``.
+* Composable component registration plus a mutually-exclusive callback group and
+  teardown guard, so it is safe under a MultiThreadedExecutor; node-only
+  ``log_level`` parameter and a standalone launch file.
+* Contributors: Simone Contorno

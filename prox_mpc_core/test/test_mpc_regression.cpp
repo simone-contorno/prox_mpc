@@ -9,13 +9,14 @@
 // obstacle-off solver path.
 
 #include <memory>
+#include <tuple>
 
 #include <gtest/gtest.h>
 
 #include <proxsuite/proxqp/status.hpp>
 
 #include <prox_mpc/mpc.hpp>
-#include <prox_mpc/models/bike.hpp>
+#include <prox_mpc/models/bicycle.hpp>
 
 using prox_mpc::Bicycle;
 using prox_mpc::MPC;
@@ -26,6 +27,10 @@ namespace
 // Regression tolerance. The obstacle-off path is reproduced bit-for-bit on the
 // reference build; kTol leaves margin for floating-point/platform variation
 // while staying far tighter than any real logic change would move the solution.
+// The reference constants below were captured against the locally provisioned
+// ProxSuite; the canonical reproducible dependency is the apt package
+// ros-jazzy-proxsuite, which CI provisions via rosdep, so a divergence surfaces
+// here rather than as a false green.
 constexpr double kTol = 1e-6;
 
 // Build the demo's obstacle-off configuration and run one solve() from pose 0.
@@ -73,6 +78,48 @@ std::tuple<MatrixXd, MatrixXd> solveDemoObstacleOff()
   EXPECT_EQ(mpc->qp_info.status, proxsuite::proxqp::QPSolverOutput::PROXQP_SOLVED);
   return traj;
 }
+
+// A bicycle MPC whose QP iteration caps are too low to converge, so the SQP loop
+// never sees PROXQP_SOLVED and runs until either max_iter_sqp or the optional
+// wall-clock budget stops it. Used to exercise the wall-clock budget.
+std::shared_ptr<MPC> makeNonConvergingMpc(double max_solve_time, size_t max_iter_sqp)
+{
+  auto model = std::make_shared<Bicycle>();
+  const size_t n = model->getN();
+  const size_t m = model->getM();
+
+  VectorXd q_diag = VectorXd::Constant(n, 1.0);
+  q_diag(0) = 10.0;
+  q_diag(1) = 10.0;
+  MatrixXd Q = q_diag.asDiagonal();
+
+  auto mpc = std::make_shared<MPC>();
+  mpc->setNp(20);
+  mpc->setNc(20);
+  mpc->setdt(0.1);
+  mpc->setQ(Q);
+  mpc->setS(2.0 * Q);
+  mpc->setR(0.1 * MatrixXd::Identity(m, m));
+  mpc->setW(MatrixXd::Constant(1, 1, 100.0));
+  mpc->setMaxIntIterQP(1);   // too few QP iterations to converge, so the SQP loop
+  mpc->setMaxExtIterQP(1);   // never reaches PROXQP_SOLVED and keeps iterating
+  mpc->setMaxIterSQP(max_iter_sqp);
+  mpc->setMaxSolveTime(max_solve_time);
+  mpc->init(model);
+
+  MatrixXd goal_x = MatrixXd::Zero(21, n);
+  for (size_t k = 0; k <= 20; k++) {
+    goal_x(k, 0) = 5.0;
+  }
+  MatrixXd goal_u = MatrixXd::Zero(20, m);
+  for (size_t k = 0; k < 20; k++) {
+    goal_u(k, 0) = 1.0;
+  }
+  mpc->setGoalX(goal_x);
+  mpc->setGoalU(goal_u);
+  mpc->setPose(VectorXd::Zero(n));
+  return mpc;
+}
 }  // namespace
 
 TEST(MpcRegression, ObstacleOffMatchesBaseline)
@@ -103,4 +150,70 @@ TEST(MpcRegression, ObstacleOffMatchesBaseline)
   // Last control input reaches the reference speed.
   EXPECT_NEAR(u(19, 0), 1.0000005738580449, kTol);
   EXPECT_NEAR(u(19, 1), 0.0, kTol);
+}
+
+// The optional wall-clock budget bounds the SQP loop: a sub-nanosecond budget
+// stops it well before max_iter_sqp, while the disabled budget (0, the default)
+// lets a non-converging problem run to the iteration cap. Either way the
+// unconverged status routes the caller to its fail-safe, so a slow solve cannot
+// overrun the control cycle.
+TEST(SqpBudget, WallClockBudgetStopsLoopEarly)
+{
+  constexpr size_t kMaxSqp = 30;
+
+  auto budgeted = makeNonConvergingMpc(1e-9, kMaxSqp);   // sub-nanosecond budget
+  budgeted->solve();
+  EXPECT_NE(budgeted->qp_info.status, proxsuite::proxqp::QPSolverOutput::PROXQP_SOLVED);
+  EXPECT_LT(budgeted->sqp_iter, kMaxSqp);                // stopped early by the budget
+
+  auto unbudgeted = makeNonConvergingMpc(0.0, kMaxSqp);  // budget disabled
+  unbudgeted->solve();
+  EXPECT_NE(unbudgeted->qp_info.status, proxsuite::proxqp::QPSolverOutput::PROXQP_SOLVED);
+  EXPECT_EQ(unbudgeted->sqp_iter, kMaxSqp);              // ran to the SQP iteration cap
+}
+
+// Move-blocking (Nc < Np): the move-blocking clamp holds the control constant
+// past the control horizon, so a configuration with fewer control nodes than
+// prediction nodes still assembles a solvable QP and drives the bicycle forward.
+TEST(MoveBlocking, NcLessThanNpSolvesAndAdvances)
+{
+  auto model = std::make_shared<Bicycle>();
+  const size_t n = model->getN();
+  const size_t m = model->getM();
+
+  VectorXd q_diag = VectorXd::Constant(n, 1.0);
+  q_diag(0) = 10.0;
+  q_diag(1) = 10.0;
+  MatrixXd Q = q_diag.asDiagonal();
+
+  auto mpc = std::make_shared<MPC>();
+  mpc->setNp(20);
+  mpc->setNc(5);                 // move-blocking: fewer control nodes than prediction nodes
+  mpc->setdt(0.1);
+  mpc->setQ(Q);
+  mpc->setS(2.0 * Q);
+  mpc->setR(0.1 * MatrixXd::Identity(m, m));
+  mpc->setW(MatrixXd::Constant(1, 1, 100.0));
+  mpc->init(model);
+  ASSERT_EQ(mpc->getNp(), 20u);
+  ASSERT_EQ(mpc->getNc(), 5u);
+
+  MatrixXd goal_x = MatrixXd::Zero(21, n);
+  for (size_t k = 0; k <= 20; k++) {
+    goal_x(k, 0) = 5.0;
+  }
+  MatrixXd goal_u = MatrixXd::Zero(5, m);
+  for (size_t k = 0; k < 5; k++) {
+    goal_u(k, 0) = 1.0;
+  }
+  mpc->setGoalX(goal_x);
+  mpc->setGoalU(goal_u);
+  mpc->setPose(VectorXd::Zero(n));
+
+  auto [x, u] = mpc->solve();
+  EXPECT_EQ(mpc->qp_info.status, proxsuite::proxqp::QPSolverOutput::PROXQP_SOLVED);
+  EXPECT_EQ(u.rows(), 5);            // exactly Nc control rows
+  EXPECT_GT(u(0, 0), 0.0);           // accelerates forward toward the goal
+  EXPECT_GT(x(20, 0), x(0, 0));      // the predicted trajectory advances in +x
+  EXPECT_TRUE(x.allFinite());
 }

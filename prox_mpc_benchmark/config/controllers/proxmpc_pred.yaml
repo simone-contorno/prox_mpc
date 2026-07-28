@@ -1,0 +1,57 @@
+# ProxMPC controller preset (FollowPath block) - predictive variant for the
+# benchmark matrix. Identical to proxmpc.yaml except for two knobs: dynamic
+# obstacles enter through prediction (predict_obstacles on; the benchmark launch
+# starts prox_mpc_obstacle_tracker on the simulated /scan) and the obstacle slack
+# penalty w_weight is hardened (see below). Keeping max_obstacles 4 /
+# cbf_gamma 1.0 identical to the reactive preset isolates the effect of
+# prediction. A confirmed *moving* track is propagated over the horizon and bound
+# to a dynamic slot; the static box/walls still come from the costmap (hybrid).
+FollowPath:
+  plugin: "prox_mpc_controller::ProxMpcController"
+  np: 20
+  nc: 20
+  dt: 0.1
+  desired_linear_vel: 0.5
+  q_pos: 10.0
+  q_theta: 1.0
+  s_factor: 2.0
+  r_weight: 0.1
+  # Obstacle keep-out slack penalty (quadratic). At 1000, small violations of the
+  # inflated margin stay cheap enough to close the goal while cutting into the
+  # physical keep-out stays uneconomical.
+  w_weight: 1000.0
+  max_int_iter_qp: 1500
+  max_ext_iter_qp: 10000
+  max_iter_sqp: 100
+  qp_type: false
+  guess: true
+  max_solver_failures: 3
+  max_obstacles: 4
+  safety_margin: 0.1
+  robot_radius: 0.22
+  cbf_gamma: 1.0
+  # 253 (inscribed + lethal only, not the reactive preset's 200): the static
+  # fill adds robot_radius + safety_margin around every cell it ingests, so
+  # feeding it the inflation ring (cost 200+ extends ~0.5 m past the obstacle)
+  # double-counts the robot radius and can turn the goal region into a phantom
+  # no-go zone that stalls the robot short of the goal.
+  costmap_cost_threshold: 253
+  obstacle_cluster_radius: 0.3
+  # Predictive (dynamic) obstacle avoidance enabled. Consumes the tracker's
+  # /tracked_obstacles (odom frame); a confirmed moving track is anticipated over
+  # the horizon, static structure stays costmap-driven (hybrid).
+  predict_obstacles: true
+  obstacle_topic: "tracked_obstacles"
+  obstacle_timeout: 0.5
+  dynamic_speed_threshold: 0.2
+  # Small hedge [m/s] against residual prediction error as the sample ages.
+  prediction_uncertainty_growth: 0.05
+  # 2 (not 1): after an association break (obstacle direction reversal) the old
+  # track coasts as a phantom for drop_count scans while the real obstacle is
+  # re-acquired as a new track; with a single slot the phantom can outrank the
+  # real track and the solver goes blind to it.
+  max_dynamic_obstacles: 2
+  max_dynamic_obstacle_radius: 0.5
+  # Opt-in per-cycle SolverDiagnostics; only-when-subscribed so the metrics node
+  # taps FollowPath/diagnostics with zero cost when nothing listens.
+  publish_diagnostics: true

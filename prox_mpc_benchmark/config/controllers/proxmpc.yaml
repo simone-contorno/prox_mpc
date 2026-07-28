@@ -1,0 +1,32 @@
+# ProxMPC controller preset (FollowPath block) for the benchmark matrix.
+# Mirrors prox_mpc_controller/config/prox_mpc_controller.yaml but turns on the
+# opt-in solver telemetry and the in-loop NMPC obstacle term so the metrics node
+# can measure feasibility on the dynamic scenarios. The robot/model pairing comes
+# from the robot preset (waffle -> Unicycle, ackermann -> Bicycle).
+FollowPath:
+  plugin: "prox_mpc_controller::ProxMpcController"
+  np: 20
+  nc: 20
+  dt: 0.1
+  desired_linear_vel: 0.5
+  q_pos: 10.0
+  q_theta: 1.0
+  s_factor: 2.0
+  r_weight: 0.1
+  w_weight: 100.0
+  max_int_iter_qp: 1500
+  max_ext_iter_qp: 10000
+  max_iter_sqp: 100
+  qp_type: false
+  guess: true
+  max_solver_failures: 3
+  max_obstacles: 4
+  safety_margin: 0.1
+  robot_radius: 0.22
+  cbf_gamma: 1.0
+  costmap_cost_threshold: 200
+  obstacle_cluster_radius: 0.3
+  predict_obstacles: false
+  # Opt-in per-cycle SolverDiagnostics; only-when-subscribed so the metrics node
+  # taps FollowPath/diagnostics with zero cost when nothing listens.
+  publish_diagnostics: true

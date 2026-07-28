@@ -1,7 +1,7 @@
 prox_mpc_simulation:
   ros__parameters:
-    # Model: "bike" (4 states, bicycle) or "r2d2" (3 states, unicycle).
-    model: "bike"
+    # "bicycle" (4-state) or "unicycle" (3-state).
+    model: "bicycle"
 
     # Horizons and step size.
     np: 20            # prediction horizon shooting nodes
@@ -15,11 +15,17 @@ prox_mpc_simulation:
     r_weight: 0.1     # control weight
     w_weight: 100.0   # obstacle slack penalty
 
+    # Start pose. start_theta is applied by any model with >= 3 states.
+    start_x: 0.0      # initial position x [m]
+    start_y: 0.0      # initial position y [m]
+    start_theta: 0.0  # initial heading [rad]
+
     # Reference.
     v_ref: 1.0        # desired forward speed [m/s]
     goal_x: 5.0       # goal position x [m]
     goal_y: 0.0       # goal position y [m]
     goal_theta: 0.0   # goal heading [rad]
+    goal_tol: 0.25    # goal reached when within this distance [m]
 
     # Obstacle (off by default for a clean tracking demo).
     obstacle_enable: false
@@ -28,6 +34,7 @@ prox_mpc_simulation:
     obs_x: 2.5
     obs_y: 0.6
 
-    # Logging.
+    # Logging and telemetry.
     report_period: 50         # log solve-time stats every N control steps
     log_level: "info"         # debug | info | warn | error | fatal
+    publish_diagnostics: true # publish prox_mpc_msgs/SolverDiagnostics per cycle

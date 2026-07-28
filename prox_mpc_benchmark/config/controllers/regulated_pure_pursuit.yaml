@@ -1,0 +1,25 @@
+# Regulated Pure Pursuit preset (FollowPath block) for cross-controller comparison.
+FollowPath:
+  plugin: "nav2_regulated_pure_pursuit_controller::RegulatedPurePursuitController"
+  desired_linear_vel: 0.5
+  # Set below the 0.6 upstream default: at the longer lookahead, the carrot cuts
+  # across obstacle inflation and trips the collision-ahead abort; 0.4 keeps the
+  # robot on the replanned detour.
+  lookahead_dist: 0.4
+  min_lookahead_dist: 0.3
+  max_lookahead_dist: 0.9
+  use_velocity_scaled_lookahead_dist: false
+  transform_tolerance: 0.1
+  use_collision_detection: true
+  max_allowed_time_to_collision_up_to_carrot: 1.0
+  use_regulated_linear_velocity_scaling: true
+  # RPP cannot deviate from the path, so cost-regulated slowing near high cost
+  # is its only obstacle response besides the emergency stop; enabled to give it
+  # a fair chance on the crossing/orbiting movers.
+  use_cost_regulated_linear_velocity_scaling: true
+  regulated_linear_scaling_min_radius: 0.9
+  regulated_linear_scaling_min_speed: 0.25
+  use_rotate_to_heading: true
+  rotate_to_heading_min_angle: 0.785
+  max_angular_accel: 3.2
+  max_robot_pose_search_dist: 10.0

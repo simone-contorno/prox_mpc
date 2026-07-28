@@ -1,0 +1,75 @@
+# prox_mpc_obstacle_tracker configuration (single source of truth for the
+# tracker's parameters). The detector clusters a 2D LaserScan, transforms the
+# centroids into a fixed tracking frame, and runs one IMM (constant-velocity
+# + constant-turn-rate) filter per track, publishing sampled predicted
+# positions per obstacle. All parameters are double / int / bool / string per
+# the project type rules.
+prox_mpc_obstacle_tracker:
+  ros__parameters:
+    # Logging.
+    log_level: "info"                  # node-only verbosity: debug/info/warn/error/fatal
+
+    # Interfaces.
+    scan_topic: "scan"                 # input sensor_msgs/LaserScan (sensor-data QoS)
+    output_topic: "tracked_obstacles"  # output prox_mpc_msgs/ObstacleArray (reliable)
+    tracking_frame: "odom"             # non-rotating frame velocity is estimated in
+
+    # Detection / clustering.
+    cluster_gap: 0.3           # [m] Euclidean gap that closes a cluster
+    min_cluster_points: 3      # drop clusters with fewer member returns
+    max_clusters: 20           # cap clusters per scan (largest kept) to bound cost
+    # Reject extended structure (walls): their cluster centroid is not a stable
+    # physical point and drifts as the robot moves, so without this they would be
+    # tracked as phantom fast-moving obstacles. 0 disables the filter; a compact
+    # obstacle (person/box) is well under this, a wall well over it.
+    max_cluster_radius: 0.6    # [m] drop clusters whose enclosing radius exceeds this
+    min_detection_range: 0.0   # [m] lower range cutoff (0 -> use the scan range_min)
+    # Upper range cutoff [m]. Matches the benchmark costmap obstacle_max_range (3.0)
+    # for equal perception there; the demo's predictive costmaps use 2.5.
+    # Wall rejection is max_cluster_radius's job, not this cutoff's.
+    # Must be greater than min_detection_range, or 0 (no cap); a reversed pair
+    # fails on_configure instead of silently discarding every scan.
+    max_detection_range: 3.0   # [m] upper range cutoff (0 -> use the scan range_max)
+    # Arc-centroid -> disc-centre correction. A lidar sees only the near arc of
+    # a compact obstacle, so the raw cluster centroid is biased toward the sensor
+    # and slides around the disc as the robot passes, producing position error
+    # plus a fake tangential velocity that cancels the true motion during close
+    # passes. The centroid is pushed away from the sensor along its ray by this fraction
+    # of the enclosing cluster radius (0.5 ~ exact for the close-range half-disc
+    # arc; under-corrects thin far arcs, which stays conservative). 0 disables.
+    cluster_center_offset_gain: 0.5 # [0..1] fraction of the cluster radius
+    transform_timeout: 0.1     # [s] TF lookup timeout for the scan -> tracking frame
+
+    # Association.
+    association_gate: 0.5       # [m] max track-to-cluster gating distance
+
+    # Constant-velocity model (IMM model 1; also the single-CV filter).
+    process_noise: 0.1              # accel spectral density q [m^2/s^4]
+    # Position measurement variance [m^2], calibrated to the centroid noise of the
+    # benchmark scan simulator (~2-4 cm quantization jitter -> ~0.002 m^2).
+    measurement_noise: 0.002        # position measurement variance [m^2]
+    initial_velocity_variance: 1.0  # initial vx/vy variance [m^2/s^2]
+
+    # IMM (CV + CTRV). imm_enabled: false selects the single-CV filter instead.
+    # CV stay 0.95 gives a ~20-scan expected mode dwell at 10 Hz; CTRV stay 0.99
+    # keeps the turning model sticky on sustained orbits. Both must lie in
+    # (0.0, 1.0) exclusive.
+    imm_enabled: true
+    imm_p_cv_stay: 0.95               # Markov P(CV -> CV); off-diagonal is 1 - this
+    imm_p_ctrv_stay: 0.99             # Markov P(CTRV -> CTRV); off-diagonal is 1 - this
+    ctrv_process_noise_accel: 1.0     # sigma_a^2 [m^2/s^4] (discrete white-noise form), >= 0
+    ctrv_process_noise_yaw_accel: 1.0 # sigma_wd^2 [rad^2/s^4] (omega random walk), >= 0
+    ctrv_init_omega_variance: 1.0     # [rad^2/s^2] omega variance at birth / CV->CTRV mix, > 0
+
+    # prediction_steps in [0, 100] samples (0 = none, straight-ray fallback); prediction_dt > 0 s.
+    prediction_steps: 25   # [samples] predicted positions published per obstacle
+    prediction_dt: 0.1     # [s] spacing between predicted samples
+
+    # Track lifecycle. drop_count stays small on purpose: a long-coasting track
+    # turns into a published phantom after an association break (e.g. an obstacle
+    # direction reversal), which competes with the re-acquired real track for the
+    # controller's dynamic slots. Track continuity through range dropouts is owned
+    # by max_detection_range, not by coasting.
+    confirm_count: 3   # consecutive hits before a track is published
+    drop_count: 3      # consecutive misses tolerated before a track is dropped
+    max_tracks: 10     # cap on simultaneously held tracks

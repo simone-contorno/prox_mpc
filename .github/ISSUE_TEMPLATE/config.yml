@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security vulnerability
+    url: https://github.com/simone-contorno/prox_mpc/security/advisories/new
+    about: Report privately. Do not open a public issue for an exploitable flaw.
+  - name: Question or usage help
+    url: https://github.com/simone-contorno/prox_mpc/discussions
+    about: Ask about tuning, integration, or interpreting benchmark results.

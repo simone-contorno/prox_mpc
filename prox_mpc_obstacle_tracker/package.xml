@@ -1,0 +1,42 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>prox_mpc_obstacle_tracker</name>
+  <version>1.0.0</version>
+  <description>In-house 2D-lidar dynamic-obstacle detector and tracker for
+  ProxMPC: a lifecycle node that clusters a LaserScan, associates clusters to
+  IMM (constant-velocity / constant-turn-rate) Kalman tracks in a fixed frame,
+  and publishes their position and velocity as a prox_mpc_msgs/ObstacleArray.
+  License-clean (no third-party trackers).</description>
+  <maintainer email="simone.contorno@outlook.it">Simone Contorno</maintainer>
+  <license>Apache-2.0</license>
+  <url type="repository">https://github.com/simone-contorno/prox_mpc</url>
+  <url type="bugtracker">https://github.com/simone-contorno/prox_mpc/issues</url>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <depend>eigen</depend>
+  <depend>geometry_msgs</depend>
+  <depend>lifecycle_msgs</depend>
+  <depend>prox_mpc_msgs</depend>
+  <depend>rclcpp</depend>
+  <depend>rclcpp_components</depend>
+  <depend>rclcpp_lifecycle</depend>
+  <depend>sensor_msgs</depend>
+  <depend>tf2</depend>
+  <depend>tf2_ros</depend>
+
+  <exec_depend>ament_index_python</exec_depend>
+  <exec_depend>launch</exec_depend>
+  <exec_depend>launch_ros</exec_depend>
+  <exec_depend>python3-yaml</exec_depend>
+  <exec_depend>ros2launch</exec_depend>
+
+  <test_depend>ament_cmake_gtest</test_depend>
+  <test_depend>ament_lint_auto</test_depend>
+  <test_depend>ament_lint_common</test_depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>

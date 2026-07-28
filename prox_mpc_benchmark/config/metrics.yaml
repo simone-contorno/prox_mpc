@@ -1,0 +1,25 @@
+# Benchmark metric set, pass thresholds, and repeat count.
+# The orchestrator records every metric; thresholds classify a run as pass/fail and
+# the aggregator reports mean +/- std over `repeats` (the precision signal).
+
+repeats: 5
+
+# MPC sizing / rate shared by the standalone (b1) and Nav2 modes unless a scenario
+# or controller preset overrides it.
+control:
+  dt: 0.1           # control period [s]; the real-time budget is 1000*dt ms
+  np: 20            # prediction horizon nodes
+  nc: 20            # control horizon nodes
+  v_ref: 1.0        # cruise speed [m/s]
+  goal_tol: 0.25    # goal-reached radius [m]
+
+metrics:
+  accuracy:
+    goal_error_m: {max: 0.25}        # final distance to goal
+    cross_track_rms_m: {max: 1.0}    # RMS deviation from the reference polyline
+  realtime:
+    solve_ms_p95: {max: 50.0}        # 95th-pct wall solve time (20 Hz budget = 50 ms)
+    deadline_miss_rate: {max: 0.05}  # fraction of cycles over the 1000*dt budget
+  feasibility:
+    infeasible_rate: {max: 0.05}     # fraction of cycles with QP status != SOLVED
+    max_obstacle_slack_m: {max: 0.5} # peak soft keep-out relaxation

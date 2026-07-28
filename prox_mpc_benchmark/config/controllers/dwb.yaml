@@ -1,0 +1,36 @@
+# DWB local planner preset (FollowPath block) for cross-controller comparison.
+# Stock nav2_dwb_controller params trimmed to the diff-drive case; the Ackermann
+# robot receives the same Twist converted to steering by the steering bridge.
+# Obstacle avoidance is the BaseObstacle critic (scale 0.02, the nav2_bringup
+# default, calibrated to that critic's raw costmap-cost magnitude) fed the same
+# costmap + inflation as every other controller; the path/goal critic scales are
+# the nav2_bringup values and are on a different numeric footing.
+FollowPath:
+  plugin: "dwb_core::DWBLocalPlanner"
+  debug_trajectory_details: True
+  min_vel_x: 0.0
+  min_vel_y: 0.0
+  max_vel_x: 0.5
+  max_vel_y: 0.0
+  max_vel_theta: 1.0
+  min_speed_xy: 0.0
+  max_speed_xy: 0.5
+  min_speed_theta: 0.0
+  acc_lim_x: 2.5
+  acc_lim_theta: 3.2
+  decel_lim_x: -2.5
+  decel_lim_theta: -3.2
+  vx_samples: 20
+  vtheta_samples: 20
+  sim_time: 2.0           # fair tuning: 2.0 s prediction horizon, matching ProxMPC (np*dt) and MPPI
+  transform_tolerance: 0.2
+  xy_goal_tolerance: 0.24  # match the shared general_goal_checker (nav2_b2_base.yaml)
+  critics: ["RotateToGoal", "Oscillation", "BaseObstacle", "GoalAlign", "PathAlign", "PathDist", "GoalDist"]
+  # BaseObstacle scores only the trajectory endpoint. Left at the nav2_bringup
+  # default; the tuning pass is recorded in the comparison document.
+  BaseObstacle.scale: 0.02
+  PathAlign.scale: 32.0
+  GoalAlign.scale: 24.0
+  PathDist.scale: 32.0
+  GoalDist.scale: 24.0
+  RotateToGoal.scale: 32.0

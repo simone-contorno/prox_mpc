@@ -1,0 +1,51 @@
+name: Feature request
+description: Suggest a capability or improvement.
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem does this solve?
+      description: |
+        Describe the situation you are stuck in, not just the feature you want.
+        The underlying problem often has a better solution than the one first
+        imagined.
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Including existing parameters or Nav2 features that partly cover this.
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Solver / NMPC formulation
+        - Nav2 controller plugin
+        - Obstacle tracking / prediction
+        - Robot models (kinematics)
+        - Benchmarking / evaluation
+        - Documentation
+        - Packaging / build / CI
+        - Other
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: contribution
+    attributes:
+      label: Would you be willing to work on this?
+      description: Entirely optional - it just helps with planning.
+      options:
+        - label: I would be willing to open a PR for this.

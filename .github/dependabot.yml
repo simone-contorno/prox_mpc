@@ -1,0 +1,19 @@
+version: 2
+updates:
+  # GitHub Actions are SHA-pinned in the workflows, so a mutable tag will never
+  # drift under us - but that also means nothing bumps them. Dependabot rewrites
+  # the SHA and the trailing version comment together.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+    commit-message:
+      prefix: "chore(ci)"
+    labels:
+      - dependencies
+      - ci
+    open-pull-requests-limit: 5
+
+# ROS/apt dependencies are declared in package.xml and resolved by rosdep, which
+# Dependabot does not understand. Those are covered by the license-inventory
+# check in CI and by manual OSV review, per CONTRIBUTING.md.

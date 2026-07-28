@@ -17,7 +17,10 @@ namespace prox_mpc
 {
 
 /* Robot model class. */
-class Model : public ModelInfo, Constraints
+/* Constraints is inherited privately on purpose: only Model's own methods touch
+ * the inequality maps, and derived model plugins configure them through Model's
+ * public interface. */
+class Model : public ModelInfo, private Constraints
 {
 public:
   /* Constructor. */

@@ -9,8 +9,8 @@
 #include <pluginlib/class_list_macros.hpp>
 
 #include <prox_mpc/model.hpp>
-#include <prox_mpc/models/bike.hpp>
-#include <prox_mpc/models/r2d2.hpp>
+#include <prox_mpc/models/bicycle.hpp>
+#include <prox_mpc/models/unicycle.hpp>
 
 PLUGINLIB_EXPORT_CLASS(prox_mpc::Bicycle, prox_mpc::Model)
 PLUGINLIB_EXPORT_CLASS(prox_mpc::Unicycle, prox_mpc::Model)

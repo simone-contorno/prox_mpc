@@ -1,0 +1,20 @@
+scenario:
+  name: static_box
+  description: "One static box on the straight path; the controller must bend around it and recover."
+  map:
+    base: prox_mpc_open   # reuse the demo 7x7 m open world/map as the backdrop
+    scale: 1.0            # map-scaling factor; 1.0 = the 7x7 m baseline
+  # Endpoints at +/-2.5 stay inside the open map's navigable interior
+  # ([-2.95, 2.95] m) so the mode (b2) planner produces a plan; the obstacle at
+  # x=0 is still crossed mid-path. Shared by mode b1 (engine plant, no walls).
+  start: {x: -2.5, y: 0.0, yaw: 0.0}
+  goals:
+    - {x: 2.5, y: 0.0, yaw: 0.0}
+  obstacles:
+    # Dead-centre (x=0, y=0): the global costmap's obstacle_layer lets the planner
+    # route the path around it, so the controller follows a curved plan and avoids
+    # cleanly (a straight-plan-through setup stalls a soft-constraint avoider here).
+    - {type: static, shape: box, pose: {x: 0.0, y: 0.0}, size: {x: 0.25, y: 0.25, z: 0.5}, clearance: 0.45}
+  models: [unicycle, bicycle]
+  controllers: [proxmpc, dwb, mppi, regulated_pure_pursuit, graceful, vector_pursuit]   # cross-controller set (b2)
+  run: {repeats: 5, timeout_s: 60, seed: 0}

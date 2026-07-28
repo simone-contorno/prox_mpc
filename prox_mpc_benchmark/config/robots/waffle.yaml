@@ -1,0 +1,17 @@
+# Diff-drive TurtleBot3 waffle paired with the ProxMPC Unicycle model.
+# Used by mode (a) Gazebo and as the kinematic plant in mode (b2). For the
+# standalone mode (b1) only `model` is relevant.
+robot:
+  name: waffle
+  model: unicycle                 # prox_mpc Unicycle (3-state [x, y, theta])
+  model_plugin: prox_mpc_core/Unicycle
+  drive: diff
+  wheelbase: 0.0                  # unused by the unicycle
+  robot_radius: 0.22
+  # Bounds the ProxMPC model's linear input (v_max); the commanded speed is
+  # hard-capped in the solver at 0.5 m/s, matching the stock controllers' caps.
+  max_linear_vel: 0.5
+  max_angular_vel: 1.0
+  gazebo:
+    description_package: nav2_minimal_tb3_sim
+    spawn: waffle                 # the tb3 waffle already shipped by the demo (mode a)

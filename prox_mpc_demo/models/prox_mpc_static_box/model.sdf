@@ -1,0 +1,22 @@
+<?xml version="1.0"?>
+<!-- Standalone static obstacle, spawnable at runtime with:
+     ros2 run ros_gz_sim create -name box1 \
+       -file $(ros2 pkg prefix prox_mpc_demo)/share/prox_mpc_demo/models/prox_mpc_static_box/model.sdf \
+       -x 0.0 -y 1.25 -z 0.25 -->
+<sdf version="1.6">
+  <model name="prox_mpc_static_box">
+    <static>1</static>
+    <link name="link">
+      <collision name="collision">
+        <geometry><box><size>0.4 0.4 0.5</size></box></geometry>
+      </collision>
+      <visual name="visual">
+        <geometry><box><size>0.4 0.4 0.5</size></box></geometry>
+        <material>
+          <ambient>0.8 0.2 0.2 1</ambient>
+          <diffuse>0.8 0.2 0.2 1</diffuse>
+        </material>
+      </visual>
+    </link>
+  </model>
+</sdf>

@@ -1,0 +1,184 @@
+# Nav2 base parameters for mode (b2): controller_server + planner + BT driving a
+# kinematic plant, no Gazebo. Cross-controller comparison harness.
+#
+# Trimmed from the stock nav2_params for a Gazebo-free, laser-free open world:
+#   - No amcl: localization is exact (the plant publishes odom -> base_link and a
+#     static map -> odom identity is launched separately), so the plant pose is
+#     ground truth in the map frame.
+#   - No velocity_smoother / collision_monitor: controller_server publishes the
+#     command directly on /cmd_vel (enable_stamped_cmd_vel stays false -> Twist),
+#     which the plant integrates. One fewer hop keeps every controller comparable.
+#   - The local costmap adds an obstacle_layer fed by /scan (the scan_simulator
+#     ray-casts the scenario obstacles into a LaserScan) so every controller
+#     perceives the scenario obstacles through the identical costmap + inflation.
+#     The global costmap stays static_layer + inflation_layer only, so the planner
+#     keeps routing the straight reference through the obstacle and the local
+#     controller's own avoidance is what the comparison measures (as in mode b1).
+#     On the obstacle-free open cell the scan is all-max-range, so the obstacle
+#     layer marks nothing and the costmap is unchanged.
+# The controller_server.FollowPath block is injected per controller at launch from
+# config/controllers/<controller>.yaml, so this file is controller-agnostic.
+
+bt_navigator:
+  ros__parameters:
+    global_frame: map
+    robot_base_frame: base_link
+    odom_topic: /odom
+    bt_loop_duration: 10
+    default_server_timeout: 20
+    wait_for_service_timeout: 1000
+    action_server_result_timeout: 900.0
+    navigators: ["navigate_to_pose", "navigate_through_poses"]
+    navigate_to_pose:
+      plugin: "nav2_bt_navigator::NavigateToPoseNavigator"
+    navigate_through_poses:
+      plugin: "nav2_bt_navigator::NavigateThroughPosesNavigator"
+    error_code_names:
+      - compute_path_error_code
+      - follow_path_error_code
+
+controller_server:
+  ros__parameters:
+    controller_frequency: 20.0
+    costmap_update_timeout: 0.30
+    min_x_velocity_threshold: 0.001
+    min_y_velocity_threshold: 0.5
+    min_theta_velocity_threshold: 0.001
+    failure_tolerance: 0.3
+    progress_checker_plugins: ["progress_checker"]
+    goal_checker_plugins: ["general_goal_checker"]
+    controller_plugins: ["FollowPath"]
+    use_realtime_priority: false
+    progress_checker:
+      plugin: "nav2_controller::SimpleProgressChecker"
+      required_movement_radius: 0.5
+      movement_time_allowance: 10.0
+    general_goal_checker:
+      stateful: True
+      plugin: "nav2_controller::SimpleGoalChecker"
+      # Strictly inside the scored success tolerance (0.25, metrics goal_tol):
+      # with the two equal, a controller that stops the moment its own distance
+      # reads inside tolerance can park at metric-0.2500 exactly and deadlock -
+      # Nav2's strict '< 0.25' never fires and the run is scored failed. Applies
+      # to every controller alike.
+      xy_goal_tolerance: 0.24
+      yaw_goal_tolerance: 0.25
+    # FollowPath is injected at launch from the controller preset.
+
+local_costmap:
+  local_costmap:
+    ros__parameters:
+      update_frequency: 5.0
+      publish_frequency: 2.0
+      global_frame: odom
+      robot_base_frame: base_link
+      rolling_window: true
+      width: 4
+      height: 4
+      resolution: 0.05
+      robot_radius: 0.22
+      plugins: ["static_layer", "obstacle_layer", "inflation_layer"]
+      static_layer:
+        plugin: "nav2_costmap_2d::StaticLayer"
+        map_subscribe_transient_local: True
+      obstacle_layer:
+        plugin: "nav2_costmap_2d::ObstacleLayer"
+        enabled: True
+        observation_sources: scan
+        scan:
+          topic: /scan
+          sensor_frame: base_link
+          data_type: "LaserScan"
+          marking: True
+          clearing: True
+          min_obstacle_height: -0.1  # 2D scan projects at z~0; guard the float edge
+          max_obstacle_height: 2.0
+          obstacle_max_range: 3.0
+          raytrace_max_range: 3.5
+          # Clear (no-hit) beams arrive as +inf; treat them as valid max-range
+          # readings so empty directions ray-trace-clear every scan. Without this a
+          # moving obstacle's vacated cells never clear and pile up into a trail.
+          inf_is_valid: true
+      inflation_layer:
+        plugin: "nav2_costmap_2d::InflationLayer"
+        cost_scaling_factor: 3.0
+        inflation_radius: 0.4
+      always_send_full_costmap: True
+
+global_costmap:
+  global_costmap:
+    ros__parameters:
+      update_frequency: 1.0
+      publish_frequency: 1.0
+      global_frame: map
+      robot_base_frame: base_link
+      robot_radius: 0.22
+      resolution: 0.05
+      track_unknown_space: false
+      plugins: ["static_layer", "obstacle_layer", "inflation_layer"]
+      static_layer:
+        plugin: "nav2_costmap_2d::StaticLayer"
+        map_subscribe_transient_local: True
+      # Global obstacle awareness: the planner sees the scenario obstacle and routes
+      # around it instead of straight through, so a central obstacle does not hand
+      # the local controller a symmetric no-lateral-preference problem.
+      obstacle_layer:
+        plugin: "nav2_costmap_2d::ObstacleLayer"
+        enabled: True
+        observation_sources: scan
+        scan:
+          topic: /scan
+          sensor_frame: base_link
+          data_type: "LaserScan"
+          marking: True
+          clearing: True
+          min_obstacle_height: -0.1
+          max_obstacle_height: 2.0
+          obstacle_max_range: 3.0
+          raytrace_max_range: 3.5
+          inf_is_valid: true
+      inflation_layer:
+        plugin: "nav2_costmap_2d::InflationLayer"
+        cost_scaling_factor: 3.0
+        inflation_radius: 0.4
+      always_send_full_costmap: True
+
+planner_server:
+  ros__parameters:
+    expected_planner_frequency: 20.0
+    planner_plugins: ["GridBased"]
+    costmap_update_timeout: 1.0
+    GridBased:
+      plugin: "nav2_navfn_planner::NavfnPlanner"
+      tolerance: 0.5
+      use_astar: false
+      allow_unknown: true
+
+behavior_server:
+  ros__parameters:
+    local_costmap_topic: local_costmap/costmap_raw
+    global_costmap_topic: global_costmap/costmap_raw
+    local_footprint_topic: local_costmap/published_footprint
+    global_footprint_topic: global_costmap/published_footprint
+    cycle_frequency: 10.0
+    behavior_plugins: ["spin", "backup", "drive_on_heading", "wait"]
+    spin:
+      plugin: "nav2_behaviors::Spin"
+    backup:
+      plugin: "nav2_behaviors::BackUp"
+    drive_on_heading:
+      plugin: "nav2_behaviors::DriveOnHeading"
+    wait:
+      plugin: "nav2_behaviors::Wait"
+    local_frame: odom
+    global_frame: map
+    robot_base_frame: base_link
+    transform_tolerance: 0.1
+    simulate_ahead_time: 2.0
+    max_rotational_vel: 1.0
+    min_rotational_vel: 0.4
+    rotational_acc_lim: 3.2
+
+map_server:
+  ros__parameters:
+    yaml_filename: ""

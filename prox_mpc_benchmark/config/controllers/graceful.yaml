@@ -1,0 +1,30 @@
+# Graceful Controller preset (FollowPath block) for cross-controller comparison.
+# nav2_graceful_controller (new in Jazzy): a differential-drive pose-following
+# control law (Park & Kuipers), not a cost-function avoider. It has no prediction
+# horizon (it is geometric, like Regulated Pure Pursuit) and no obstacle critics;
+# its only obstacle response is an internal forward-simulation collision check.
+# Only the shared operating envelope is set here (max linear speed 0.5 m/s, max yaw
+# rate 1.0 rad/s); the control-law gains stay at the upstream defaults so the method
+# runs at its documented operating point.
+FollowPath:
+  plugin: "nav2_graceful_controller::GracefulController"
+  transform_tolerance: 0.1
+  max_lookahead: 0.9
+  min_lookahead: 0.05
+  initial_rotation: true
+  initial_rotation_tolerance: 0.75
+  # Goal-approach tuning: drive straight into the goal point rather than rotating
+  # in place near it, and slow down only within 0.2 m. Graceful's pose-following
+  # law still decelerates asymptotically into the goal and tends to park right at
+  # the 0.25 m tolerance boundary on a dead-straight approach, so it can register
+  # as not-reached on the open cell even though its tracking is exact - a known
+  # completion trait of this controller.
+  prefer_final_rotation: false
+  k_phi: 2.0
+  k_delta: 1.0
+  beta: 0.4
+  lambda: 2.0
+  v_linear_min: 0.2
+  v_linear_max: 0.5           # fair tuning: shared 0.5 m/s speed cap
+  v_angular_max: 1.0          # shared 1.0 rad/s yaw-rate cap
+  slowdown_radius: 0.1

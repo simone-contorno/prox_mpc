@@ -1,0 +1,51 @@
+<?xml version="1.0"?>
+<!-- Standalone dynamic obstacle: a visible box that slides at a constant velocity
+     via the gz-sim VelocityControl system. No skin/external mesh, so it loads
+     offline and renders in the GUI (unlike an <actor>, whose missing skin logs an
+     "Invalid mesh filename extension[__default__]" error and does not render a
+     link visual). Gravity is disabled on the link so the velocity cannot topple
+     or sink it (a free rigid body tips over from ground friction); it floats just
+     clear of the ground. VelocityControl applies the linear velocity in the body
+     frame, so a constant forward speed + constant yaw rate trace a bounded circle
+     of radius v/omega (here 0.3/0.5 = 0.6 m) that stays in place rather than
+     driving off the map, and repeatedly crosses the scenario path. Spawn with:
+     ros2 run ros_gz_sim create -name walker \
+       -file $(ros2 pkg prefix prox_mpc_demo)/share/prox_mpc_demo/models/prox_mpc_dynamic_actor/model.sdf \
+       -x 0.8 -y -1.6 -z 0.6 -->
+<sdf version="1.9">
+  <model name="prox_mpc_dynamic_obstacle">
+    <link name="link">
+      <gravity>false</gravity>
+      <inertial>
+        <mass>5.0</mass>
+        <inertia>
+          <ixx>0.48</ixx>
+          <iyy>0.48</iyy>
+          <izz>0.13</izz>
+          <ixy>0</ixy>
+          <ixz>0</ixz>
+          <iyz>0</iyz>
+        </inertia>
+      </inertial>
+      <collision name="collision">
+        <geometry><box><size>0.4 0.4 1.0</size></box></geometry>
+      </collision>
+      <visual name="visual">
+        <geometry><box><size>0.4 0.4 1.0</size></box></geometry>
+        <material>
+          <ambient>0.2 0.2 0.8 1</ambient>
+          <diffuse>0.2 0.2 0.8 1</diffuse>
+        </material>
+      </visual>
+    </link>
+    <!-- Forward speed + yaw rate -> bounded circle (body-frame velocity). Override
+         live, e.g. straight line: angular all zero; faster spin: raise angular z:
+         gz topic -t /model/walker/cmd_vel -m gz.msgs.Twist \
+           -p 'linear: {x: 0.3}, angular: {z: 0.5}' -->
+    <plugin filename="gz-sim-velocity-control-system"
+            name="gz::sim::systems::VelocityControl">
+      <initial_linear>0.3 0 0</initial_linear>
+      <initial_angular>0 0 0.5</initial_angular>
+    </plugin>
+  </model>
+</sdf>
