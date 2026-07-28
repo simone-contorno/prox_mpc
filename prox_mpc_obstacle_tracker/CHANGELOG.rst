@@ -2,7 +2,7 @@
 Changelog for package prox_mpc_obstacle_tracker
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-1.0.0 (2026-07-19)
+1.0.0 (2026-07-28)
 ------------------
 * Initial release: lifecycle node that clusters a 2D ``LaserScan``, associates
   clusters to an IMM (constant-velocity + constant-turn-rate) filter in a fixed

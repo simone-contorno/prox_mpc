@@ -2,7 +2,7 @@
 Changelog for package prox_mpc_benchmark
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-1.0.0 (2026-07-19)
+1.0.0 (2026-07-28)
 ------------------
 * Initial release: scenario-driven benchmarking harness with the standalone
   matrix (mode a/b1, four scenarios x bicycle/unicycle models) and the Nav2
