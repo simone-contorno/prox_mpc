@@ -2,9 +2,9 @@ name: ROS 2 CI
 
 on:
   push:
-    branches: [main, dev]
+    branches: [main]
   pull_request:
-    branches: [main, dev]
+    branches: [main]
 
 # Least privilege: the workflow only reads the repository.
 permissions:
