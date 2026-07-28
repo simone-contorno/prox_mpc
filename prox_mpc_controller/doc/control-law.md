@@ -124,8 +124,8 @@ $$
 Either way the clearance for the slot grows with prediction time,
 
 $$
-d_\text{safe} = r_\text{robot} + r_\text{obs} + m_\text{margin}
-  + \beta\,(k\,\Delta t + \text{age}),
+d_\text{safe} = r_\text{robot} + r_\text{obs} + m_\text{margin} +
+  \beta\,(k\,\Delta t + \text{age}),
 $$
 
 where $\beta$ is the `prediction_uncertainty_growth` gain and $\text{age}$ is the

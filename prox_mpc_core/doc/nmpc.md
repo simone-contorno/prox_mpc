@@ -14,9 +14,9 @@ state/control bounds:
 
 $$
 \min_{x,\,u}\;
-\sum_{k=0}^{N_p-1} (x_k - x_k^{\text{goal}})^\top Q\, (x_k - x_k^{\text{goal}})
-+ (x_{N_p} - x_{N_p}^{\text{goal}})^\top S\, (x_{N_p} - x_{N_p}^{\text{goal}})
-+ \sum_{k=0}^{N_c-1} (u_k - u_k^{\text{goal}})^\top R\, (u_k - u_k^{\text{goal}})
+\sum_{k=0}^{N_p-1} (x_k - x_k^{\text{goal}})^\top Q\, (x_k - x_k^{\text{goal}}) +
+(x_{N_p} - x_{N_p}^{\text{goal}})^\top S\, (x_{N_p} - x_{N_p}^{\text{goal}}) +
+\sum_{k=0}^{N_c-1} (u_k - u_k^{\text{goal}})^\top R\, (u_k - u_k^{\text{goal}})
 $$
 
 subject to $x_0 = x_\text{pose}$, the dynamics $x_{k+1} = F(x_k, u_k)$, and the
