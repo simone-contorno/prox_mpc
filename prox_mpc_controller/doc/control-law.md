@@ -35,19 +35,20 @@ plan end.
 Two optional reductions then apply:
 
 - **Goal-checker easing.** When the goal checker reports a finite, positive xy
-  tolerance, $v_\text{ref}$ is scaled by $\operatorname{clamp}(\text{remaining} /
-  \text{xy\_tol},\,0,\,1)$ so the robot settles into the goal region.
+  tolerance, $v_\text{ref}$ is scaled by $\mathrm{clamp}(r_\text{rem}/\tau,\,0,\,1)$,
+  where $r_\text{rem}$ is the remaining distance to the goal and $\tau$ is the
+  `xy` tolerance, so the robot settles into the goal region.
   Unmeasured tolerance fields (reported as `lowest()`) are ignored.
-- **Curvature reduction.** When `curvature_gain` $> 0$, the peak path curvature
-  $\kappa_\text{max}$ over the horizon is estimated from heading samples and
-  $v_\text{ref}$ is divided by $1 + \text{curvature\_gain}\cdot\kappa_\text{max}$,
-  so high-curvature segments are sampled more slowly.
+- **Curvature reduction.** With a positive `curvature_gain` $g$, the peak path
+  curvature $\kappa_\text{max}$ over the horizon is estimated from heading samples
+  and $v_\text{ref}$ is divided by $1 + g\,\kappa_\text{max}$, so high-curvature
+  segments are sampled more slowly.
 
 ### Continuous heading
 
 Reference headings are kept continuous: each node's heading is unwrapped relative
 to the previous one (and the first relative to the robot heading) with
-$\theta \mathrel{+}= \operatorname{remainder}(\theta - \theta_\text{prev}, 2\pi)$.
+$\theta \mathrel{+}= \mathrm{remainder}(\theta - \theta_\text{prev}, 2\pi)$.
 This keeps the QP heading error from wrapping near $\pm\pi$, so the controller
 turns the short way rather than spinning the long way around.
 
@@ -72,9 +73,9 @@ Every slot is first defaulted to the far sentinel `MPC::kObsFarSentinel`, which
 the engine treats as non-binding, so a fixed capacity $K$ degrades cleanly to
 fewer active obstacles.
 For each predicted node position the controller scans a square costmap window
-sized to the search radius $d_\text{safe} + \text{obstacle\_cluster\_radius}$ (the
-half-window is capped at `max_obstacle_scan_cells`, with a throttled warning when
-truncated).
+sized to the search radius $d_\text{safe} + \rho$, where $\rho$ is the
+`obstacle_cluster_radius` (the half-window is capped at `max_obstacle_scan_cells`,
+with a throttled warning when truncated).
 Cells at or above `costmap_cost_threshold` (and not `NO_INFORMATION`) within the
 search radius are collected, sorted by distance to the node, and clustered: the
 nearest representatives at least `obstacle_cluster_radius` apart are kept, so a
@@ -104,7 +105,7 @@ guarding against extended structure (walls) reported as a moving object - its
 centroid drifts at roughly robot speed and would otherwise inflate $d_\text{safe}$
 and erase real costmap cells.
 Candidates are ranked by their closest approach to the reference trajectory over
-the horizon, and the nearest $\min(K, \text{max\_dynamic\_obstacles})$ are kept.
+the horizon, and the nearest $\min(K, M)$ are kept, where $M$ is `max_dynamic_obstacles`.
 
 Each selected obstacle $j$ is propagated to every node and bound to slot $j$ for
 the whole horizon (so the half-planes track one object across nodes).
@@ -124,11 +125,12 @@ Either way the clearance for the slot grows with prediction time,
 
 $$
 d_\text{safe} = r_\text{robot} + r_\text{obs} + m_\text{margin}
-  + \text{prediction\_uncertainty\_growth}\cdot(k\,\Delta t + \text{age}),
+  + \beta\,(k\,\Delta t + \text{age}),
 $$
 
-where $\text{age}$ is the message age, so the keep-out widens to cover the growing
-prediction error as the prediction ages.
+where $\beta$ is the `prediction_uncertainty_growth` gain and $\text{age}$ is the
+message age, so the keep-out widens to cover the growing prediction error as the
+prediction ages.
 The remaining slots are filled from the costmap (hybrid), excluding cells inside
 each dynamic obstacle's **current** footprint (its radius plus the cluster radius)
 so the moving object is not counted twice.
@@ -159,7 +161,7 @@ Nav2 may impose a runtime speed limit through `setSpeedLimit(limit, percentage)`
 The controller converts it to an absolute speed (a fraction of the model maximum
 when `percentage` is set, restoring the model bound on `NO_SPEED_LIMIT`), clamps
 it to the model bound, and applies it to the retained model handle with
-`model->updateIneq("u", 0, -v_\text{lim}, v_\text{lim})`, so the bound takes effect
+`model->updateIneq("u", 0, -v_lim, v_lim)`, so the bound takes effect
 on the next solve without rebuilding the problem.
 `setSpeedLimit` itself only caches the request: it runs on the node's executor
 thread while `computeVelocityCommands` runs on the action server's thread, so the

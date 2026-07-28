@@ -72,12 +72,10 @@ z = \big[\, \underbrace{\Delta x_0, \dots, \Delta x_{N_p}}_{(N_p+1)\,n},\;
             \underbrace{\Delta w_0, \dots, \Delta w_{N_p K - 1}}_{N_p K} \,\big]^\top .
 $$
 
-The offsets are
+The block offsets into $z$ (`x_start`, `u_start`, `w_start` in the code) are
 
 $$
-\texttt{x\_start} = 0, \quad
-\texttt{u\_start} = (N_p+1)\,n, \quad
-\texttt{w\_start} = \texttt{u\_start} + N_c\,m,
+0, \quad (N_p+1)\,n, \quad (N_p+1)\,n + N_c\,m,
 $$
 
 and the total dimension is $n_\text{dvars} = (N_p+1)\,n + N_c\,m + N_p K$, where
@@ -101,7 +99,7 @@ The Hessian is block diagonal with the (doubled) weight matrices on the state,
 terminal, control, and slack blocks:
 
 $$
-H = \operatorname{blkdiag}\big(
+H = \mathrm{blkdiag}\big(
 \underbrace{2Q, \dots, 2Q}_{N_p},\; 2S,\;
 \underbrace{2R, \dots, 2R}_{N_c},\;
 \underbrace{2W, \dots, 2W}_{N_p K} \big).
