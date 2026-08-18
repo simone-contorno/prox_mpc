@@ -137,6 +137,14 @@ void Model::setIneq(std::string var, size_t idx_vec, double low, double upp)
   if (var != "x" && var != "u" && var != "du" && var != "w") {
     throw std::invalid_argument("Model: var must be 'x', 'u', 'du' or 'w'");
   }
+  // n/m may not be set yet (setN/setM run first in every bundled model, but the
+  // check is skipped rather than assumed until they are known).
+  if (var == "x" && n > 0 && idx_vec >= n) {
+    throw std::invalid_argument("Model::setIneq: idx_vec out of range for state dimension n");
+  }
+  if ((var == "u" || var == "du") && m > 0 && idx_vec >= m) {
+    throw std::invalid_argument("Model::setIneq: idx_vec out of range for control dimension m");
+  }
 
   std::vector<double> bounds;
   bounds.push_back(idx_vec);
@@ -195,6 +203,9 @@ void Model::updateIneq(std::string var, size_t idx_vec, double low, double upp)
     for (size_t i = 0; i < ineq_w.size(); i++) {
       if (ineq_w[i][0] == idx_vec) {idx = i; found = true;}}
     if (found) {ineq_w[idx] = bounds;}
+  }
+  if (!found) {
+    throw std::invalid_argument("Model::updateIneq: no existing bound for idx_vec");
   }
 }
 
