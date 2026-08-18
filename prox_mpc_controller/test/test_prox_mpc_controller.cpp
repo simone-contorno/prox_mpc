@@ -95,6 +95,7 @@ public:
   double desiredLinearVel() const {return desired_linear_vel_;}
   std::size_t nDim() const {return n_;}
   std::size_t maxObstacles() const {return static_cast<std::size_t>(max_obstacles_);}
+  int maxSolverFailures() const {return max_solver_failures_;}
   std::shared_ptr<prox_mpc::MPC> mpc() const {return mpc_;}
   std::shared_ptr<prox_mpc::Model> model() const {return model_;}
 };
@@ -402,6 +403,47 @@ TEST_F(ProxMpcControllerTest, ConfigureThrowsOnUnknownModelPlugin)
   EXPECT_THROW(
     c->configure(node_, "FollowPath", tf_, costmap_ros_),
     nav2_core::ControllerException);
+}
+
+// nc > np is well-formed dead weight in the core (surplus controls drive no
+// state transition) but is rejected as a configuration error at the plugin
+// boundary, matching the existing np < 1 / nc < 1 / dt <= 0 fatal checks.
+TEST_F(ProxMpcControllerTest, ConfigureThrowsWhenNcExceedsNp)
+{
+  auto c = makeUnconfigured(
+    {rclcpp::Parameter("FollowPath.np", 5), rclcpp::Parameter("FollowPath.nc", 10)});
+  EXPECT_THROW(
+    c->configure(node_, "FollowPath", tf_, costmap_ros_),
+    nav2_core::ControllerException);
+}
+
+// dt <= 0.0 is false for NaN, so the structural horizon-sizing gate needs an
+// explicit finiteness check to catch it.
+TEST_F(ProxMpcControllerTest, ConfigureThrowsOnNonFiniteDt)
+{
+  auto c = makeUnconfigured(
+    {rclcpp::Parameter("FollowPath.dt", std::numeric_limits<double>::quiet_NaN())});
+  EXPECT_THROW(
+    c->configure(node_, "FollowPath", tf_, costmap_ros_),
+    nav2_core::ControllerException);
+}
+
+// A non-finite value at a clamped parameter site (bare "<" comparisons pass NaN
+// through every range check) falls back to the parameter's declared default.
+TEST_F(ProxMpcControllerTest, ConfigureUsesDefaultForNonFiniteClampedParameter)
+{
+  auto c = makeConfigured(
+    {rclcpp::Parameter("FollowPath.q_pos", std::numeric_limits<double>::quiet_NaN())});
+  ASSERT_NE(c->mpc(), nullptr);
+  EXPECT_NEAR(c->mpc()->getQ()(0, 0), 10.0, kTol);   // 10.0 is q_pos's declared default
+}
+
+// A negative max_solver_failures is clamped to 0, matching the max_obstacles
+// clamp shape, rather than left as an arbitrary negative value.
+TEST_F(ProxMpcControllerTest, ConfigureClampsNegativeMaxSolverFailuresToZero)
+{
+  auto c = makeConfigured({rclcpp::Parameter("FollowPath.max_solver_failures", -5)});
+  EXPECT_EQ(c->maxSolverFailures(), 0);
 }
 
 // Every log_level keyword (and an unrecognized value) is accepted at configure.

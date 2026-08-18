@@ -172,13 +172,23 @@ void ProxMpcController::configure(
   /* Parameter-validation helpers: out-of-range tuning values are clamped and
    * warned (non-fatal, to keep the controller available), matching the predictive
    * clamps; structurally invalid horizon sizing is fatal and throws below. */
-  auto clamp_low = [this](const char * name, double & v, double lo) {
+  auto clamp_low = [this](const char * name, double & v, double lo, double def) {
+      if (!std::isfinite(v)) {
+        RCLCPP_WARN(logger_, "%s is not finite; using default %.3f.", name, def);
+        v = def;
+        return;
+      }
       if (v < lo) {
         RCLCPP_WARN(logger_, "%s %.3f below %.3f; clamping.", name, v, lo);
         v = lo;
       }
     };
-  auto clamp_range = [this](const char * name, double & v, double lo, double hi) {
+  auto clamp_range = [this](const char * name, double & v, double lo, double hi, double def) {
+      if (!std::isfinite(v)) {
+        RCLCPP_WARN(logger_, "%s is not finite; using default %.3f.", name, def);
+        v = def;
+        return;
+      }
       if (v < lo || v > hi) {
         const double c = std::clamp(v, lo, hi);
         RCLCPP_WARN(
@@ -220,9 +230,9 @@ void ProxMpcController::configure(
   int nc_param = 0;
   declare("nc", nc_param, 20);
   declare("dt", dt_, 0.1);
-  if (np_param < 1 || nc_param < 1 || dt_ <= 0.0) {
+  if (np_param < 1 || nc_param < 1 || nc_param > np_param || !std::isfinite(dt_) || dt_ <= 0.0) {
     throw nav2_core::ControllerException(
-            "ProxMpcController: np >= 1, nc >= 1, dt > 0 required (got np=" +
+            "ProxMpcController: np >= 1, nc >= 1, nc <= np, dt > 0 required (got np=" +
             std::to_string(np_param) + ", nc=" + std::to_string(nc_param) + ", dt=" +
             std::to_string(dt_) + ")");
   }
@@ -244,11 +254,11 @@ void ProxMpcController::configure(
   declare("r_weight", r_weight, 0.1);
   double w_weight = 0.0;
   declare("w_weight", w_weight, 100.0);
-  clamp_low("q_pos", q_pos, kMinCostWeight);
-  clamp_low("q_theta", q_theta, kMinCostWeight);
-  clamp_low("s_factor", s_factor, kMinCostWeight);
-  clamp_low("r_weight", r_weight, kMinCostWeight);
-  clamp_low("w_weight", w_weight, kMinCostWeight);
+  clamp_low("q_pos", q_pos, kMinCostWeight, 10.0);
+  clamp_low("q_theta", q_theta, kMinCostWeight, 1.0);
+  clamp_low("s_factor", s_factor, kMinCostWeight, 2.0);
+  clamp_low("r_weight", r_weight, kMinCostWeight, 0.1);
+  clamp_low("w_weight", w_weight, kMinCostWeight, 100.0);
 
   /* Iteration caps are structural, like the horizon sizing: they reach the core
    * as size_t, so a negative value wraps to an astronomical bound (an effectively
@@ -271,12 +281,16 @@ void ProxMpcController::configure(
    * caps only). On timeout the solve reports non-convergence and this cycle brakes. */
   double max_solve_time = 0.0;
   declare("max_solve_time", max_solve_time, 0.0);
-  clamp_low("max_solve_time", max_solve_time, 0.0);
+  clamp_low("max_solve_time", max_solve_time, 0.0, 0.0);
   bool qp_type = false;
   declare("qp_type", qp_type, false);
   bool guess = true;
   declare("guess", guess, true);
   declare("max_solver_failures", max_solver_failures_, 3);
+  if (max_solver_failures_ < 0) {
+    RCLCPP_WARN(logger_, "max_solver_failures %d < 0; clamping to 0.", max_solver_failures_);
+    max_solver_failures_ = 0;
+  }
   declare("max_obstacles", max_obstacles_, 1);
   if (max_obstacles_ < 0) {
     RCLCPP_WARN(logger_, "max_obstacles %d < 0; clamping to 0.", max_obstacles_);
@@ -284,10 +298,10 @@ void ProxMpcController::configure(
   }
   declare("safety_margin", safety_margin_, 0.1);
   declare("robot_radius", robot_radius_, 0.5);
-  clamp_low("safety_margin", safety_margin_, 0.0);
-  clamp_low("robot_radius", robot_radius_, 0.0);
+  clamp_low("safety_margin", safety_margin_, 0.0, 0.1);
+  clamp_low("robot_radius", robot_radius_, 0.0, 0.5);
   declare("cbf_gamma", cbf_gamma_, 1.0);
-  clamp_range("cbf_gamma", cbf_gamma_, kMinCbfGamma, 1.0);
+  clamp_range("cbf_gamma", cbf_gamma_, kMinCbfGamma, 1.0, 1.0);
   declare("costmap_cost_threshold", costmap_cost_threshold_, 200);
   if (costmap_cost_threshold_ < 0 || costmap_cost_threshold_ > kMaxCostThreshold) {
     const int c = std::clamp(costmap_cost_threshold_, 0, kMaxCostThreshold);
@@ -297,7 +311,7 @@ void ProxMpcController::configure(
     costmap_cost_threshold_ = c;
   }
   declare("obstacle_cluster_radius", obstacle_cluster_radius_, 0.3);
-  clamp_low("obstacle_cluster_radius", obstacle_cluster_radius_, 0.0);
+  clamp_low("obstacle_cluster_radius", obstacle_cluster_radius_, 0.0, 0.3);
   declare("max_obstacle_scan_cells", max_obstacle_scan_cells_, kMaxScanHalfWidth);
   if (max_obstacle_scan_cells_ < 1) {
     RCLCPP_WARN(
@@ -321,10 +335,10 @@ void ProxMpcController::configure(
 
   /* Validate the predictive parameters; clamp out-of-range values (non-fatal, to
    * keep the controller available) and warn, matching the cruise-speed clamp. */
-  clamp_low("obstacle_timeout", obstacle_timeout_, 0.0);
-  clamp_low("dynamic_speed_threshold", dynamic_speed_threshold_, 0.0);
-  clamp_low("prediction_uncertainty_growth", prediction_uncertainty_growth_, 0.0);
-  clamp_low("max_dynamic_obstacle_radius", max_dynamic_obstacle_radius_, 0.0);
+  clamp_low("obstacle_timeout", obstacle_timeout_, 0.0, 0.5);
+  clamp_low("dynamic_speed_threshold", dynamic_speed_threshold_, 0.0, 0.1);
+  clamp_low("prediction_uncertainty_growth", prediction_uncertainty_growth_, 0.0, 0.0);
+  clamp_low("max_dynamic_obstacle_radius", max_dynamic_obstacle_radius_, 0.0, 0.0);
   if (max_dynamic_obstacles_ < 0) {
     RCLCPP_WARN(logger_, "max_dynamic_obstacles %d < 0; clamping to 0.", max_dynamic_obstacles_);
     max_dynamic_obstacles_ = 0;
