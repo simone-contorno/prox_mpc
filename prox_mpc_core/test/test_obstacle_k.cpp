@@ -257,6 +257,72 @@ TEST(ObstacleK, CbfGammaRejectsOutOfRange)
   EXPECT_NO_THROW(solver.setCbfGamma(0.5));
 }
 
+// At exact coincidence (predicted position equals the obstacle center) the
+// emitted constraint normal must still be unit length: dividing a zero delta
+// by only a floored norm would otherwise emit (0, 0), leaving slack as the
+// sole thing resisting the constraint.
+TEST(ObstacleK, CoincidentObstacleNormalIsUnitLength)
+{
+  auto mpc = makeUnicycleMpc(1);   // K = 1
+
+  const double ox = 1.0;
+  const double oy = 0.0;
+  MatrixXd obs = makeObs(kNp, 1);
+  fillSlot(obs, kNp, 1, 0, ox, oy, 0.5);
+
+  // setC() reads the solver's own obs member, populated only through
+  // ProxQP::setObs() (normally forwarded by MPC::solve() each cycle); calling
+  // setC() directly here needs it set the same way.
+  auto solver = mpc->getSolver();
+  solver->setObs(obs);
+  MatrixXd x = MatrixXd::Zero(kNp + 1, 3);   // unicycle state [x, y, theta]
+  x(1, 0) = ox;   // node 1 exactly coincides with the obstacle center
+  x(1, 1) = oy;
+  solver->setC(x);
+
+  const MatrixXd & C = solver->getC();
+  const std::vector<size_t> & ineq_idx = solver->getIneqIdx();
+  const size_t obs_start = ineq_idx[ineq_idx.size() - 3];
+  const size_t col = 3;   // position block of node 1 (x_start == 0, n == 3)
+
+  const double nx = C(obs_start, col);
+  const double ny = C(obs_start, col + 1);
+  EXPECT_NEAR(nx * nx + ny * ny, 1.0, 1e-9);
+}
+
+// The default per-node static fill does not preserve slot identity across
+// nodes; at cbf_gamma < 1 a slot holding the far sentinel at one node and a
+// real obstacle at the next node must not blow up the coupling term. This uses
+// a local fill (not the shared makeObs/fillSlot helpers, which fill every node
+// identically and cannot express a per-node discontinuity) to construct that
+// exact case and checks the realized slack stays bounded.
+TEST(ObstacleK, SentinelDiscontinuityDoesNotBlowUpSlack)
+{
+  auto mpc = makeUnicycleMpc(1, 100.0, 0.3);   // K = 1, cbf_gamma < 1
+
+  MatrixXd obs = MatrixXd::Zero(kNp, 3);
+  for (Eigen::Index r = 0; r < obs.rows(); r++) {
+    obs(r, 0) = MPC::kObsFarSentinel;
+    obs(r, 1) = MPC::kObsFarSentinel;
+    obs(r, 2) = 0.0;
+  }
+  // Node 0's slot stays at the sentinel; node 1's slot holds a real obstacle,
+  // creating the (sentinel at node k, real obstacle at node k+1) discontinuity.
+  obs(1, 0) = 2.5;
+  obs(1, 1) = 0.0;
+  obs(1, 2) = 1.0;
+  mpc->setObs(obs);
+
+  mpc->setPose(VectorXd::Zero(3));
+  mpc->solve();
+  EXPECT_EQ(mpc->qp_info.status, proxsuite::proxqp::QPSolverOutput::PROXQP_SOLVED);
+
+  // Before the fix the coupling term (1 - gamma) * obs_h_prev reaches ~1e5 at
+  // this transition, forcing the slack to absorb it; after the fix it stays at
+  // an ordinary avoidance magnitude.
+  EXPECT_LT(mpc->getMaxObstacleSlack(), 10.0);
+}
+
 // K=0 reproduces the obstacle-off result exactly, and K=1 with every slot at the
 // far sentinel reproduces it within tolerance.
 TEST(ObstacleK, DisabledAndSentinelReproduceObstacleOff)

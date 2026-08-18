@@ -4,6 +4,7 @@
 
 #include <prox_mpc/proxqp.hpp>
 
+#include <prox_mpc/mpc.hpp>
 
 #include <algorithm>
 #include <cmath>
@@ -413,10 +414,21 @@ void ProxQP::setC(const MatrixXd & x)
 
       const double dx = x(node + 1, 0) - obs(slot, 0);
       const double dy = x(node + 1, 1) - obs(slot, 1);
-      double norm = sqrt(dx * dx + dy * dy);
+      const double raw_norm = sqrt(dx * dx + dy * dy);
+      double norm = raw_norm;
       if (norm < kObsNormalEps) {norm = kObsNormalEps;}
-      const double nx = dx / norm;
-      const double ny = dy / norm;
+      double nx;
+      double ny;
+      if (raw_norm < kObsNormalEps) {
+        /* At or near coincidence dx, dy carry no reliable escape direction (dividing
+         * by the floored norm would emit a zero or non-unit vector); fall back to a
+         * deterministic unit normal instead. */
+        nx = 1.0;
+        ny = 0.0;
+      } else {
+        nx = dx / norm;
+        ny = dy / norm;
+      }
 
       C(r, col) = nx;                               // x
       C(r, col + 1) = ny;                           // y
@@ -431,9 +443,22 @@ void ProxQP::setC(const MatrixXd & x)
        * reduces to obs[slot]. Held constant per SQP iteration (its gradient is not
        * added to C); the re-linearization across iterations recovers the value. */
       const size_t prev_slot = (node >= 1) ? (slot - max_obs) : slot;
-      const double dxp = x(node, 0) - obs(prev_slot, 0);
-      const double dyp = x(node, 1) - obs(prev_slot, 1);
-      obs_h_prev(slot) = sqrt(dxp * dxp + dyp * dyp) - obs(prev_slot, 2);
+      /* If either this slot or the previous node's slot is unfilled (holds the far
+       * sentinel), the pair does not describe the same obstacle across two nodes;
+       * skip the coupling term by leaving obs_h_prev at zero. It enters setd() only
+       * as (1 - cbf_gamma) * obs_h_prev, which is already exactly zero at the
+       * shipped cbf_gamma = 1.0, so the check is gated on gamma < 1 to add no
+       * per-slot cost at the default. */
+      if (cbf_gamma < 1.0 &&
+        (obs(slot, 0) >= 0.5 * MPC::kObsFarSentinel ||
+        obs(prev_slot, 0) >= 0.5 * MPC::kObsFarSentinel))
+      {
+        obs_h_prev(slot) = 0.0;
+      } else {
+        const double dxp = x(node, 0) - obs(prev_slot, 0);
+        const double dyp = x(node, 1) - obs(prev_slot, 1);
+        obs_h_prev(slot) = sqrt(dxp * dxp + dyp * dyp) - obs(prev_slot, 2);
+      }
     }
     i++;
 
