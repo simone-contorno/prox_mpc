@@ -5,6 +5,7 @@
 #include <prox_mpc/mpc.hpp>
 
 #include <chrono>
+#include <cmath>
 #include <memory>
 #include <stdexcept>
 
@@ -102,8 +103,12 @@ std::tuple<MatrixXd, MatrixXd> MPC::solve()
   x.topRows(x.rows() - 1) = x.bottomRows(x.rows() - 1).eval();
   x.row(x.rows() - 1) = x.row(x.rows() - 2);
 
-  u.topRows(u.rows() - 1) = u.bottomRows(u.rows() - 1).eval();
-  u.row(u.rows() - 1) = u.row(u.rows() - 2);
+  /* With Nc == 1, u has a single row: there is no previous row to shift, and
+   * u.row(u.rows() - 2) would read out of bounds. */
+  if (u.rows() > 1) {
+    u.topRows(u.rows() - 1) = u.bottomRows(u.rows() - 1).eval();
+    u.row(u.rows() - 1) = u.row(u.rows() - 2);
+  }
 
   /* Update current predicted state with the current real pose */
   x.row(0) = pose;
@@ -249,6 +254,9 @@ void MPC::setNp(size_t Np)
 void MPC::setNc(size_t Nc)
 {
   if (Nc == 0) {throw std::invalid_argument("MPC::setNc: Nc must be > 0");}
+  // Np may not be set yet (0 is its unset sentinel, matching setdt/setT below);
+  // the comparison is skipped until it is known.
+  if (Np > 0 && Nc > Np) {throw std::invalid_argument("MPC::setNc: Nc must be <= Np");}
   this->Nc = Nc;
 }
 
@@ -259,7 +267,9 @@ void MPC::setNc(size_t Nc)
  */
 void MPC::setdt(double dt)
 {
-  if (dt <= 0.0) {throw std::invalid_argument("MPC::setdt: dt must be > 0");}
+  if (!std::isfinite(dt) || dt <= 0.0) {
+    throw std::invalid_argument("MPC::setdt: dt must be > 0");
+  }
   this->dt = dt;
   if (Np > 0) {this->T = Np * dt;}
 }
