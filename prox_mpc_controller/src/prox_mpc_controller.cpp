@@ -610,6 +610,9 @@ geometry_msgs::msg::TwistStamped ProxMpcController::computeVelocityCommands(
     const auto & pp = global_plan_.poses[i].pose.position;
     gx[i] = tx + ct * pp.x - st * pp.y;
     gy[i] = ty + st * pp.x + ct * pp.y;
+    if (!std::isfinite(gx[i]) || !std::isfinite(gy[i])) {
+      return fail("non-finite plan pose");
+    }
     if (i > 0) {
       s[i] = s[i - 1] + std::hypot(gx[i] - gx[i - 1], gy[i] - gy[i - 1]);
     }
@@ -660,7 +663,12 @@ geometry_msgs::msg::TwistStamped ProxMpcController::computeVelocityCommands(
       const double t = seg > 1e-9 ? (sk - s[i]) / seg : 0.0;
       x = gx[i] + t * (gx[i + 1] - gx[i]);
       y = gy[i] + t * (gy[i + 1] - gy[i]);
-      th = std::atan2(gy[i + 1] - gy[i], gx[i + 1] - gx[i]);
+      /* A duplicate consecutive plan position collapses this segment to zero
+       * length, which carries no heading; walk forward to the next segment with
+       * positive length instead of feeding atan2(0, 0) a degenerate delta. */
+      std::size_t hi = i;
+      while (s[hi + 1] - s[hi] <= 1e-9 && hi + 2 < plan_size) {++hi;}
+      th = std::atan2(gy[hi + 1] - gy[hi], gx[hi + 1] - gx[hi]);
     };
 
   /* Ease the cruise speed inside the goal-checker xy tolerance so the robot
@@ -683,9 +691,15 @@ geometry_msgs::msg::TwistStamped ProxMpcController::computeVelocityCommands(
    * cruise, then taper v_ref so high-curvature segments are sampled more slowly. */
   if (curvature_gain_ > 0.0 && v_ref > 0.0) {
     const double ds = v_ref * dt_;
-    double prev_th = ctheta;
+    /* Seed from the first sampled path tangent, not the robot's own yaw: seeding
+     * from ctheta would make the first heading delta the robot-to-path tracking
+     * error rather than path curvature. */
+    double sx0 = 0.0;
+    double sy0 = 0.0;
+    double prev_th = 0.0;
+    sample(s0, sx0, sy0, prev_th);
     double max_kappa = 0.0;
-    for (std::size_t k = 0; k <= np_; ++k) {
+    for (std::size_t k = 1; k <= np_; ++k) {
       double sx = 0.0;
       double sy = 0.0;
       double sth = 0.0;

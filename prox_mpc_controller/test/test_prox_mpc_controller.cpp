@@ -741,6 +741,20 @@ TEST_F(ProxMpcControllerTest, CurvatureGainReducesCruiseOnCurvedPlan)
   EXPECT_LT(vref_gain, vref_gain0);                // curvature taper slows the cruise
 }
 
+// The curvature estimator seeds its first heading delta from the plan's own
+// sampled tangent, not the robot's yaw: on a straight plan (zero true
+// curvature) a robot heading that differs from the path tangent must not by
+// itself taper the cruise speed.
+TEST_F(ProxMpcControllerTest, CurvatureGainIgnoresInitialHeadingMismatchOnStraightPlan)
+{
+  auto c = makeConfigured({rclcpp::Parameter("FollowPath.curvature_gain", 2.0)});
+  c->activate();
+  c->setPlan(makeStraightPlan(31, 0.2));           // straight plan along +x
+  c->computeVelocityCommands(
+    makePose(0.0, 0.0, 1.0), geometry_msgs::msg::Twist(), nullptr);   // heading far off the path
+  EXPECT_NEAR(c->mpc()->getGoalU()(0, 0), c->desiredLinearVel(), 1e-6);
+}
+
 // goal_checker xy tolerance eases the cruise reference once the robot is inside
 // the tolerance band; the lowest() sentinel and a false return leave it intact.
 TEST_F(ProxMpcControllerTest, GoalCheckerToleranceEasesApproach)
@@ -903,6 +917,55 @@ TEST_F(ProxMpcControllerTest, ComputeDeceleratesOnNonFinitePose)
   EXPECT_NEAR(cmd.twist.linear.x, 0.0, kTol);
   EXPECT_NEAR(cmd.twist.angular.z, 0.0, kTol);
   EXPECT_EQ(c->failureCount(), 1);
+}
+
+// A non-finite plan pose beyond the sampled horizon must still reject the whole
+// cycle: the transform loop validates every plan pose up front, not only the
+// ones the horizon happens to sample. Without that check this corrupted point
+// is never read by sample() (it sits well past the ~2 m horizon reach) and the
+// cycle would drive normally, oblivious to the corruption elsewhere in the plan.
+TEST_F(ProxMpcControllerTest, ComputeDeceleratesOnNonFinitePlanPoseBeyondHorizon)
+{
+  auto c = makeConfigured();
+  c->activate();
+  nav_msgs::msg::Path path = makeStraightPlan(50, 0.2);   // 10 m plan; horizon reaches ~2 m
+  path.poses[40].pose.position.x = std::numeric_limits<double>::quiet_NaN();
+  c->setPlan(path);
+
+  const auto cmd = c->computeVelocityCommands(
+    makePose(0.0, 0.0, 0.0), geometry_msgs::msg::Twist(), nullptr);
+  EXPECT_TRUE(std::isfinite(cmd.twist.linear.x));
+  EXPECT_TRUE(std::isfinite(cmd.twist.angular.z));
+  EXPECT_NEAR(cmd.twist.linear.x, 0.0, kTol);   // braked from rest, not a normal cruise command
+  EXPECT_EQ(c->failureCount(), 1);
+}
+
+// A leading run of duplicate plan positions collapses the first segment to zero
+// length; the heading reference at that node must come from the next segment
+// with positive length, not from atan2(0, 0) on the degenerate one.
+TEST_F(ProxMpcControllerTest, ComputeSkipsDuplicateLeadingPlanPointForHeading)
+{
+  auto c = makeConfigured();
+  c->activate();
+
+  nav_msgs::msg::Path path;
+  path.header.frame_id = "map";
+  auto addPose = [&](double x, double y) {
+      geometry_msgs::msg::PoseStamped ps;
+      ps.header.frame_id = "map";
+      ps.pose.position.x = x;
+      ps.pose.position.y = y;
+      ps.pose.orientation.w = 1.0;
+      path.poses.push_back(ps);
+    };
+  addPose(0.0, 0.0);
+  addPose(0.0, 0.0);   // duplicate of the first pose
+  addPose(0.0, 1.0);   // the path actually heads in +y
+  c->setPlan(path);
+
+  c->computeVelocityCommands(makePose(0.0, 0.0, 0.0), geometry_msgs::msg::Twist(), nullptr);
+  const MatrixXd gx = c->mpc()->getGoalX();
+  EXPECT_NEAR(gx(0, 2), M_PI / 2.0, 1e-6);
 }
 
 // A non-converged solve decelerates the last command at the model deceleration
