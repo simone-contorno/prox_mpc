@@ -1081,9 +1081,8 @@ geometry_msgs::msg::TwistStamped ProxMpcController::computeVelocityCommands(
    * tangent psi is kept continuous (unwrapped relative to the direction the robot
    * is expected to travel in, then node to node) so the QP tracking error never
    * wraps near +/-pi. */
+  MatrixXd goal_x = MatrixXd::Zero(np_ + 1, n_);
   std::vector<double> psi_cont(np_ + 1, 0.0);
-  std::vector<double> ref_x(np_ + 1, 0.0);
-  std::vector<double> ref_y(np_ + 1, 0.0);
   double prev_psi = ctheta + (dir < 0.0 ? M_PI : 0.0);
   for (std::size_t k = 0; k <= np_; ++k) {
     double x = 0.0;
@@ -1093,8 +1092,8 @@ geometry_msgs::msg::TwistStamped ProxMpcController::computeVelocityCommands(
     psi = prev_psi + std::remainder(psi - prev_psi, 2.0 * M_PI);
     prev_psi = psi;
     psi_cont[k] = psi;
-    ref_x[k] = x;
-    ref_y[k] = y;
+    goal_x(k, idx_x_) = x;
+    goal_x(k, idx_y_) = y;
   }
 
   /* Build the state reference.
@@ -1111,7 +1110,6 @@ geometry_msgs::msg::TwistStamped ProxMpcController::computeVelocityCommands(
    * at a = 0 and to asin(L * kappa) / L at a = L, the front axle. Travelling in
    * reverse flips the sign of the curvature the same steering angle produces, and
    * turns the body around, which is what `dir` carries. */
-  MatrixXd goal_x = MatrixXd::Zero(np_ + 1, n_);
   const double a_off = ref_offset_x_;
   const double ds_ref = v_ref * dt_;
   const double yaw_flip = (dir < 0.0) ? M_PI : 0.0;
@@ -1129,8 +1127,6 @@ geometry_msgs::msg::TwistStamped ProxMpcController::computeVelocityCommands(
       beta = std::atan(a_off * z);
       goal_x(k, idx_steer_) = std::atan(wheelbase_ * z);
     }
-    goal_x(k, idx_x_) = ref_x[k];
-    goal_x(k, idx_y_) = ref_y[k];
     goal_x(k, idx_yaw_) = psi_cont[k] - beta - yaw_flip;
   }
 
