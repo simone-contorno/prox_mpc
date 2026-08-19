@@ -88,16 +88,31 @@ public:
   void reset() override;
 
 protected:
+  /// Read the model's declared planar mapping into the cached indices and
+  /// offsets, and reject a model this controller cannot drive before any state
+  /// or control vector is indexed. EIGEN_NO_DEBUG leaves an out-of-range Eigen
+  /// index unchecked, so the screening has to happen here rather than at the
+  /// first access. Rejected: fewer than three states, an index outside the
+  /// model's own dimensions, two planar quantities sharing one index, a model
+  /// carrying a steering angle without declaring a usable wheelbase or with a
+  /// lateral reference offset, and, when the in-loop obstacle term is active, a
+  /// model whose position does not sit at state columns 0 and 1, which is where
+  /// the core's obstacle rows read it. Each rejection throws
+  /// nav2_core::ControllerException naming `model_plugin` and the reason.
+  void readModelMapping(prox_mpc::Model & model, const std::string & model_plugin);
+
   /// Read the model's declared bounds into the cached control-law limits: both
-  /// bounds of `u[0]` into v_max_, v_min_ and max_linear_vel_; the lower bounds
-  /// of `du[0]` and `du[1]` into a_dec_lin_ and a_dec_ang_; every declared `du`
-  /// bound into du_low_ and du_upp_; the `u[1]` bound of a model with a steering
-  /// state into steer_rate_low_ and steer_rate_upp_. It also sizes last_cmd_u_ to
-  /// the model's control dimension. A model that declares none of a required
-  /// bound cannot be driven safely - a zero deceleration limit leaves the brake
-  /// ramp stuck at the current velocity, and a zero speed bound clamps the cruise
-  /// speed to zero - so a missing bound throws nav2_core::ControllerException
-  /// naming it. `model_plugin` is the plugin name reported in that message.
+  /// bounds of the speed control into v_max_, v_min_ and max_linear_vel_; the
+  /// lower bounds of `du[0]` and `du[1]` into a_dec_lin_ and a_dec_ang_; every
+  /// declared `du` bound into du_low_ and du_upp_; the `u[1]` bound of a model
+  /// with a steering state into steer_rate_low_ and steer_rate_upp_. It also
+  /// sizes last_cmd_u_ to the model's control dimension. A model that declares
+  /// none of a required bound cannot be driven safely - a zero deceleration
+  /// limit leaves the brake ramp stuck at the current velocity, and a zero speed
+  /// bound clamps the cruise speed to zero - so a missing bound throws
+  /// nav2_core::ControllerException naming it. `model_plugin` is the plugin name
+  /// reported in that message. Must run after readModelMapping(), whose cached
+  /// speed-control index it reads.
   void readModelBounds(prox_mpc::Model & model, const std::string & model_plugin);
 
   /// Convert a requested speed limit to an absolute bound (a fraction of the
@@ -207,9 +222,27 @@ protected:
   double dt_{0.1};
   double desired_linear_vel_{1.0};
 
-  /// Model wheelbase L [m] (forwarded to the model via model_params.L); used to
-  /// pre-position the steering reference for models with a steering state.
-  double wheelbase_{1.6};
+  /// Model wheelbase L [m], read back from the loaded model's declared planar
+  /// mapping rather than from the model_params.L parameter that was forwarded to
+  /// it, so the steering reference is built on the wheelbase the model actually
+  /// uses. Meaningful only when has_steering_ is set.
+  double wheelbase_{0.0};
+
+  /// The loaded model's declared planar mapping, read once at configure() into
+  /// plain members: the control path never queries the model for it.
+  std::size_t idx_x_{0};
+  std::size_t idx_y_{1};
+  std::size_t idx_yaw_{2};
+  std::size_t idx_v_{0};
+  std::size_t idx_steer_{0};
+  bool has_steering_{false};
+
+  /// Position of the model's reference point in base_link [m]. The Nav2 pose is
+  /// carried out to it before the solve and back before the footprint check,
+  /// which is defined about base_link. Both are zero unless the model declares
+  /// otherwise.
+  double ref_offset_x_{0.0};
+  double ref_offset_y_{0.0};
 
   /// Cruise-speed reduction gain on path curvature; 0.0 disables the reduction.
   double curvature_gain_{0.0};

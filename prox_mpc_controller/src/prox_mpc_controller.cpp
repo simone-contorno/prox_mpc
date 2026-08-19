@@ -78,6 +78,10 @@ constexpr double kMinCbfGamma = 1e-3;
 constexpr int kMaxCostThreshold = 254;
 /// Marks a scanned obstacle that won no slot in the per-cycle capacity.
 constexpr std::size_t kNoObstacleSlot = std::numeric_limits<std::size_t>::max();
+/// Largest |offset * curvature| the steering inverse is evaluated at. The
+/// closed form divides by sqrt(1 - (offset * curvature)^2), which is the
+/// geometry running out of steering angle; clamping keeps the reference finite.
+constexpr double kMaxOffsetCurvature = 0.99;
 
 /// Planar yaw from a quaternion.
 double quat_yaw(const geometry_msgs::msg::Quaternion & q)
@@ -142,6 +146,17 @@ double required_bound(
   throw nav2_core::ControllerException(
           "ProxMpcController: model '" + model_plugin + "' declares no '" + var +
           "' bound for the " + channel + " control; " + consequence);
+}
+
+/// Whether every component of a Twist is finite. All six are published, and a
+/// model is free to fill any of them, so all six are checked: testing only the
+/// two a planar base consumes would let a non-finite linear.y or angular.x reach
+/// the wire unexamined.
+bool twist_is_finite(const geometry_msgs::msg::Twist & twist)
+{
+  return std::isfinite(twist.linear.x) && std::isfinite(twist.linear.y) &&
+         std::isfinite(twist.linear.z) && std::isfinite(twist.angular.x) &&
+         std::isfinite(twist.angular.y) && std::isfinite(twist.angular.z);
 }
 
 /// Apply the project log_level key to the plugin's own logger.
@@ -410,10 +425,10 @@ void ProxMpcController::configure(
     model_params["v_min"] = (model_v_min < 0.0) ? model_v_min : -model_v_max;
   }
   model_->configure(model_params);
-  wheelbase_ = model_l;
   n_ = model_->getN();
   m_ = model_->getM();
 
+  readModelMapping(*model_, model_plugin);
   readModelBounds(*model_, model_plugin);
 
   /* Cruise speed must sit within the model's speed bound. */
@@ -491,21 +506,96 @@ void ProxMpcController::configure(
     plugin_name_.c_str(), model_plugin.c_str(), np_, nc_, dt_, k_obs);
 }
 
+void ProxMpcController::readModelMapping(
+  prox_mpc::Model & model, const std::string & model_plugin)
+{
+  const prox_mpc::PlanarMapping mapping = model.getPlanarMapping();
+  auto reject = [&model_plugin](const std::string & why) {
+      throw nav2_core::ControllerException(
+              "ProxMpcController: model '" + model_plugin + "' " + why);
+    };
+
+  /* Three planar states and one speed control are the least this controller can
+   * drive; below that every index below is out of range, and EIGEN_NO_DEBUG
+   * turns that into a silent read rather than an abort. */
+  if (n_ < 3) {
+    reject("declares " + std::to_string(n_) + " states; at least 3 (x, y, yaw) are required");
+  }
+  if (m_ < 1) {
+    reject("declares no control input");
+  }
+  if (mapping.idx_x >= n_ || mapping.idx_y >= n_ || mapping.idx_yaw >= n_) {
+    reject("maps x, y or yaw to a state index outside its own state vector");
+  }
+  if (mapping.idx_x == mapping.idx_y || mapping.idx_x == mapping.idx_yaw ||
+    mapping.idx_y == mapping.idx_yaw)
+  {
+    reject("maps two planar quantities to the same state index");
+  }
+  if (mapping.idx_speed >= m_) {
+    reject("maps the longitudinal speed to a control index outside its own control vector");
+  }
+  if (!std::isfinite(mapping.ref_offset_x) || !std::isfinite(mapping.ref_offset_y)) {
+    reject("declares a non-finite reference-point offset");
+  }
+
+  has_steering_ = mapping.idx_steering != prox_mpc::PlanarMapping::kNoIndex;
+  if (has_steering_) {
+    if (mapping.idx_steering >= n_ || mapping.idx_steering == mapping.idx_x ||
+      mapping.idx_steering == mapping.idx_y || mapping.idx_steering == mapping.idx_yaw)
+    {
+      reject("maps its steering angle to an unusable state index");
+    }
+    /* The steering reference is built from the wheelbase, so a model that
+     * carries a steering angle has to say what its wheelbase is. The parameter
+     * forwarded as model_params.L is not read back here: a model free to ignore
+     * that key would otherwise be driven on a wheelbase it does not use. */
+    if (!std::isfinite(mapping.wheelbase) || mapping.wheelbase <= 0.0) {
+      reject(
+        "carries a steering angle but declares no wheelbase; override "
+        "getPlanarMapping() to declare one");
+    }
+    /* The steering inverse is derived for a reference point on the body x axis,
+     * which is where both the front and the rear axle sit. */
+    if (mapping.ref_offset_y != 0.0) {
+      reject("carries a steering angle and a lateral reference-point offset, which is unsupported");
+    }
+  }
+
+  /* The core's obstacle rows read the predicted position from state columns 0
+   * and 1 directly, so a model that puts it elsewhere cannot use the in-loop
+   * keep-out term. Rejected rather than silently constraining the wrong pair. */
+  if (model.getObsFlag() && max_obstacles_ > 0 && (mapping.idx_x != 0 || mapping.idx_y != 1)) {
+    reject(
+      "declares obstacle avoidance but maps its position away from state columns 0 and 1, "
+      "which is where the solver's keep-out rows read it; set max_obstacles to 0 or remap");
+  }
+
+  idx_x_ = mapping.idx_x;
+  idx_y_ = mapping.idx_y;
+  idx_yaw_ = mapping.idx_yaw;
+  idx_v_ = mapping.idx_speed;
+  idx_steer_ = has_steering_ ? mapping.idx_steering : 0;
+  ref_offset_x_ = mapping.ref_offset_x;
+  ref_offset_y_ = mapping.ref_offset_y;
+  wheelbase_ = has_steering_ ? mapping.wheelbase : 0.0;
+}
+
 void ProxMpcController::readModelBounds(prox_mpc::Model & model, const std::string & model_plugin)
 {
   v_max_ = required_bound(
-    model, model_plugin, "u", 0, 2, "linear",
+    model, model_plugin, "u", idx_v_, 2, "linear",
     "the speed cap would collapse to zero and the controller would never move.");
   /* The lower bound is cached alongside it so a runtime speed limit narrows the
    * model's declared range instead of overwriting it; the same entry carries
    * both sides, so this lookup cannot fail once the one above succeeded. */
   v_min_ = required_bound(
-    model, model_plugin, "u", 0, 1, "linear",
+    model, model_plugin, "u", idx_v_, 1, "linear",
     "the speed cap would collapse to zero and the controller would never move.");
   max_linear_vel_ = v_max_;
   a_dec_lin_ = std::abs(
     required_bound(
-      model, model_plugin, "du", 0, 1, "linear",
+      model, model_plugin, "du", idx_v_, 1, "linear",
       "the solver-failure brake would never reach zero."));
   a_dec_ang_ = std::abs(
     required_bound(
@@ -535,9 +625,13 @@ void ProxMpcController::readModelBounds(prox_mpc::Model & model, const std::stri
    * than moving it at a rate the model never stated. */
   steer_rate_low_ = 0.0;
   steer_rate_upp_ = 0.0;
-  if (model.getN() > 3) {
+  if (has_steering_ && m > 1) {
+    /* The mapping declares which control is the longitudinal speed; the steering
+     * rate is the other one of a two-control steered model, which is what both
+     * bundled bicycles declare. */
+    const std::size_t idx_rate = (idx_v_ == 0) ? 1 : 0;
     for (const auto & entry : model.getIneq("u")) {
-      if (static_cast<std::size_t>(entry.second[0]) == 1) {
+      if (static_cast<std::size_t>(entry.second[0]) == idx_rate) {
         steer_rate_low_ = entry.second[1];
         steer_rate_upp_ = entry.second[2];
       }
@@ -669,13 +763,15 @@ geometry_msgs::msg::TwistStamped ProxMpcController::computeVelocityCommands(
        * in direction and rate and cannot jump. A model that declares no steering
        * rate leaves the bound at zero, which keeps the belief frozen rather than
        * guessing a rate for it. */
-      if (n_ > 3) {
+      if (has_steering_) {
         steering_state_ =
           brake_toward(steering_state_, steer_rate_low_, steer_rate_upp_, period);
       }
 
       VectorXd u_brake = last_cmd_u_;
-      if (u_brake.size() > 0) {u_brake(0) = velocity.linear.x;}
+      if (u_brake.size() > static_cast<Eigen::Index>(idx_v_)) {
+        u_brake(static_cast<Eigen::Index>(idx_v_)) = velocity.linear.x;
+      }
       for (Eigen::Index j = 0; j < u_brake.size(); ++j) {
         u_brake(j) = brake_toward(
           u_brake(j), du_low_[static_cast<std::size_t>(j)],
@@ -688,15 +784,17 @@ geometry_msgs::msg::TwistStamped ProxMpcController::computeVelocityCommands(
        * here from the current pose, with a non-finite pose leaving it at zero. */
       VectorXd brake_state = VectorXd::Zero(n_);
       if (std::isfinite(cx) && std::isfinite(cy) && std::isfinite(ctheta)) {
-        brake_state(0) = cx;
-        brake_state(1) = cy;
-        brake_state(2) = ctheta;
+        brake_state(idx_x_) = cx + ref_offset_x_ * std::cos(ctheta) -
+          ref_offset_y_ * std::sin(ctheta);
+        brake_state(idx_y_) = cy + ref_offset_x_ * std::sin(ctheta) +
+          ref_offset_y_ * std::cos(ctheta);
+        brake_state(idx_yaw_) = ctheta;
       }
-      if (n_ > 3) {brake_state(3) = steering_state_;}
+      if (has_steering_) {brake_state(idx_steer_) = steering_state_;}
       model_->setX(brake_state);
 
       geometry_msgs::msg::Twist twist = model_->toTwist(u_brake);
-      if (!std::isfinite(twist.linear.x) || !std::isfinite(twist.angular.z)) {
+      if (!twist_is_finite(twist)) {
         /* Degraded mode of last resort: a model that maps braked controls to a
          * non-finite twist would otherwise publish it on the safety path, so fall
          * back to ramping the measured twist within the channel-0 and channel-1
@@ -897,51 +995,73 @@ geometry_msgs::msg::TwistStamped ProxMpcController::computeVelocityCommands(
     v_ref /= 1.0 + curvature_gain_ * max_kappa;
   }
 
-  /* Build the state and control references. Heading is kept continuous (unwrapped
-   * relative to the robot heading, then node to node) so the QP tracking error
-   * never wraps near +/-pi. */
-  MatrixXd goal_x = MatrixXd::Zero(np_ + 1, n_);
-  std::vector<double> th_cont(np_ + 1, 0.0);
-  double prev_th = ctheta;
+  /* Sample the reference path the model's own reference point is to follow. The
+   * tangent psi is kept continuous (unwrapped relative to the robot heading, then
+   * node to node) so the QP tracking error never wraps near +/-pi. */
+  std::vector<double> psi_cont(np_ + 1, 0.0);
+  std::vector<double> ref_x(np_ + 1, 0.0);
+  std::vector<double> ref_y(np_ + 1, 0.0);
+  double prev_psi = ctheta;
   for (std::size_t k = 0; k <= np_; ++k) {
     double x = 0.0;
     double y = 0.0;
-    double th = 0.0;
-    sample(s0 + v_ref * static_cast<double>(k) * dt_, x, y, th);
-    th = prev_th + std::remainder(th - prev_th, 2.0 * M_PI);
-    prev_th = th;
-    th_cont[k] = th;
-    goal_x(k, 0) = x;
-    goal_x(k, 1) = y;
-    goal_x(k, 2) = th;
+    double psi = 0.0;
+    sample(s0 + v_ref * static_cast<double>(k) * dt_, x, y, psi);
+    psi = prev_psi + std::remainder(psi - prev_psi, 2.0 * M_PI);
+    prev_psi = psi;
+    psi_cont[k] = psi;
+    ref_x[k] = x;
+    ref_y[k] = y;
   }
 
-  /* Bicycle steering reference: pre-position the wheel to the per-node path
-   * curvature kappa = dtheta/ds, delta_ref = atan(L * kappa). Models without a
-   * steering state (n_ == 3) keep the go-straight default (channel left at zero). */
-  if (n_ > 3) {
-    const double ds = v_ref * dt_;
-    for (std::size_t k = 0; k <= np_; ++k) {
-      double kappa = 0.0;
-      if (ds > 1e-9) {
-        kappa = (k < np_) ? (th_cont[k + 1] - th_cont[k]) / ds :
-          (th_cont[k] - th_cont[k - 1]) / ds;
-      }
-      goal_x(k, 3) = std::atan(wheelbase_ * kappa);
+  /* Build the state reference.
+   *
+   * The reference path is the path of the point the model's state refers to,
+   * which the model declares as an offset `a` along the body x axis from
+   * base_link. For a model referenced to base_link itself (a = 0) the body
+   * heading is the path tangent and the steering inverse is the familiar
+   * delta = atan(L * kappa). For a model referenced ahead of base_link the two
+   * differ, and both follow from one relation: with z = tan(delta) / L, the
+   * reference point's path curvature is kappa = z / sqrt(1 + (a z)^2), and the
+   * body heading trails the path tangent by atan(a z). Inverting gives
+   * z = kappa / sqrt(1 - (a kappa)^2), which reduces to the expression above at
+   * a = 0 and to asin(L * kappa) / L at a = L, the front axle. */
+  MatrixXd goal_x = MatrixXd::Zero(np_ + 1, n_);
+  const double a_off = ref_offset_x_;
+  const double ds_ref = v_ref * dt_;
+  for (std::size_t k = 0; k <= np_; ++k) {
+    double kappa = 0.0;
+    if (ds_ref > 1e-9) {
+      kappa = (k < np_) ? (psi_cont[k + 1] - psi_cont[k]) / ds_ref :
+        (psi_cont[k] - psi_cont[k - 1]) / ds_ref;
     }
+    double beta = 0.0;
+    if (has_steering_) {
+      const double ak = std::clamp(a_off * kappa, -kMaxOffsetCurvature, kMaxOffsetCurvature);
+      const double z = kappa / std::sqrt(1.0 - ak * ak);
+      beta = std::atan(a_off * z);
+      goal_x(k, idx_steer_) = std::atan(wheelbase_ * z);
+    }
+    goal_x(k, idx_x_) = ref_x[k];
+    goal_x(k, idx_y_) = ref_y[k];
+    goal_x(k, idx_yaw_) = psi_cont[k] - beta;
   }
 
   MatrixXd goal_u = MatrixXd::Zero(nc_, m_);
   for (std::size_t k = 0; k < nc_; ++k) {
-    goal_u(k, 0) = v_ref;
+    goal_u(k, idx_v_) = v_ref;
   }
 
-  /* Current full state, tracking the bicycle steering angle the Nav2 pose omits. */
+  /* Current full state. The Nav2 pose is base_link; the model's state refers to
+   * its own declared reference point, so the pose is carried out to it. The
+   * steering angle the pose omits is the controller's own retained belief. */
   VectorXd state = VectorXd::Zero(n_);
-  state(0) = cx;
-  state(1) = cy;
-  state(2) = ctheta;
-  if (n_ > 3) {state(3) = steering_state_;}
+  const double cos_ct = std::cos(ctheta);
+  const double sin_ct = std::sin(ctheta);
+  state(idx_x_) = cx + ref_offset_x_ * cos_ct - ref_offset_y_ * sin_ct;
+  state(idx_y_) = cy + ref_offset_x_ * sin_ct + ref_offset_y_ * cos_ct;
+  state(idx_yaw_) = ctheta;
+  if (has_steering_) {state(idx_steer_) = steering_state_;}
 
   /* Fill the per-node obstacle triples for this cycle: predictive + hybrid when
    * enabled and fresh tracking data is available, else costmap-only. */
@@ -1004,8 +1124,15 @@ geometry_msgs::msg::TwistStamped ProxMpcController::computeVelocityCommands(
     std::lock_guard<nav2_costmap_2d::Costmap2D::mutex_t> lock(*(costmap->getMutex()));
     if (footprint.size() >= 3) {
       nav2_costmap_2d::FootprintCollisionChecker<nav2_costmap_2d::Costmap2D *> checker(costmap);
-      const double fcost = checker.footprintCostAtPose(
-        x_sol(1, 0), x_sol(1, 1), x_sol(1, 2), footprint);
+      /* The padded footprint is defined about base_link, while the predicted pose
+       * refers to the model's own reference point, so it is carried back before
+       * the check. The two coincide for a model referenced to base_link. */
+      const double pth = x_sol(1, idx_yaw_);
+      const double pbx =
+        x_sol(1, idx_x_) - (ref_offset_x_ * std::cos(pth) - ref_offset_y_ * std::sin(pth));
+      const double pby =
+        x_sol(1, idx_y_) - (ref_offset_x_ * std::sin(pth) + ref_offset_y_ * std::cos(pth));
+      const double fcost = checker.footprintCostAtPose(pbx, pby, pth, footprint);
       /* Upstream Nav2's own collision policy, in upstream's order: unknown space
        * is not a collision when the costmap tracks it, and everything else is
        * judged at LETHAL_OBSTACLE rather than INSCRIBED_INFLATED_OBSTACLE,
@@ -1049,13 +1176,13 @@ geometry_msgs::msg::TwistStamped ProxMpcController::computeVelocityCommands(
   /* Map the first control to a body twist; the model reads the current state. */
   model_->setX(state);
   const geometry_msgs::msg::Twist twist = model_->toTwist(u0);
-  if (!std::isfinite(twist.linear.x) || !std::isfinite(twist.angular.z)) {
+  if (!twist_is_finite(twist)) {
     return fail("non-finite command");
   }
 
   failure_count_ = 0;
   veto_count_ = 0;
-  if (n_ > 3) {steering_state_ = x_sol(1, 3);}
+  if (has_steering_) {steering_state_ = x_sol(1, idx_steer_);}
   last_cmd_u_ = u0;
   last_cmd_v_ = twist.linear.x;
   last_cmd_w_ = twist.angular.z;
@@ -1070,9 +1197,9 @@ geometry_msgs::msg::TwistStamped ProxMpcController::computeVelocityCommands(
     for (Eigen::Index k = 0; k < x_sol.rows(); ++k) {
       geometry_msgs::msg::PoseStamped ps;
       ps.header = traj.header;
-      ps.pose.position.x = x_sol(k, 0);
-      ps.pose.position.y = x_sol(k, 1);
-      const double th = x_sol(k, 2);
+      ps.pose.position.x = x_sol(k, idx_x_);
+      ps.pose.position.y = x_sol(k, idx_y_);
+      const double th = x_sol(k, idx_yaw_);
       ps.pose.orientation.z = std::sin(th / 2.0);
       ps.pose.orientation.w = std::cos(th / 2.0);
       traj.poses.push_back(ps);
@@ -1115,7 +1242,7 @@ void ProxMpcController::applySpeedLimit(double speed_limit, bool percentage)
    * request, including the NO_SPEED_LIMIT restore, which would otherwise widen
    * the lower bound to -v_max_. Both bundled models declare symmetric bounds, so
    * this leaves their commanded sequence unchanged. */
-  model_->updateIneq("u", 0, std::max(v_min_, -v_lim), std::min(v_max_, v_lim));
+  model_->updateIneq("u", idx_v_, std::max(v_min_, -v_lim), std::min(v_max_, v_lim));
   max_linear_vel_ = v_lim;
 }
 
@@ -1367,6 +1494,11 @@ void ProxMpcController::fillStaticObstacles(
   const std::size_t k_obs = static_cast<std::size_t>(max_obstacles_);
   if (slot_begin >= k_obs) {return;}
   const std::size_t budget = k_obs - slot_begin;
+  /* The keep-out disc is centred on the model's own reference point, which is
+   * base_link for every model that declares no offset. For a model referenced
+   * away from base_link the disc does not cover the whole robot on its own; the
+   * footprint veto, which is checked at the base_link pose, is what covers the
+   * rest. */
   const double d_safe = robot_radius_ + safety_margin_;
 
   /* The grid lock is taken only around the cell reads, once per node, and is
