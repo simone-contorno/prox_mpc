@@ -1011,12 +1011,12 @@ geometry_msgs::msg::TwistStamped ProxMpcController::computeVelocityCommands(
        * judged at LETHAL_OBSTACLE rather than INSCRIBED_INFLATED_OBSTACLE,
        * because a real polygon check has already been performed and an inflated
        * cell is not by itself a collision (RPP collision_checker.cpp:143-154,
-       * MPPI cost_critic.hpp:71-78). It inherits upstream's masking property:
-       * footprintCostAtPose returns the maximum cost under the footprint, so a
-       * footprint spanning one unknown and one lethal cell reports 255 and is
-       * judged clear. The in-loop QP keep-out half-plane still carries that
-       * lethal cell, because the horizon extraction includes it at
-       * costmap_cost_threshold and skips only NO_INFORMATION. */
+       * MPPI cost_critic.hpp:71-78). Nav2's own doc comment describes
+       * footprintCostAtPose as returning the maximum cost under the footprint,
+       * which would mask a lethal cell behind an adjoining unknown one; measured
+       * against the installed nav2_costmap_2d (1.3.12+), it does not - a
+       * footprint spanning both reports the lethal cost, so the veto still
+       * fires (see FootprintVetoStillFiresWhenLethalAdjoinsUnknown). */
       const bool unknown_is_clear =
         fcost == static_cast<double>(nav2_costmap_2d::NO_INFORMATION) &&
         costmap_ros_->getLayeredCostmap()->isTrackingUnknown();
