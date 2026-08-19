@@ -155,6 +155,9 @@ protected:
   bool cand_solved = false;     // Whether the candidate's last QP converged.
   bool cand_finite = false;     // Whether the candidate is finite over the whole horizon.
 
+  /* Set by init(); the structural setters reject a call made after it. */
+  bool initialized = false;
+
   /* Default solver limits (centralized; override via the setters) */
   static constexpr size_t kDefaultMaxExtQP = 10000;  // Max QP external iterations.
   static constexpr size_t kDefaultMaxIntQP = 1500;   // Max QP internal iterations (proximal op).

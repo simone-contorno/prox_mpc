@@ -8,9 +8,54 @@
 #include <cmath>
 #include <memory>
 #include <stdexcept>
+#include <string>
 
 namespace prox_mpc
 {
+
+namespace
+{
+/* Relative tolerance the weight-matrix symmetry and eigenvalue tests are run at.
+ * Loose enough that a matrix assembled in floating point passes, tight enough
+ * that a matrix the caller meant to be asymmetric or indefinite does not. */
+constexpr double kWeightTol = 1e-8;
+
+/* Reject a structural setter called after init(). The buffers, the QP object and
+ * the solver's own sizing are fixed there, and none of these setters resizes
+ * them, so a post-init call would leave the object describing one problem and
+ * solving another. */
+void rejectAfterInit(bool initialized, const char * setter)
+{
+  if (initialized == true) {
+    throw std::logic_error(
+            std::string("MPC::") + setter +
+            ": structural setters must be called before init()");
+  }
+}
+
+/* Throw unless `m` is finite, symmetric and positive semidefinite. proxsuite
+ * validates sizes only, and the Hessian it is handed is 2 * m, so an asymmetric
+ * or indefinite weight silently makes it solve a different problem than the
+ * caller wrote. */
+void requireSymmetricPSD(const MatrixXd & m, const char * name)
+{
+  const std::string prefix = std::string("MPC::init: ") + name;
+  if (!m.allFinite()) {
+    throw std::invalid_argument(prefix + " must be finite");
+  }
+  const double scale = std::max(1.0, m.cwiseAbs().maxCoeff());
+  if ((m - m.transpose()).cwiseAbs().maxCoeff() > kWeightTol * scale) {
+    throw std::invalid_argument(prefix + " must be symmetric");
+  }
+  const Eigen::SelfAdjointEigenSolver<MatrixXd> solver(m);
+  if (solver.info() != Eigen::Success) {
+    throw std::invalid_argument(prefix + " eigenvalue decomposition failed");
+  }
+  if (solver.eigenvalues().minCoeff() < -kWeightTol * scale) {
+    throw std::invalid_argument(prefix + " must be positive semidefinite");
+  }
+}
+}  // namespace
 
 /*!
  * Inizialize the Model Predictive Control.
@@ -42,6 +87,10 @@ void MPC::init(std::shared_ptr<Model> model)
   if (W.rows() != 1 || W.cols() != 1) {
     throw std::invalid_argument("MPC::init: W must be 1 x 1");
   }
+  requireSymmetricPSD(Q, "Q");
+  requireSymmetricPSD(S, "S");
+  requireSymmetricPSD(R, "R");
+  requireSymmetricPSD(W, "W");
 
   x = MatrixXd::Zero(Np + 1, n);
   u = MatrixXd::Zero(Nc, m);
@@ -64,6 +113,10 @@ void MPC::init(std::shared_ptr<Model> model)
     obs(r, 1) = kObsFarSentinel;
     obs(r, 2) = 0.0;
   }
+
+  /* Every buffer and the QP object are sized from here on; the structural
+   * setters reject a later call rather than mutating one of the two halves. */
+  initialized = true;
 }
 
 /* Configure the ProxQP solver. */
@@ -267,28 +320,44 @@ void MPC::setX(MatrixXd x) {this->x = x;}
 void MPC::setU0(VectorXd u0) {this->u0 = u0;}
 
 /*!
- * Set the intermediate states weight matrix.
+ * Set the intermediate states weight matrix. Pre-init only; init() validates it.
  * @param Q matrix.
  */
-void MPC::setQ(MatrixXd Q) {this->Q = Q;}
+void MPC::setQ(MatrixXd Q)
+{
+  rejectAfterInit(initialized, "setQ");
+  this->Q = Q;
+}
 
 /*!
- * Set the control input weight matrix.
+ * Set the control input weight matrix. Pre-init only; init() validates it.
  * @param R matrix.
  */
-void MPC::setR(MatrixXd R) {this->R = R;}
+void MPC::setR(MatrixXd R)
+{
+  rejectAfterInit(initialized, "setR");
+  this->R = R;
+}
 
 /*!
- * Set the final state weight matrix.
+ * Set the final state weight matrix. Pre-init only; init() validates it.
  * @param S matrix.
  */
-void MPC::setS(MatrixXd S) {this->S = S;}
+void MPC::setS(MatrixXd S)
+{
+  rejectAfterInit(initialized, "setS");
+  this->S = S;
+}
 
 /*!
- * Set the slack variables weight matrix.
+ * Set the slack variables weight matrix. Pre-init only; init() validates it.
  * @param W matrix.
  */
-void MPC::setW(MatrixXd W) {this->W = W;}
+void MPC::setW(MatrixXd W)
+{
+  rejectAfterInit(initialized, "setW");
+  this->W = W;
+}
 
 /*!
  * Set the prediction horizon.
@@ -297,6 +366,7 @@ void MPC::setW(MatrixXd W) {this->W = W;}
  */
 void MPC::setNp(size_t Np)
 {
+  rejectAfterInit(initialized, "setNp");
   if (Np == 0) {throw std::invalid_argument("MPC::setNp: Np must be > 0");}
   this->Np = Np;
   if (T > 0.0) {this->dt = T / Np;}
@@ -308,6 +378,7 @@ void MPC::setNp(size_t Np)
  */
 void MPC::setNc(size_t Nc)
 {
+  rejectAfterInit(initialized, "setNc");
   if (Nc == 0) {throw std::invalid_argument("MPC::setNc: Nc must be > 0");}
   // Np may not be set yet (0 is its unset sentinel, matching setdt/setT below);
   // the comparison is skipped until it is known.
@@ -349,27 +420,59 @@ void MPC::setPose(VectorXd pose) {this->pose = pose;}
 
 /*!
  * Set the desired state goals.
- * @param goal_x goals.
+ * The assembly reads rows 0..Np and every state column, so an undersized matrix
+ * is rejected here rather than indexed out of bounds on the control hot path,
+ * where EIGEN_NO_DEBUG leaves the access unchecked. The column count is known
+ * only once init() has read n from the model, so it is checked from then on.
+ * @param goal_x goals ((Np + 1) x n).
  */
-void MPC::setGoalX(MatrixXd goal_x) {this->goal_x = goal_x;}
+void MPC::setGoalX(MatrixXd goal_x)
+{
+  if (Np > 0 && goal_x.rows() < static_cast<Eigen::Index>(Np) + 1) {
+    throw std::invalid_argument("MPC::setGoalX: goal_x must have at least Np + 1 rows");
+  }
+  if (n > 0 && goal_x.cols() != static_cast<Eigen::Index>(n)) {
+    throw std::invalid_argument("MPC::setGoalX: goal_x must have n columns");
+  }
+  this->goal_x = goal_x;
+}
 
 /*!
  * Set the desired control goals.
- * @param goal_u goals.
+ * The assembly reads rows 0..Nc-1 and every control column; same reasoning as
+ * setGoalX.
+ * @param goal_u goals (Nc x m).
  */
-void MPC::setGoalU(MatrixXd goal_u) {this->goal_u = goal_u;}
+void MPC::setGoalU(MatrixXd goal_u)
+{
+  if (Nc > 0 && goal_u.rows() < static_cast<Eigen::Index>(Nc)) {
+    throw std::invalid_argument("MPC::setGoalU: goal_u must have at least Nc rows");
+  }
+  if (m > 0 && goal_u.cols() != static_cast<Eigen::Index>(m)) {
+    throw std::invalid_argument("MPC::setGoalU: goal_u must have m columns");
+  }
+  this->goal_u = goal_u;
+}
 
 /*!
  * Set the maximum number of internal iterations for the QP solver.
  * @param max_iter max. iterations (default = 1500).
  */
-void MPC::setMaxIntIterQP(size_t max_iter) {this->max_int_qp = max_iter;}
+void MPC::setMaxIntIterQP(size_t max_iter)
+{
+  rejectAfterInit(initialized, "setMaxIntIterQP");
+  this->max_int_qp = max_iter;
+}
 
 /*!
  * Set the maximum number of external iterations for the QP solver.
  * @param max_iter max. iterations (default = 10000).
  */
-void MPC::setMaxExtIterQP(size_t max_iter) {this->max_ext_qp = max_iter;}
+void MPC::setMaxExtIterQP(size_t max_iter)
+{
+  rejectAfterInit(initialized, "setMaxExtIterQP");
+  this->max_ext_qp = max_iter;
+}
 
 /*!
  * Set the maximum number of iterations for the SQP solver.
@@ -387,13 +490,21 @@ void MPC::setMaxSolveTime(double seconds) {this->max_solve_time = seconds;}
  * Set if use initial guesses or not.
  * @param guess flag (default: true).
  */
-void MPC::setGuess(bool guess) {this->guess = guess;}
+void MPC::setGuess(bool guess)
+{
+  rejectAfterInit(initialized, "setGuess");
+  this->guess = guess;
+}
 
 /*!
  * Set QP sub-problems type.
  * @param qp_type sparse (false) or dense (true) (default: false).
  */
-void MPC::setQPtype(bool qp_type) {this->qp_type = qp_type;}
+void MPC::setQPtype(bool qp_type)
+{
+  rejectAfterInit(initialized, "setQPtype");
+  this->qp_type = qp_type;
+}
 
 /*!
  * Set the discrete-time CBF rate for the obstacle coupling (forwarded to ProxQP).
