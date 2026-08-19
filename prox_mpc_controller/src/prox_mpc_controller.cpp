@@ -82,6 +82,9 @@ constexpr std::size_t kNoObstacleSlot = std::numeric_limits<std::size_t>::max();
 /// closed form divides by sqrt(1 - (offset * curvature)^2), which is the
 /// geometry running out of steering angle; clamping keeps the reference finite.
 constexpr double kMaxOffsetCurvature = 0.99;
+/// Below this squared norm a quaternion carries no orientation (the goal
+/// checker's unmeasured tolerance fields come back all-zero).
+constexpr double kMinQuatNorm2 = 1e-12;
 
 /// Planar yaw from a quaternion.
 double quat_yaw(const geometry_msgs::msg::Quaternion & q)
@@ -266,6 +269,10 @@ void ProxMpcController::configure(
 
   declare("desired_linear_vel", desired_linear_vel_, 1.0);
   declare("curvature_gain", curvature_gain_, 0.0);
+  /* Reverse travel is opt-in: the reference speed becomes signed, which the
+   * speed limit and the deceleration ramp both have to carry, so a stack that
+   * does not plan reversing sections keeps the forward-only reference. */
+  declare("allow_reversing", allow_reversing_, false);
 
   /* Cost weights must be non-negative: a negative weight makes the QP Hessian
    * indefinite (non-convex sub-problem). Floor them at a small positive value. */
@@ -430,6 +437,12 @@ void ProxMpcController::configure(
 
   readModelMapping(*model_, model_plugin);
   readModelBounds(*model_, model_plugin);
+  if (allow_reversing_ && v_min_ >= 0.0) {
+    RCLCPP_WARN(
+      logger_,
+      "allow_reversing is set but model '%s' declares no reverse travel (u[%zu] lower bound "
+      "%.3f), so the reference stays forward-only.", model_plugin.c_str(), idx_v_, v_min_);
+  }
 
   /* Cruise speed must sit within the model's speed bound. */
   if (desired_linear_vel_ > v_max_) {
@@ -819,8 +832,6 @@ geometry_msgs::msg::TwistStamped ProxMpcController::computeVelocityCommands(
       return cmd;
     };
 
-
-
   /* Transient-failure path: decelerate, and escalate to a recovery once the
    * consecutive-failure budget is exhausted. */
   auto fail = [&](const std::string & why) -> geometry_msgs::msg::TwistStamped {
@@ -915,23 +926,105 @@ geometry_msgs::msg::TwistStamped ProxMpcController::computeVelocityCommands(
   const double s0 =
     (best + 1 < plan_size) ? s[best] + best_t * (s[best + 1] - s[best]) : s[best];
 
-  /* Cruise speed, tapered so the horizon does not overshoot the plan end, and
-   * clamped by any active speed limit (goal-hold near the end). */
+  /* Travel direction, and the arc length the reference may not pass.
+   *
+   * A plan's pose orientations say which way the robot faces along it, so a
+   * segment whose direction opposes its own start pose's heading is driven in
+   * reverse. With allow_reversing off the reference stays forward-only, which is
+   * what every previous release produced. With it on, the direction under the
+   * robot sets the sign of the reference speed and the reference is truncated at
+   * the first direction change, so one horizon never spans a cusp - the same
+   * bound upstream's regulated pure pursuit places on the same problem. */
+  auto plan_direction = [&](std::size_t i) {
+      const double ex = gx[i + 1] - gx[i];
+      const double ey = gy[i + 1] - gy[i];
+      const double yaw = quat_yaw(global_plan_.poses[i].pose.orientation) + tyaw;
+      return std::cos(yaw) * ex + std::sin(yaw) * ey;
+    };
+  double dir = 1.0;
+  double s_end = s.back();
+  if (allow_reversing_ && v_min_ < 0.0 && best + 1 < plan_size) {
+    const double d0 = plan_direction(best);
+    dir = (d0 < 0.0) ? -1.0 : 1.0;
+    for (std::size_t i = best + 1; i + 1 < plan_size; ++i) {
+      const double d = plan_direction(i);
+      if (d != 0.0 && ((d < 0.0) != (dir < 0.0))) {
+        s_end = s[i];
+        break;
+      }
+    }
+  }
+
+  /* Cruise speed, tapered so the horizon does not overshoot the plan end (or the
+   * cusp it stops at), and clamped by any active speed limit (goal-hold near the
+   * end). It is a magnitude here; `dir` applies the sign once it is final. */
   const double horizon_time = static_cast<double>(np_) * dt_;
-  const double remaining = s.back() - s0;
+  const double remaining = s_end - s0;
   double v_ref = std::min({desired_linear_vel_, max_linear_vel_, remaining / horizon_time});
   if (v_ref < 0.0) {v_ref = 0.0;}
 
-  /* Sample a plan pose at a given arc length (holds the final pose past the end). */
+  /* Goal-checker tolerances, read once. The xy tolerance eases the cruise speed
+   * into the goal region below; the yaw tolerance is how the checker says it
+   * enforces a terminal heading at all, which is what turns the terminal-yaw
+   * reference on. The pointer is read but never retained.
+   *
+   * Each position field IS the radial bound, not a per-axis half-extent: upstream
+   * SimpleGoalChecker tests dx*dx + dy*dy <= T*T and writes the same scalar T
+   * into position.x and position.y, so hypot() would report sqrt(2)*T and start
+   * the taper 41% too far out. std::min is deliberately NOT RPP's
+   * position.x-only read (regulated_pure_pursuit_controller.cpp:180): the two
+   * are identical for every goal checker Nav2 ships, and the minimum is the
+   * conservative reading for a custom anisotropic checker whose y tolerance is
+   * tighter than its x. Do not "correct" this back to the x field alone.
+   *
+   * Unmeasured tolerance fields come back as std::numeric_limits<double>::lowest()
+   * (negative) and an all-zero quaternion, so both are screened. */
+  double xy_tol = 0.0;
+  bool have_xy_tol = false;
+  bool have_yaw_tol = false;
+  if (goal_checker != nullptr) {
+    geometry_msgs::msg::Pose pose_tol;
+    geometry_msgs::msg::Twist vel_tol;
+    if (goal_checker->getTolerances(pose_tol, vel_tol)) {
+      xy_tol = std::min(pose_tol.position.x, pose_tol.position.y);
+      have_xy_tol = std::isfinite(xy_tol) && pose_tol.position.x > 0.0 &&
+        pose_tol.position.y > 0.0;
+      const auto & qt = pose_tol.orientation;
+      if (qt.x * qt.x + qt.y * qt.y + qt.z * qt.z + qt.w * qt.w > kMinQuatNorm2) {
+        const double yaw_tol = std::abs(quat_yaw(qt));
+        have_yaw_tol = std::isfinite(yaw_tol) && yaw_tol > 0.0 && yaw_tol < M_PI;
+      }
+    }
+  }
+
+  /* Terminal heading. Past the plan end the reference pose becomes the goal
+   * pose, so the horizon settles onto the orientation the goal carries instead
+   * of holding whatever the last two plan vertices point at. It is engaged only
+   * when the goal checker publishes a yaw tolerance it enforces, and never on a
+   * reference truncated at a cusp, whose end is not the goal. */
+  bool have_terminal_yaw = false;
+  double terminal_yaw = 0.0;
+  if (have_yaw_tol && s_end >= s.back() && plan_size >= 2) {
+    const auto & qg = global_plan_.poses.back().pose.orientation;
+    if (qg.x * qg.x + qg.y * qg.y + qg.z * qg.z + qg.w * qg.w > kMinQuatNorm2) {
+      terminal_yaw = quat_yaw(qg) + tyaw;
+      have_terminal_yaw = std::isfinite(terminal_yaw);
+    }
+  }
+
+  /* Sample a plan pose at a given arc length. Past the end (or the cusp the
+   * reference stops at) it holds the final pose. */
   auto sample = [&](double sk, double & x, double & y, double & th) {
       if (sk <= 0.0) {sk = 0.0;}
+      if (sk > s_end) {sk = s_end;}
       if (sk >= s.back() || plan_size < 2) {
         x = gx.back();
         y = gy.back();
         /* Single-pose plan: the pose orientation is in the plan frame, so it
          * carries the same yaw offset the positions above were rotated by. */
         th = (plan_size < 2) ? quat_yaw(global_plan_.poses.back().pose.orientation) + tyaw :
-          std::atan2(gy.back() - gy[plan_size - 2], gx.back() - gx[plan_size - 2]);
+        (have_terminal_yaw ? terminal_yaw :
+        std::atan2(gy.back() - gy[plan_size - 2], gx.back() - gx[plan_size - 2]));
         return;
       }
       std::size_t i = 0;
@@ -954,27 +1047,9 @@ geometry_msgs::msg::TwistStamped ProxMpcController::computeVelocityCommands(
     };
 
   /* Ease the cruise speed inside the goal-checker xy tolerance so the robot
-   * settles into the goal region. Unmeasured tolerance fields come back as
-   * std::numeric_limits<double>::lowest() (negative), so accept only finite,
-   * positive values. The pointer is read but never retained.
-   *
-   * Each field IS the radial bound, not a per-axis half-extent: upstream
-   * SimpleGoalChecker tests dx*dx + dy*dy <= T*T and writes the same scalar T
-   * into position.x and position.y, so hypot() would report sqrt(2)*T and start
-   * the taper 41% too far out. std::min is deliberately NOT RPP's
-   * position.x-only read (regulated_pure_pursuit_controller.cpp:180): the two
-   * are identical for every goal checker Nav2 ships, and the minimum is the
-   * conservative reading for a custom anisotropic checker whose y tolerance is
-   * tighter than its x. Do not "correct" this back to the x field alone. */
-  if (goal_checker != nullptr) {
-    geometry_msgs::msg::Pose pose_tol;
-    geometry_msgs::msg::Twist vel_tol;
-    if (goal_checker->getTolerances(pose_tol, vel_tol)) {
-      const double xy_tol = std::min(pose_tol.position.x, pose_tol.position.y);
-      if (std::isfinite(xy_tol) && pose_tol.position.x > 0.0 && pose_tol.position.y > 0.0) {
-        v_ref *= std::clamp(remaining / xy_tol, 0.0, 1.0);
-      }
-    }
+   * settles into the goal region. */
+  if (have_xy_tol) {
+    v_ref *= std::clamp(remaining / xy_tol, 0.0, 1.0);
   }
 
   /* Curvature-aware cruise reduction (inert when curvature_gain_ == 0): estimate
@@ -1003,12 +1078,13 @@ geometry_msgs::msg::TwistStamped ProxMpcController::computeVelocityCommands(
   }
 
   /* Sample the reference path the model's own reference point is to follow. The
-   * tangent psi is kept continuous (unwrapped relative to the robot heading, then
-   * node to node) so the QP tracking error never wraps near +/-pi. */
+   * tangent psi is kept continuous (unwrapped relative to the direction the robot
+   * is expected to travel in, then node to node) so the QP tracking error never
+   * wraps near +/-pi. */
   std::vector<double> psi_cont(np_ + 1, 0.0);
   std::vector<double> ref_x(np_ + 1, 0.0);
   std::vector<double> ref_y(np_ + 1, 0.0);
-  double prev_psi = ctheta;
+  double prev_psi = ctheta + (dir < 0.0 ? M_PI : 0.0);
   for (std::size_t k = 0; k <= np_; ++k) {
     double x = 0.0;
     double y = 0.0;
@@ -1029,13 +1105,16 @@ geometry_msgs::msg::TwistStamped ProxMpcController::computeVelocityCommands(
    * heading is the path tangent and the steering inverse is the familiar
    * delta = atan(L * kappa). For a model referenced ahead of base_link the two
    * differ, and both follow from one relation: with z = tan(delta) / L, the
-   * reference point's path curvature is kappa = z / sqrt(1 + (a z)^2), and the
-   * body heading trails the path tangent by atan(a z). Inverting gives
-   * z = kappa / sqrt(1 - (a kappa)^2), which reduces to the expression above at
-   * a = 0 and to asin(L * kappa) / L at a = L, the front axle. */
+   * reference point's path curvature is kappa = dir * z / sqrt(1 + (a z)^2), and
+   * the body heading trails the path tangent by atan(a z). Inverting gives
+   * z = kappa * dir / sqrt(1 - (a kappa)^2), which reduces to today's expression
+   * at a = 0 and to asin(L * kappa) / L at a = L, the front axle. Travelling in
+   * reverse flips the sign of the curvature the same steering angle produces, and
+   * turns the body around, which is what `dir` carries. */
   MatrixXd goal_x = MatrixXd::Zero(np_ + 1, n_);
   const double a_off = ref_offset_x_;
   const double ds_ref = v_ref * dt_;
+  const double yaw_flip = (dir < 0.0) ? M_PI : 0.0;
   for (std::size_t k = 0; k <= np_; ++k) {
     double kappa = 0.0;
     if (ds_ref > 1e-9) {
@@ -1044,19 +1123,20 @@ geometry_msgs::msg::TwistStamped ProxMpcController::computeVelocityCommands(
     }
     double beta = 0.0;
     if (has_steering_) {
-      const double ak = std::clamp(a_off * kappa, -kMaxOffsetCurvature, kMaxOffsetCurvature);
-      const double z = kappa / std::sqrt(1.0 - ak * ak);
+      const double k_eff = kappa * dir;
+      const double ak = std::clamp(a_off * k_eff, -kMaxOffsetCurvature, kMaxOffsetCurvature);
+      const double z = k_eff / std::sqrt(1.0 - ak * ak);
       beta = std::atan(a_off * z);
       goal_x(k, idx_steer_) = std::atan(wheelbase_ * z);
     }
     goal_x(k, idx_x_) = ref_x[k];
     goal_x(k, idx_y_) = ref_y[k];
-    goal_x(k, idx_yaw_) = psi_cont[k] - beta;
+    goal_x(k, idx_yaw_) = psi_cont[k] - beta - yaw_flip;
   }
 
   MatrixXd goal_u = MatrixXd::Zero(nc_, m_);
   for (std::size_t k = 0; k < nc_; ++k) {
-    goal_u(k, idx_v_) = v_ref;
+    goal_u(k, idx_v_) = dir * v_ref;
   }
 
   /* Current full state. The Nav2 pose is base_link; the model's state refers to
@@ -1117,7 +1197,6 @@ geometry_msgs::msg::TwistStamped ProxMpcController::computeVelocityCommands(
     publish_cycle();
     return fail("solver did not converge");
   }
-
 
   /* Defense-in-depth finiteness guard. In this architecture a PROXQP_SOLVED status
    * normally implies a finite iterate (the candidate is accumulated QP increments,

@@ -249,6 +249,11 @@ protected:
   /// Cruise-speed reduction gain on path curvature; 0.0 disables the reduction.
   double curvature_gain_{0.0};
 
+  /// Follow a plan's own pose orientations into reverse travel. Off by default;
+  /// when on, the reference speed is signed and the reference is truncated at
+  /// the first direction change, so one horizon never spans a cusp.
+  bool allow_reversing_{false};
+
   /// Deceleration-ramp step [s] on a braking cycle; 0 measures the inter-cycle
   /// period instead, clamped into [dt_, kMaxBrakePeriodFactor * dt_].
   double brake_period_s_{0.0};
