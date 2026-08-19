@@ -15,6 +15,7 @@
 #include <map>
 #include <memory>
 #include <mutex>
+#include <numeric>
 #include <string>
 #include <tuple>
 #include <vector>
@@ -70,6 +71,8 @@ constexpr double kMinCbfGamma = 1e-3;
 /// Largest costmap cost still treated as an obstacle threshold (255 = NO_INFORMATION,
 /// handled separately; a higher threshold would silently disable avoidance).
 constexpr int kMaxCostThreshold = 254;
+/// Marks a scanned obstacle that won no slot in the per-cycle capacity.
+constexpr std::size_t kNoObstacleSlot = std::numeric_limits<std::size_t>::max();
 
 /// Planar yaw from a quaternion.
 double quat_yaw(const geometry_msgs::msg::Quaternion & q)
@@ -1264,6 +1267,29 @@ void ProxMpcController::fillStaticObstacles(
    * what that first QP linearizes about, so the two stay consistent. */
   const MatrixXd nominal = mpc_->getX();
 
+  /* One distinct physical object, tracked across nodes: (x, y) is where it was
+   * seen most recently, best_d2 its closest approach to any node's scan centre,
+   * and last_node the node it was last seen at. */
+  struct StaticObject
+  {
+    double x;
+    double y;
+    double best_d2;
+    std::size_t last_node;
+  };
+  /* One (node, object) sighting, carrying the position seen at that node. */
+  struct StaticHit
+  {
+    std::size_t node;
+    std::size_t object;
+    double x;
+    double y;
+  };
+  std::vector<StaticObject> objects;
+  std::vector<StaticHit> hits;
+  objects.reserve(np_ * budget);
+  hits.reserve(np_ * budget);
+
   for (std::size_t node = 0; node < np_; ++node) {
     const Eigen::Index centre_row = std::min(
       static_cast<Eigen::Index>(node + 2), static_cast<Eigen::Index>(np_));
@@ -1322,12 +1348,63 @@ void ProxMpcController::fillStaticObstacles(
       }
       if (!near) {picked.push_back({cd[1], cd[2]});}
     }
-    for (std::size_t slot = 0; slot < picked.size(); ++slot) {
-      const Eigen::Index row = static_cast<Eigen::Index>(node * k_obs + slot_begin + slot);
-      obs(row, 0) = picked[slot][0];
-      obs(row, 1) = picked[slot][1];
-      obs(row, 2) = d_safe;
+
+    /* Bind each representative to the object it continues, so a slot carries one
+     * physical object across the horizon instead of whatever happened to be
+     * nearest at each node independently. The coupled CBF compares slot s at node
+     * k against slot s at node k-1, so a slot that changes object between them
+     * compares two unrelated distances. Matching is against the object's most
+     * recently seen position, which follows an extended obstacle whose nearest
+     * representative slides along it as the scan centre advances; an object
+     * already claimed at this node cannot be claimed twice. */
+    for (const auto & pk : picked) {
+      const double pd2 = (pk[0] - pcx) * (pk[0] - pcx) + (pk[1] - pcy) * (pk[1] - pcy);
+      std::size_t match = objects.size();
+      double match_d2 = cr2;
+      for (std::size_t oi = 0; oi < objects.size(); ++oi) {
+        if (objects[oi].last_node == node) {continue;}
+        const double ox = pk[0] - objects[oi].x;
+        const double oy = pk[1] - objects[oi].y;
+        const double od2 = ox * ox + oy * oy;
+        if (od2 < match_d2) {
+          match_d2 = od2;
+          match = oi;
+        }
+      }
+      if (match == objects.size()) {
+        objects.push_back({pk[0], pk[1], pd2, node});
+      } else {
+        objects[match].x = pk[0];
+        objects[match].y = pk[1];
+        objects[match].best_d2 = std::min(objects[match].best_d2, pd2);
+        objects[match].last_node = node;
+      }
+      hits.push_back({node, match, pk[0], pk[1]});
     }
+  }
+
+  /* Slots go to the objects that come closest to the horizon, so the capacity is
+   * spent on the most binding ones rather than on whichever was seen first. An
+   * object that wins a slot keeps it at every node it was seen at; the nodes it
+   * was not seen at keep the far sentinel, which the core reads as an unfilled
+   * slot and excludes from the CBF coupling. */
+  std::vector<std::size_t> order(objects.size());
+  std::iota(order.begin(), order.end(), 0);
+  std::stable_sort(
+    order.begin(), order.end(),
+    [&objects](std::size_t a, std::size_t b) {return objects[a].best_d2 < objects[b].best_d2;});
+
+  std::vector<std::size_t> slot_of(objects.size(), kNoObstacleSlot);
+  for (std::size_t rank = 0; rank < order.size() && rank < budget; ++rank) {
+    slot_of[order[rank]] = slot_begin + rank;
+  }
+  for (const auto & h : hits) {
+    const std::size_t slot = slot_of[h.object];
+    if (slot == kNoObstacleSlot) {continue;}
+    const Eigen::Index row = static_cast<Eigen::Index>(h.node * k_obs + slot);
+    obs(row, 0) = h.x;
+    obs(row, 1) = h.y;
+    obs(row, 2) = d_safe;
   }
 }
 
