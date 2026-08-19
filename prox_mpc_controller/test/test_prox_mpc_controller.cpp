@@ -29,6 +29,7 @@
 #include <array>
 #include <chrono>
 #include <cmath>
+#include <cstdarg>
 #include <cstddef>
 #include <functional>
 #include <limits>
@@ -52,6 +53,7 @@
 #include <nav2_costmap_2d/costmap_2d_ros.hpp>
 #include <rclcpp/rclcpp.hpp>
 #include <rclcpp_lifecycle/lifecycle_node.hpp>
+#include <rcutils/logging.h>
 #include <tf2_ros/buffer.h>
 
 #include <prox_mpc_msgs/msg/obstacle_array.hpp>
@@ -278,6 +280,43 @@ private:
   double y_tol_;
   bool valid_;
 };
+
+// Installs a custom rcutils output handler for its lifetime and records every
+// WARN-or-worse message's fully formatted text, so a test can assert on a log
+// message's content directly instead of only inferring that some warning
+// fired. Restores the previous handler on destruction (RAII), so a test that
+// constructs one on the stack cannot leak it into a later test.
+class LogCapture
+{
+public:
+  LogCapture()
+  : previous_(rcutils_logging_get_output_handler())
+  {
+    messages_.clear();
+    rcutils_logging_set_output_handler(&LogCapture::handle);
+  }
+  ~LogCapture() {rcutils_logging_set_output_handler(previous_);}
+
+  static const std::vector<std::string> & messages() {return messages_;}
+
+private:
+  static void handle(
+    const rcutils_log_location_t *, int severity, const char *,
+    rcutils_time_point_value_t, const char * format, va_list * args)
+  {
+    if (severity < RCUTILS_LOG_SEVERITY_WARN) {return;}
+    char buf[512];
+    va_list copy;
+    va_copy(copy, *args);
+    vsnprintf(buf, sizeof(buf), format, copy);
+    va_end(copy);
+    messages_.emplace_back(buf);
+  }
+
+  rcutils_logging_output_handler_t previous_;
+  static std::vector<std::string> messages_;
+};
+std::vector<std::string> LogCapture::messages_;
 }  // namespace
 
 class ProxMpcControllerTest : public ::testing::Test
@@ -594,6 +633,50 @@ TEST_F(ProxMpcControllerTest, MissingModelBoundIsFatal)
   // model's own bounds.
   auto configured = makeConfigured();
   EXPECT_NEAR(configured->vMax(), kModelVMax, kTol);
+}
+
+// robot_radius below the costmap footprint's circumscribed radius is
+// warn-and-continue (DECISIONS.md's chosen option): configure() must not
+// throw, and robot_radius must not be silently overwritten to match the
+// footprint -- an operator running a deliberately tighter disc keeps it. The
+// fixture's default square footprint (half-extent 0.5 m, padded to 0.51 m)
+// and default robot_radius (0.5 m) already trigger this case; the warning
+// text is asserted directly, naming both values, not merely inferred.
+TEST_F(ProxMpcControllerTest, RobotRadiusWarnsWhenBelowFootprintCircumscribedRadius)
+{
+  LogCapture log;
+  std::shared_ptr<TestableProxMpcController> c;
+  ASSERT_NO_THROW(c = makeConfigured());
+  ASSERT_NE(c, nullptr);
+  EXPECT_NEAR(c->robotRadius(), 0.5, kTol);   // not overwritten to the footprint's radius
+
+  bool found = false;
+  for (const auto & msg : LogCapture::messages()) {
+    if (msg.find("robot_radius 0.500 m") != std::string::npos &&
+      msg.find("circumscribed radius 0.721 m") != std::string::npos)
+    {
+      found = true;
+      break;
+    }
+  }
+  EXPECT_TRUE(found) << "expected a robot_radius/circumscribed-radius warning naming both values";
+}
+
+// A footprint within robot_radius configures silently: no warning is emitted,
+// and the parameter is (still) not touched.
+TEST_F(ProxMpcControllerTest, RobotRadiusConfiguresSilentlyWhenWithinFootprint)
+{
+  costmap_ros_->setRobotFootprint(makeSquareFootprint(0.1));   // circumscribed ~0.156 m
+
+  LogCapture log;
+  std::shared_ptr<TestableProxMpcController> c;
+  ASSERT_NO_THROW(c = makeConfigured({rclcpp::Parameter("FollowPath.robot_radius", 0.5)}));
+  ASSERT_NE(c, nullptr);
+  EXPECT_NEAR(c->robotRadius(), 0.5, kTol);
+
+  for (const auto & msg : LogCapture::messages()) {
+    EXPECT_EQ(msg.find("robot_radius"), std::string::npos) << msg;
+  }
 }
 
 // --- lifecycle: activate / deactivate / cleanup ----------------------------

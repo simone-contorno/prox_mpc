@@ -118,6 +118,9 @@ if(BUILD_TESTING)
   ament_lint_auto_find_test_dependencies()
 
   find_package(ament_cmake_gtest REQUIRED)
+  # Used only to capture the robot_radius/footprint mismatch warning's exact
+  # text in the configure() test, via a custom rcutils_logging_output_handler.
+  find_package(rcutils REQUIRED)
 
   # The wrapper unit tests bring up a LifecycleNode, a tf2 buffer, and a
   # Costmap2DROS, then drive the plugin's public interface and fail-safe
@@ -140,6 +143,7 @@ if(BUILD_TESTING)
     prox_mpc_msgs
     rclcpp
     rclcpp_lifecycle
+    rcutils
     tf2
     tf2_ros
     visualization_msgs
