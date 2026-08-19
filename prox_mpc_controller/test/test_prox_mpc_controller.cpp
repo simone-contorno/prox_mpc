@@ -30,6 +30,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstddef>
+#include <functional>
 #include <limits>
 #include <memory>
 #include <mutex>
@@ -96,6 +97,14 @@ public:
   std::size_t nDim() const {return n_;}
   std::size_t maxObstacles() const {return static_cast<std::size_t>(max_obstacles_);}
   int maxSolverFailures() const {return max_solver_failures_;}
+  double safetyMargin() const {return safety_margin_;}
+  double robotRadius() const {return robot_radius_;}
+  double cbfGamma() const {return cbf_gamma_;}
+  double obstacleClusterRadius() const {return obstacle_cluster_radius_;}
+  double obstacleTimeout() const {return obstacle_timeout_;}
+  double dynamicSpeedThreshold() const {return dynamic_speed_threshold_;}
+  double predictionUncertaintyGrowth() const {return prediction_uncertainty_growth_;}
+  double maxDynamicObstacleRadius() const {return max_dynamic_obstacle_radius_;}
   std::shared_ptr<prox_mpc::MPC> mpc() const {return mpc_;}
   std::shared_ptr<prox_mpc::Model> model() const {return model_;}
 };
@@ -428,14 +437,69 @@ TEST_F(ProxMpcControllerTest, ConfigureThrowsOnNonFiniteDt)
     nav2_core::ControllerException);
 }
 
-// A non-finite value at a clamped parameter site (bare "<" comparisons pass NaN
-// through every range check) falls back to the parameter's declared default.
+// A non-finite value at a clamped parameter site (bare "<"/">" comparisons pass
+// NaN through every range check) falls back to the parameter's declared
+// default, for every parameter configure() guards this way. One row per
+// clamp_low/clamp_range call site; each row reads back the result through
+// whichever accessor observes where that configure()-local variable ends up (a
+// stored member, or the MPC weight matrix it seeds).
 TEST_F(ProxMpcControllerTest, ConfigureUsesDefaultForNonFiniteClampedParameter)
 {
-  auto c = makeConfigured(
-    {rclcpp::Parameter("FollowPath.q_pos", std::numeric_limits<double>::quiet_NaN())});
-  ASSERT_NE(c->mpc(), nullptr);
-  EXPECT_NEAR(c->mpc()->getQ()(0, 0), 10.0, kTol);   // 10.0 is q_pos's declared default
+  const double nan = std::numeric_limits<double>::quiet_NaN();
+  using Read = std::function<double (const std::shared_ptr<TestableProxMpcController> &)>;
+  struct Row
+  {
+    const char * param;
+    double expected_default;
+    Read read;
+  };
+  const Row rows[] = {
+    {"q_pos", 10.0, [](const auto & c) {return c->mpc()->getQ()(0, 0);}},
+    {"q_theta", 1.0, [](const auto & c) {return c->mpc()->getQ()(2, 2);}},
+    {"s_factor", 2.0,
+      [](const auto & c) {return c->mpc()->getS()(0, 0) / c->mpc()->getQ()(0, 0);}},
+    {"r_weight", 0.1, [](const auto & c) {return c->mpc()->getR()(0, 0);}},
+    {"w_weight", 100.0, [](const auto & c) {return c->mpc()->getW()(0, 0);}},
+    {"safety_margin", 0.1, [](const auto & c) {return c->safetyMargin();}},
+    {"robot_radius", 0.5, [](const auto & c) {return c->robotRadius();}},
+    {"cbf_gamma", 1.0, [](const auto & c) {return c->cbfGamma();}},
+    {"obstacle_cluster_radius", 0.3, [](const auto & c) {return c->obstacleClusterRadius();}},
+    {"obstacle_timeout", 0.5, [](const auto & c) {return c->obstacleTimeout();}},
+    {"dynamic_speed_threshold", 0.1, [](const auto & c) {return c->dynamicSpeedThreshold();}},
+    {"prediction_uncertainty_growth", 0.0,
+      [](const auto & c) {return c->predictionUncertaintyGrowth();}},
+    {"max_dynamic_obstacle_radius", 0.0,
+      [](const auto & c) {return c->maxDynamicObstacleRadius();}},
+  };
+  for (const auto & row : rows) {
+    SCOPED_TRACE(row.param);
+    auto c = makeConfigured({rclcpp::Parameter(std::string("FollowPath.") + row.param, nan)});
+    ASSERT_NE(c->mpc(), nullptr);
+    EXPECT_NEAR(row.read(c), row.expected_default, kTol);
+  }
+}
+
+// max_solve_time is a configure()-local wall-clock budget forwarded into the
+// core's MPC, which exposes no getter for it, so its default fallback is not
+// directly observable from the plugin's public surface; the check available
+// here is that a non-finite value does not throw configure() and does not
+// propagate into a non-finite command. (max_solve_time's clamp floor and
+// declared default are both 0.0, so even a getter could not distinguish "fell
+// back to the default" from "clamped to the floor" for this one parameter --
+// both paths return the same number.)
+TEST_F(ProxMpcControllerTest, ConfigureAcceptsNonFiniteMaxSolveTime)
+{
+  std::shared_ptr<TestableProxMpcController> c;
+  EXPECT_NO_THROW(
+    c = makeConfigured(
+      {rclcpp::Parameter("FollowPath.max_solve_time", std::numeric_limits<double>::quiet_NaN())}));
+  ASSERT_NE(c, nullptr);
+  c->activate();
+  c->setPlan(makeStraightPlan(31, 0.2));
+  const auto cmd = c->computeVelocityCommands(
+    makePose(0.0, 0.0, 0.0), geometry_msgs::msg::Twist(), nullptr);
+  EXPECT_TRUE(std::isfinite(cmd.twist.linear.x));
+  EXPECT_TRUE(std::isfinite(cmd.twist.angular.z));
 }
 
 // A negative max_solver_failures is clamped to 0, matching the max_obstacles
