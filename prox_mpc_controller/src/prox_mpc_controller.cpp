@@ -810,9 +810,16 @@ geometry_msgs::msg::TwistStamped ProxMpcController::computeVelocityCommands(
       }
       last_cmd_v_ = twist.linear.x;
       last_cmd_w_ = twist.angular.z;
+      /* The ramped controls are what the robot is actually given, so they become
+       * the anchor of the next cycle's control-rate constraint. Leaving the last
+       * accepted solve's first control there would let the next cycle plan a step
+       * away from a command the robot never received. */
+      mpc_->setU0(u_brake);
       cmd.twist = twist;
       return cmd;
     };
+
+
 
   /* Transient-failure path: decelerate, and escalate to a recovery once the
    * consecutive-failure budget is exhausted. */
@@ -1079,12 +1086,16 @@ geometry_msgs::msg::TwistStamped ProxMpcController::computeVelocityCommands(
     }
   }
 
-  /* Solve one SQP cycle, timing it with a steady clock for the real-time metric. */
+  /* Solve one SQP cycle, timing it with a steady clock for the real-time metric.
+   * The candidate is not retained: the core keeps the last accepted x, u, w and
+   * previous control until every gate below has passed and commitCandidate() runs,
+   * so a rejected cycle neither warm-starts the next one from a command that was
+   * never sent nor anchors its control-rate constraint on it. */
   mpc_->setGoalX(goal_x);
   mpc_->setGoalU(goal_u);
   mpc_->setPose(state);
   const auto t_solve0 = std::chrono::steady_clock::now();
-  auto [x_sol, u_sol] = mpc_->solve();
+  auto [x_sol, u_sol] = mpc_->solveCandidate();
   const auto t_solve1 = std::chrono::steady_clock::now();
   const double solve_ms =
     std::chrono::duration<double, std::milli>(t_solve1 - t_solve0).count();
@@ -1109,13 +1120,15 @@ geometry_msgs::msg::TwistStamped ProxMpcController::computeVelocityCommands(
 
 
   /* Defense-in-depth finiteness guard. In this architecture a PROXQP_SOLVED status
-   * normally implies a finite iterate (x_sol/u_sol are accumulated QP increments,
+   * normally implies a finite iterate (the candidate is accumulated QP increments,
    * not a divergent model rollout), but the check is kept so a non-finite state can
    * never reach the footprint veto, poison steering_state_, or be published as the
-   * predicted trajectory. The command finiteness is still checked separately below
-   * because the model's toTwist mapping can be non-finite even for finite u0. */
+   * predicted trajectory. The core tests the whole horizon rather than the first
+   * node alone, so a non-finite tail cannot be committed and warm-start the next
+   * cycle. The command finiteness is still checked separately below because the
+   * model's toTwist mapping can be non-finite even for a finite control. */
   const VectorXd u0 = u_sol.row(0);
-  if (!u0.allFinite() || !x_sol.row(1).allFinite()) {
+  if (!mpc_->getCandidateFinite()) {
     publish_cycle();
     return fail("non-finite solver output");
   }
@@ -1193,7 +1206,11 @@ geometry_msgs::msg::TwistStamped ProxMpcController::computeVelocityCommands(
     return fail("non-finite command");
   }
 
+  /* Last gate passed: this candidate becomes the retained solver state, and its
+   * first control the anchor of the next cycle's control-rate constraint. */
   converged = true;
+  mpc_->commitCandidate();
+
   failure_count_ = 0;
   veto_count_ = 0;
   if (has_steering_) {steering_state_ = x_sol(1, idx_steer_);}
