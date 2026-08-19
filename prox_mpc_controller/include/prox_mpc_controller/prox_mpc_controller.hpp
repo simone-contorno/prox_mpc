@@ -88,21 +88,23 @@ public:
   void reset() override;
 
 protected:
-  /// Read the model's speed bound (upper bound of `u[0]`) and its per-channel
+  /// Read the model's speed bounds (both bounds of `u[0]`) and its per-channel
   /// deceleration limits (lower bounds of `du[0]` and `du[1]`) into v_max_,
-  /// max_linear_vel_, a_dec_lin_ and a_dec_ang_. A model that declares none of a
-  /// required bound cannot be driven safely - a zero deceleration limit leaves
-  /// the brake ramp stuck at the current velocity, and a zero speed bound clamps
-  /// the cruise speed to zero - so a missing bound throws
+  /// v_min_, max_linear_vel_, a_dec_lin_ and a_dec_ang_. A model that declares
+  /// none of a required bound cannot be driven safely - a zero deceleration limit
+  /// leaves the brake ramp stuck at the current velocity, and a zero speed bound
+  /// clamps the cruise speed to zero - so a missing bound throws
   /// nav2_core::ControllerException naming it. `model_plugin` is the plugin name
   /// reported in that message.
   void readModelBounds(prox_mpc::Model & model, const std::string & model_plugin);
 
   /// Convert a requested speed limit to an absolute bound (a fraction of the
   /// model bound when `percentage`, the model bound itself on NO_SPEED_LIMIT),
-  /// clamp it to the model bound, and apply it to the model's `u[0]` inequality.
-  /// Called only from the control thread (configure() and the top of a control
-  /// cycle), never concurrently with a running solve.
+  /// and intersect it with the model's own `u[0]` bounds rather than replacing
+  /// them, so a model that declares an asymmetric speed range (a reverse limit
+  /// tighter than the forward one, or no reverse at all) keeps it. Called only
+  /// from the control thread (configure() and the top of a control cycle), never
+  /// concurrently with a running solve.
   void applySpeedLimit(double speed_limit, bool percentage);
 
   /// Fill the per-node (o_x, o_y, d_safe) obstacle matrix for one cycle. With
@@ -233,9 +235,11 @@ protected:
   /// carries no extra interface; when on, publishes only-when-subscribed.
   bool publish_diagnostics_{false};
 
-  /// Speed bounds: v_max_ is the model's original upper bound on the speed
-  /// channel; max_linear_vel_ is the currently applied limit.
+  /// Speed bounds: v_max_ and v_min_ are the model's original upper and lower
+  /// bounds on the speed channel, cached so a runtime speed limit narrows them
+  /// instead of overwriting them; max_linear_vel_ is the currently applied limit.
   double v_max_{0.0};
+  double v_min_{0.0};
   double max_linear_vel_{0.0};
 
   /// Deceleration limits read from the model's du bounds.

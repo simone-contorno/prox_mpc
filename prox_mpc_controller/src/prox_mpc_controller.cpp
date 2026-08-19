@@ -454,6 +454,12 @@ void ProxMpcController::readModelBounds(prox_mpc::Model & model, const std::stri
   v_max_ = required_bound(
     model, model_plugin, "u", 0, 2, "linear",
     "the speed cap would collapse to zero and the controller would never move.");
+  /* The lower bound is cached alongside it so a runtime speed limit narrows the
+   * model's declared range instead of overwriting it; the same entry carries
+   * both sides, so this lookup cannot fail once the one above succeeded. */
+  v_min_ = required_bound(
+    model, model_plugin, "u", 0, 1, "linear",
+    "the speed cap would collapse to zero and the controller would never move.");
   max_linear_vel_ = v_max_;
   a_dec_lin_ = std::abs(
     required_bound(
@@ -907,7 +913,13 @@ void ProxMpcController::applySpeedLimit(double speed_limit, bool percentage)
     v_lim = speed_limit;
   }
   v_lim = std::clamp(v_lim, 0.0, v_max_);
-  model_->updateIneq("u", 0, -v_lim, v_lim);
+  /* Intersect with the model's declared range rather than replacing it. A model
+   * whose reverse limit is tighter than its forward one - or which declares no
+   * reverse travel at all - keeps that asymmetry through every speed-limit
+   * request, including the NO_SPEED_LIMIT restore, which would otherwise widen
+   * the lower bound to -v_max_. Both bundled models declare symmetric bounds, so
+   * this leaves their commanded sequence unchanged. */
+  model_->updateIneq("u", 0, std::max(v_min_, -v_lim), std::min(v_max_, v_lim));
   max_linear_vel_ = v_lim;
 }
 
