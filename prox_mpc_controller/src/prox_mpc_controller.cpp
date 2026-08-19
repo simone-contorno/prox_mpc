@@ -674,12 +674,21 @@ geometry_msgs::msg::TwistStamped ProxMpcController::computeVelocityCommands(
   /* Ease the cruise speed inside the goal-checker xy tolerance so the robot
    * settles into the goal region. Unmeasured tolerance fields come back as
    * std::numeric_limits<double>::lowest() (negative), so accept only finite,
-   * positive values. The pointer is read but never retained. */
+   * positive values. The pointer is read but never retained.
+   *
+   * Each field IS the radial bound, not a per-axis half-extent: upstream
+   * SimpleGoalChecker tests dx*dx + dy*dy <= T*T and writes the same scalar T
+   * into position.x and position.y, so hypot() would report sqrt(2)*T and start
+   * the taper 41% too far out. std::min is deliberately NOT RPP's
+   * position.x-only read (regulated_pure_pursuit_controller.cpp:180): the two
+   * are identical for every goal checker Nav2 ships, and the minimum is the
+   * conservative reading for a custom anisotropic checker whose y tolerance is
+   * tighter than its x. Do not "correct" this back to the x field alone. */
   if (goal_checker != nullptr) {
     geometry_msgs::msg::Pose pose_tol;
     geometry_msgs::msg::Twist vel_tol;
     if (goal_checker->getTolerances(pose_tol, vel_tol)) {
-      const double xy_tol = std::hypot(pose_tol.position.x, pose_tol.position.y);
+      const double xy_tol = std::min(pose_tol.position.x, pose_tol.position.y);
       if (std::isfinite(xy_tol) && pose_tol.position.x > 0.0 && pose_tol.position.y > 0.0) {
         v_ref *= std::clamp(remaining / xy_tol, 0.0, 1.0);
       }
