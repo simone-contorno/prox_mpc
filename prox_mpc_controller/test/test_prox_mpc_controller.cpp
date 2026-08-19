@@ -1850,6 +1850,186 @@ TEST_F(ProxMpcControllerTest, SolverFailureNeutralizesNonFiniteMeasuredVelocity)
   }
 }
 
+// The default (0.0) brake_period_s steps the ramp with the measured
+// inter-cycle period, floored at dt_ = 0.1 s so a fast solver-failure cycle
+// (the elapsed time since the diagnostics timestamp was last reset, here
+// microseconds) never brakes faster than the configured design.
+// AsymmetricBounds' asymmetric du[0] (-2.0, +0.5) makes the resulting step
+// size, not just its sign, an observable proxy for which period was used.
+TEST_F(ProxMpcControllerTest, BrakeMeasuredPeriodFloorsAtConfiguredDt)
+{
+  auto c = makeConfigured(
+  {
+    rclcpp::Parameter(
+      "FollowPath.model_plugin", std::string("prox_mpc_test_models/AsymmetricBounds")),
+    rclcpp::Parameter("FollowPath.max_int_iter_qp", 1),
+    rclcpp::Parameter("FollowPath.max_ext_iter_qp", 1),
+    rclcpp::Parameter("FollowPath.max_iter_sqp", 1),
+    rclcpp::Parameter("FollowPath.max_solver_failures", 10),
+  });
+  c->activate();
+  c->setPlan(makeStraightPlan(31, 0.2));
+
+  geometry_msgs::msg::Twist measured;
+  measured.linear.x = 1.0;
+  const auto cmd = c->computeVelocityCommands(makePose(0.0, 0.0, 0.0), measured, nullptr);
+  ASSERT_NE(c->mpc()->qp_info.status, proxsuite::proxqp::QPSolverOutput::PROXQP_SOLVED);
+  EXPECT_NEAR(cmd.twist.linear.x, 1.0 - 2.0 * 0.1, 1e-6);   // floor: |du_low| * dt_ = 2.0 * 0.1
+}
+
+// The measured period is capped at kMaxBrakePeriodFactor * dt_ = 0.2 s so a
+// real stall does not collapse one ramp step into an abrupt stop. The
+// non-finite-pose fail path is used deliberately: it calls make_brake()
+// before this cycle's own diagnostics timestamp reset runs, so the elapsed
+// time it measures is the real gap since the previous (converged) cycle,
+// which the deliberate sleep below controls; the solver-failure path used by
+// the floor test above cannot show this, because publishDiagnostics() resets
+// the timestamp earlier in that same cycle, before make_brake() reads it.
+TEST_F(ProxMpcControllerTest, BrakeMeasuredPeriodCapsAtTwiceConfiguredDt)
+{
+  auto c = makeConfigured(
+    {rclcpp::Parameter(
+      "FollowPath.model_plugin", std::string("prox_mpc_test_models/AsymmetricBounds"))});
+  c->activate();
+  c->setPlan(makeStraightPlan(31, 0.2));
+
+  // A normal converged cycle, so publishDiagnostics() records this cycle's
+  // wall-clock time as the reference point the next cycle's stall is measured
+  // against.
+  const auto ok = c->computeVelocityCommands(
+    makePose(0.0, 0.0, 0.0), geometry_msgs::msg::Twist(), nullptr);
+  ASSERT_TRUE(std::isfinite(ok.twist.linear.x));
+
+  std::this_thread::sleep_for(std::chrono::milliseconds(500));   // far past 2 * dt_ = 0.2 s
+
+  geometry_msgs::msg::Twist measured;
+  measured.linear.x = 1.0;
+  geometry_msgs::msg::PoseStamped bad = makePose(0.0, 0.0, 0.0);
+  bad.pose.position.x = std::numeric_limits<double>::quiet_NaN();
+  const auto cmd = c->computeVelocityCommands(bad, measured, nullptr);
+
+  // An unclamped ~0.5 s period would apply step = 2.0 * 0.5 = 1.0, saturating
+  // the ramp at zero; the ceiling caps it at 2.0 * 0.2 = 0.4.
+  EXPECT_NEAR(cmd.twist.linear.x, 1.0 - 2.0 * 0.2, 1e-6);
+}
+
+// A positive brake_period_s pins the ramp step and bypasses the measured
+// period entirely, even across a real stall far longer than the pinned value.
+TEST_F(ProxMpcControllerTest, BrakePinnedPeriodIgnoresElapsedTime)
+{
+  auto c = makeConfigured(
+  {
+    rclcpp::Parameter(
+      "FollowPath.model_plugin", std::string("prox_mpc_test_models/AsymmetricBounds")),
+    rclcpp::Parameter("FollowPath.brake_period_s", 0.05),
+    rclcpp::Parameter("FollowPath.max_int_iter_qp", 1),
+    rclcpp::Parameter("FollowPath.max_ext_iter_qp", 1),
+    rclcpp::Parameter("FollowPath.max_iter_sqp", 1),
+    rclcpp::Parameter("FollowPath.max_solver_failures", 10),
+  });
+  c->activate();
+  c->setPlan(makeStraightPlan(31, 0.2));
+
+  geometry_msgs::msg::Twist measured;
+  measured.linear.x = 1.0;
+  c->computeVelocityCommands(makePose(0.0, 0.0, 0.0), measured, nullptr);
+
+  std::this_thread::sleep_for(std::chrono::milliseconds(300));   // far past 0.05 s
+  const auto cmd = c->computeVelocityCommands(makePose(0.0, 0.0, 0.0), measured, nullptr);
+  ASSERT_NE(c->mpc()->qp_info.status, proxsuite::proxqp::QPSolverOutput::PROXQP_SOLVED);
+  EXPECT_NEAR(cmd.twist.linear.x, 1.0 - 2.0 * 0.05, 1e-6);
+}
+
+// The ramp saturates at zero rather than reversing: an over-large step (here,
+// a deliberately oversized pinned period) shortens the stop instead of
+// overshooting past zero into the opposite sign, which is what makes an
+// uncapped or mis-tuned step benign rather than a new failure mode.
+TEST_F(ProxMpcControllerTest, BrakeSaturatesAtZeroRatherThanReversing)
+{
+  auto c = makeConfigured(
+  {
+    rclcpp::Parameter(
+      "FollowPath.model_plugin", std::string("prox_mpc_test_models/AsymmetricBounds")),
+    rclcpp::Parameter("FollowPath.brake_period_s", 1.0),   // step = 2.0 * 1.0 = 2.0
+    rclcpp::Parameter("FollowPath.max_int_iter_qp", 1),
+    rclcpp::Parameter("FollowPath.max_ext_iter_qp", 1),
+    rclcpp::Parameter("FollowPath.max_iter_sqp", 1),
+    rclcpp::Parameter("FollowPath.max_solver_failures", 10),
+  });
+  c->activate();
+  c->setPlan(makeStraightPlan(31, 0.2));
+
+  geometry_msgs::msg::Twist measured;
+  measured.linear.x = 0.5;      // step (2.0) is 4x the measured speed
+  const auto cmd = c->computeVelocityCommands(makePose(0.0, 0.0, 0.0), measured, nullptr);
+  ASSERT_NE(c->mpc()->qp_info.status, proxsuite::proxqp::QPSolverOutput::PROXQP_SOLVED);
+  EXPECT_DOUBLE_EQ(cmd.twist.linear.x, 0.0);    // saturates, never crosses to negative
+}
+
+// Each direction ramps at its own declared rate: braking a forward-moving
+// robot uses du[0]'s lower bound magnitude (2.0), while returning to zero from
+// a reversing robot uses its upper bound magnitude (0.5). brake_period_s is
+// pinned so the comparison is not sensitive to test execution timing. Neither
+// bundled model can show this because both declare symmetric du bounds.
+TEST_F(ProxMpcControllerTest, BrakePreservesAsymmetricDecelerationBoundsPerDirection)
+{
+  auto c = makeConfigured(
+  {
+    rclcpp::Parameter(
+      "FollowPath.model_plugin", std::string("prox_mpc_test_models/AsymmetricBounds")),
+    rclcpp::Parameter("FollowPath.brake_period_s", 0.1),
+    rclcpp::Parameter("FollowPath.max_int_iter_qp", 1),
+    rclcpp::Parameter("FollowPath.max_ext_iter_qp", 1),
+    rclcpp::Parameter("FollowPath.max_iter_sqp", 1),
+    rclcpp::Parameter("FollowPath.max_solver_failures", 10),
+  });
+  c->activate();
+  c->setPlan(makeStraightPlan(31, 0.2));
+
+  geometry_msgs::msg::Twist forward;
+  forward.linear.x = 1.0;
+  const auto cmd_fwd = c->computeVelocityCommands(makePose(0.0, 0.0, 0.0), forward, nullptr);
+  ASSERT_NE(c->mpc()->qp_info.status, proxsuite::proxqp::QPSolverOutput::PROXQP_SOLVED);
+  EXPECT_NEAR(cmd_fwd.twist.linear.x, 1.0 - 2.0 * 0.1, 1e-6);    // du[0] low = -2.0
+
+  geometry_msgs::msg::Twist reverse;
+  reverse.linear.x = -1.0;
+  const auto cmd_rev = c->computeVelocityCommands(makePose(0.0, 0.0, 0.0), reverse, nullptr);
+  ASSERT_NE(c->mpc()->qp_info.status, proxsuite::proxqp::QPSolverOutput::PROXQP_SOLVED);
+  EXPECT_NEAR(cmd_rev.twist.linear.x, -1.0 + 0.5 * 0.1, 1e-6);   // du[0] upp = +0.5
+}
+
+// The bicycle's brake maps through the model's own toTwist physics
+// (angular.z = v * sin(delta) / L), not a twist-space ramp of the measured
+// yaw rate, and a pinned brake_period_s steps both the speed ramp and the
+// steering decay by the same pinned amount rather than the measured period
+// BrakeMeasuredPeriodClampedToConfiguredRange exercises.
+TEST_F(ProxMpcControllerTest, BicycleBrakeMapsThroughToTwistWithPinnedPeriod)
+{
+  auto c = makeConfigured(
+  {
+    rclcpp::Parameter("FollowPath.brake_period_s", 0.2),
+    rclcpp::Parameter("FollowPath.max_int_iter_qp", 1),
+    rclcpp::Parameter("FollowPath.max_ext_iter_qp", 1),
+    rclcpp::Parameter("FollowPath.max_iter_sqp", 1),
+    rclcpp::Parameter("FollowPath.max_solver_failures", 10),
+  });
+  c->activate();
+  c->setPlan(makeStraightPlan(31, 0.2));
+  c->steeringState() = 0.5;
+
+  geometry_msgs::msg::Twist measured;
+  measured.linear.x = 1.0;
+  const auto cmd = c->computeVelocityCommands(makePose(0.0, 0.0, 0.0), measured, nullptr);
+  ASSERT_NE(c->mpc()->qp_info.status, proxsuite::proxqp::QPSolverOutput::PROXQP_SOLVED);
+
+  const double expected_v = 1.0 - kModelDecel * 0.2;             // du[0] bound, pinned period
+  const double expected_delta = 0.5 - kSteerRateBound * 0.2;     // u[1] bound, pinned period
+  EXPECT_NEAR(cmd.twist.linear.x, expected_v, 1e-9);
+  EXPECT_NEAR(
+    cmd.twist.angular.z, expected_v * std::sin(expected_delta) / kBicycleWheelbase, 1e-9);
+}
+
 // Structurally invalid horizon sizing (np or nc < 1, or dt <= 0) fails configure
 // with a ControllerException rather than wrapping into an astronomical size_t
 // allocation or dividing by zero.
