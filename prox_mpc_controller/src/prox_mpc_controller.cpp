@@ -301,6 +301,23 @@ void ProxMpcController::configure(
   declare("robot_radius", robot_radius_, 0.5);
   clamp_low("safety_margin", safety_margin_, 0.0, 0.1);
   clamp_low("robot_radius", robot_radius_, 0.0, 0.5);
+  /* Cross-check the avoidance disc against the footprint the costmap actually
+   * carries. d_safe = robot_radius + safety_margin sizes every keep-out
+   * half-plane, so a robot_radius below the footprint's circumscribed radius
+   * leaves part of the robot outside the keep-out with only the outline-only
+   * endpoint veto behind it. The parameter is never overwritten - an operator
+   * running a deliberately tighter disc keeps it - but the mismatch is named. */
+  const double circumscribed_radius =
+    costmap_ros_->getLayeredCostmap()->getCircumscribedRadius();
+  if (std::isfinite(circumscribed_radius) && robot_radius_ < circumscribed_radius) {
+    RCLCPP_WARN(
+      logger_,
+      "robot_radius %.3f m is below the costmap footprint's circumscribed radius %.3f m, so "
+      "the obstacle keep-out (d_safe = robot_radius + safety_margin = %.3f m) is undersized "
+      "for this footprint and the endpoint footprint veto is the only remaining guard. Raise "
+      "robot_radius to at least %.3f m, or shrink the footprint.",
+      robot_radius_, circumscribed_radius, robot_radius_ + safety_margin_, circumscribed_radius);
+  }
   declare("cbf_gamma", cbf_gamma_, 1.0);
   clamp_range("cbf_gamma", cbf_gamma_, kMinCbfGamma, 1.0, 1.0);
   declare("costmap_cost_threshold", costmap_cost_threshold_, 200);
