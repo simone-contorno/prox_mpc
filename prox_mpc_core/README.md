@@ -27,7 +27,7 @@ This package contains **no ROS node**: it is the reusable library that [prox_mpc
 The core owns the SQP/QP assembly, the tracking cost, the state/control/rate constraints, the disc-based obstacle math, and the `prox_mpc::Model` vehicle interface.
 It never needs editing to gain a new vehicle model: a model is a `pluginlib` plugin loaded by name.
 
-See [doc/architecture.md](doc/architecture.md) for the design overview, [doc/nmpc.md](doc/nmpc.md) for the NMPC/SQP/QP math, and [doc/obstacle-avoidance.md](doc/obstacle-avoidance.md) for the obstacle constraints.
+See [doc/architecture.md](doc/architecture.md) for the design overview, [doc/nmpc.md](doc/nmpc.md) for the NMPC/SQP/QP math, and [doc/obstacle-avoidance.md](doc/obstacle-avoidance.md) for the obstacle constraints. [doc/migration.md](doc/migration.md) records what changed on the released surface since 1.0.0.
 
 ## Public API
 
@@ -119,6 +119,7 @@ The full class diagram, the mathematical formulation, and the solve data flow ar
 prox_mpc_core/
 ├── doc/
 │   ├── architecture.md
+│   ├── migration.md
 │   ├── nmpc.md
 │   └── obstacle-avoidance.md
 ├── include/prox_mpc/
@@ -129,6 +130,8 @@ prox_mpc_core/
 │   ├── utils.hpp
 │   └── models/
 │       ├── bicycle.hpp
+│       ├── bicycle_front_axle.hpp
+│       ├── bicycle_rear_axle.hpp
 │       └── unicycle.hpp
 ├── src/
 │   ├── model.cpp

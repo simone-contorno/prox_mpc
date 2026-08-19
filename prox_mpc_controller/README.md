@@ -29,6 +29,8 @@ driving a TurtleBot3 waffle under a full Nav2 stack in Gazebo Harmonic (see
 
 ## Documentation
 
+- [doc/migration.md](doc/migration.md) - what changed on the released surface
+  since 1.0.0, and what a deployment has to do about it.
 - [doc/architecture.md](doc/architecture.md) - the Nav2 integration design:
   responsibility split, the controller lifecycle, the per-cycle data flow, the
   interfaces and QoS, the full parameter reference, and the two safety layers.
