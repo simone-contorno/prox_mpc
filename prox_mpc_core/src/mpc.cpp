@@ -135,9 +135,14 @@ std::tuple<MatrixXd, MatrixXd> MPC::solve()
     qp_iter_ext += qp_info.iter_ext;
     sqp_iter++;
 
-    /* Wall-clock budget (0 disables it): bound the worst-case solve so a slow
-     * SQP cannot overrun the control cycle. On timeout the loop exits with
-     * status != PROXQP_SOLVED, routing the caller to its fail-safe. */
+    /* Soft wall-clock budget (0 disables it), checked between SQP iterations:
+     * it bounds how many further QP sub-problems start, not the one already in
+     * flight, because proxsuite exposes no time-based stop (only max_iter and
+     * max_iter_in). It is therefore not a bound on worst-case cycle latency in
+     * either direction, and the loop still reports success when the QP that
+     * overran the budget converged. The bound that does hold per cycle is the
+     * iteration caps; max_iter_sqp = 1 gives a genuinely bounded real-time
+     * iteration. */
     if (max_solve_time > 0.0) {
       const double elapsed =
         std::chrono::duration<double>(std::chrono::steady_clock::now() - sqp_start).count();

@@ -129,9 +129,14 @@ protected:
   /* SQP */
   size_t max_iter_sqp = kDefaultMaxIterSQP;  // Max SQP iterations.
 
-  /* Optional wall-clock budget for the whole SQP loop [s]; 0 disables it (the
-   * iteration caps are then the only bound). When exceeded the loop stops early,
-   * leaving qp_info.status != PROXQP_SOLVED so the caller's fail-safe runs. */
+  /* Optional soft wall-clock budget for the SQP loop [s]; 0 disables it. It is
+   * tested between SQP iterations, so it caps how many further QP sub-problems
+   * start and cannot interrupt one in flight - proxsuite offers no time-based
+   * stop. A loop that exceeds it stops early with whatever status the last QP
+   * returned, which is PROXQP_SOLVED when that QP converged, so this is not a
+   * worst-case latency bound and does not by itself route the caller to its
+   * fail-safe. The per-cycle bound is the iteration caps (max_iter_sqp = 1 for a
+   * bounded real-time iteration). */
   double max_solve_time = 0.0;
 
   /* Discrete-time CBF rate forwarded to ProxQP (1.0 = pointwise obstacle term). */
