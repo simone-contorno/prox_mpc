@@ -263,6 +263,12 @@ protected:
   /// speed instead, so the brake tracks the robot rather than a stale command.
   VectorXd last_cmd_u_;
 
+  /// Rate bounds of the steering-rate control (`u[1]`) for a model that carries a
+  /// steering state, used to decay the steering belief on a rejected cycle. Zero
+  /// when the model declares none, which keeps the belief frozen.
+  double steer_rate_low_{0.0};
+  double steer_rate_upp_{0.0};
+
   /// Speed limit requested by the server. setSpeedLimit() runs on the node's
   /// executor thread while the solver reads the model's bounds on the action
   /// server's thread, so the request is cached here and applied on the control

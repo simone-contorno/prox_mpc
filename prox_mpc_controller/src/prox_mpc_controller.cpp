@@ -519,6 +519,21 @@ void ProxMpcController::readModelBounds(prox_mpc::Model & model, const std::stri
     }
   }
   last_cmd_u_ = VectorXd::Zero(m);
+
+  /* Rate at which the steering belief may be decayed on a rejected cycle, for a
+   * model that carries a steering state: the bound on the steering-rate control.
+   * Left at zero when the model declares none, which freezes the belief rather
+   * than moving it at a rate the model never stated. */
+  steer_rate_low_ = 0.0;
+  steer_rate_upp_ = 0.0;
+  if (model.getN() > 3) {
+    for (const auto & entry : model.getIneq("u")) {
+      if (static_cast<std::size_t>(entry.second[0]) == 1) {
+        steer_rate_low_ = entry.second[1];
+        steer_rate_upp_ = entry.second[2];
+      }
+    }
+  }
 }
 
 void ProxMpcController::cleanup()
@@ -626,6 +641,19 @@ geometry_msgs::msg::TwistStamped ProxMpcController::computeVelocityCommands(
         std::chrono::duration<double>(
         std::chrono::steady_clock::now() - last_cycle_wall_).count() : dt_;
       const double period = std::clamp(measured_period, dt_, kMaxBrakePeriodFactor * dt_);
+
+      /* A rejected cycle used to freeze the steering belief, so the next solve
+       * linearized about an angle the wheels no longer hold: every rejected cycle
+       * brakes, and a downstream twist-to-steering converter straightens the
+       * wheels as the commanded yaw rate falls. Decay it toward zero at the
+       * model's own steering-rate bound instead, which is open-loop but correct
+       * in direction and rate and cannot jump. A model that declares no steering
+       * rate leaves the bound at zero, which keeps the belief frozen rather than
+       * guessing a rate for it. */
+      if (n_ > 3) {
+        steering_state_ =
+          brake_toward(steering_state_, steer_rate_low_, steer_rate_upp_, period);
+      }
 
       VectorXd u_brake = last_cmd_u_;
       if (u_brake.size() > 0) {u_brake(0) = velocity.linear.x;}
