@@ -864,11 +864,19 @@ geometry_msgs::msg::TwistStamped ProxMpcController::computeVelocityCommands(
     return fail("non-finite solver output");
   }
 
-  /* Exact polygon-footprint veto on the pose one step ahead. */
+  /* Polygon-footprint veto on the pose one step ahead.
+   *
+   * The footprint is copied before the grid lock is taken. getRobotFootprint()
+   * returns Costmap2DROS's padded_footprint_ by value, and the grid mutex guards
+   * the cell data rather than that member, so reading it inside the lock implied
+   * a protection that does not exist. The copy is a best-effort snapshot of a
+   * member written unsynchronised by the costmap's own thread - the same
+   * per-cycle read RPP (collision_checker.cpp:144) and MPPI (cost_critic.hpp:68)
+   * both perform, and what keeps a runtime footprint update taking effect. */
   {
+    const std::vector<geometry_msgs::msg::Point> footprint = costmap_ros_->getRobotFootprint();
     auto * costmap = costmap_ros_->getCostmap();
     std::lock_guard<nav2_costmap_2d::Costmap2D::mutex_t> lock(*(costmap->getMutex()));
-    const std::vector<geometry_msgs::msg::Point> footprint = costmap_ros_->getRobotFootprint();
     if (footprint.size() >= 3) {
       nav2_costmap_2d::FootprintCollisionChecker<nav2_costmap_2d::Costmap2D *> checker(costmap);
       const double fcost = checker.footprintCostAtPose(
