@@ -1234,9 +1234,18 @@ void ProxMpcController::fillStaticObstacles(
   const std::size_t budget = k_obs - slot_begin;
   const double d_safe = robot_radius_ + safety_margin_;
 
+  /* The grid lock is taken only around the cell reads, once per node, and is
+   * released for the sort, the clustering, the slot binding and the matrix
+   * writes. Those are the expensive part of the fill, and holding the lock
+   * through them blocks the costmap's own update thread for no gain. The grid
+   * geometry is re-read inside each locked region, so a resize between nodes
+   * cannot send the scan out of bounds. */
   auto * costmap = costmap_ros_->getCostmap();
-  std::lock_guard<nav2_costmap_2d::Costmap2D::mutex_t> lock(*(costmap->getMutex()));
-  const double res = costmap->getResolution();
+  double res = 0.0;
+  {
+    std::lock_guard<nav2_costmap_2d::Costmap2D::mutex_t> lock(*(costmap->getMutex()));
+    res = costmap->getResolution();
+  }
   if (res <= 0.0) {return;}
 
   const double search_radius = d_safe + obstacle_cluster_radius_;
@@ -1251,8 +1260,6 @@ void ProxMpcController::fillStaticObstacles(
       "solver. Raise max_obstacle_scan_cells; the footprint veto remains the backstop.",
       max_obstacle_scan_cells_, win_full, static_cast<double>(max_obstacle_scan_cells_) * res);
   }
-  const int size_x = static_cast<int>(costmap->getSizeInCellsX());
-  const int size_y = static_cast<int>(costmap->getSizeInCellsY());
   const double sr2 = search_radius * search_radius;
   const double cr2 = obstacle_cluster_radius_ * obstacle_cluster_radius_;
 
@@ -1290,44 +1297,56 @@ void ProxMpcController::fillStaticObstacles(
   objects.reserve(np_ * budget);
   hits.reserve(np_ * budget);
 
+  /* Reused across nodes so the per-cycle scan grows its buffers at most once. */
+  std::vector<std::array<double, 3>> candidates;
+  std::vector<std::array<double, 2>> picked;
+  picked.reserve(budget);
+
   for (std::size_t node = 0; node < np_; ++node) {
     const Eigen::Index centre_row = std::min(
       static_cast<Eigen::Index>(node + 2), static_cast<Eigen::Index>(np_));
     const double pcx = nominal(centre_row, 0);
     const double pcy = nominal(centre_row, 1);
-    unsigned int mx0 = 0;
-    unsigned int my0 = 0;
-    if (!costmap->worldToMap(pcx, pcy, mx0, my0)) {continue;}
 
     /* Occupied cells within the search window, sorted by distance to the node. */
-    std::vector<std::array<double, 3>> candidates;
-    for (int dy = -win; dy <= win; ++dy) {
-      const int my = static_cast<int>(my0) + dy;
-      if (my < 0 || my >= size_y) {continue;}
-      for (int dx = -win; dx <= win; ++dx) {
-        const int mx = static_cast<int>(mx0) + dx;
-        if (mx < 0 || mx >= size_x) {continue;}
-        const unsigned char cost =
-          costmap->getCost(static_cast<unsigned int>(mx), static_cast<unsigned int>(my));
-        if (cost < costmap_cost_threshold_ || cost == nav2_costmap_2d::NO_INFORMATION) {continue;}
-        double wx = 0.0;
-        double wy = 0.0;
-        costmap->mapToWorld(static_cast<unsigned int>(mx), static_cast<unsigned int>(my), wx, wy);
-        const double dd = (wx - pcx) * (wx - pcx) + (wy - pcy) * (wy - pcy);
-        if (dd > sr2) {continue;}
-        /* Drop cells inside a dynamic footprint (already covered by its half-plane). */
-        bool excluded = false;
-        if (node < exclusions.size()) {
-          for (const auto & e : exclusions[node]) {
-            const double ex = wx - e[0];
-            const double ey = wy - e[1];
-            if (ex * ex + ey * ey < e[2] * e[2]) {
-              excluded = true;
-              break;
+    candidates.clear();
+    {
+      std::lock_guard<nav2_costmap_2d::Costmap2D::mutex_t> lock(*(costmap->getMutex()));
+      const int size_x = static_cast<int>(costmap->getSizeInCellsX());
+      const int size_y = static_cast<int>(costmap->getSizeInCellsY());
+      unsigned int mx0 = 0;
+      unsigned int my0 = 0;
+      if (!costmap->worldToMap(pcx, pcy, mx0, my0)) {continue;}
+      for (int dy = -win; dy <= win; ++dy) {
+        const int my = static_cast<int>(my0) + dy;
+        if (my < 0 || my >= size_y) {continue;}
+        for (int dx = -win; dx <= win; ++dx) {
+          const int mx = static_cast<int>(mx0) + dx;
+          if (mx < 0 || mx >= size_x) {continue;}
+          const unsigned char cost =
+            costmap->getCost(static_cast<unsigned int>(mx), static_cast<unsigned int>(my));
+          if (cost < costmap_cost_threshold_ || cost == nav2_costmap_2d::NO_INFORMATION) {
+            continue;
+          }
+          double wx = 0.0;
+          double wy = 0.0;
+          costmap->mapToWorld(static_cast<unsigned int>(mx), static_cast<unsigned int>(my), wx, wy);
+          const double dd = (wx - pcx) * (wx - pcx) + (wy - pcy) * (wy - pcy);
+          if (dd > sr2) {continue;}
+          /* Drop cells inside a dynamic footprint (already covered by its half-plane). */
+          bool excluded = false;
+          if (node < exclusions.size()) {
+            for (const auto & e : exclusions[node]) {
+              const double ex = wx - e[0];
+              const double ey = wy - e[1];
+              if (ex * ex + ey * ey < e[2] * e[2]) {
+                excluded = true;
+                break;
+              }
             }
           }
+          if (!excluded) {candidates.push_back({dd, wx, wy});}
         }
-        if (!excluded) {candidates.push_back({dd, wx, wy});}
       }
     }
     std::sort(
@@ -1335,7 +1354,7 @@ void ProxMpcController::fillStaticObstacles(
       [](const std::array<double, 3> & a, const std::array<double, 3> & b) {return a[0] < b[0];});
 
     /* Cluster: keep the nearest representatives at least cluster-radius apart. */
-    std::vector<std::array<double, 2>> picked;
+    picked.clear();
     for (const auto & cd : candidates) {
       if (picked.size() >= budget) {break;}
       bool near = false;
