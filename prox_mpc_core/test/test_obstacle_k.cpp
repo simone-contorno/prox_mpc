@@ -58,6 +58,22 @@ void fillSlot(MatrixXd & obs, size_t np, size_t k, size_t slot, double ox, doubl
   }
 }
 
+// Like fillSlot, but only over [node_lo, node_hi): fillSlot writes the same
+// triple at every node, so no test built from it alone can produce a per-node
+// slot discontinuity (e.g. the far sentinel at one node and a real obstacle at
+// the next). Call it twice on the same slot with adjoining ranges to place that
+// discontinuity at a chosen node boundary.
+void fillSlotRange(
+  MatrixXd & obs, size_t k, size_t slot, size_t node_lo, size_t node_hi,
+  double ox, double oy, double d)
+{
+  for (size_t node = node_lo; node < node_hi; node++) {
+    obs(node * k + slot, 0) = ox;
+    obs(node * k + slot, 1) = oy;
+    obs(node * k + slot, 2) = d;
+  }
+}
+
 std::shared_ptr<MPC> makeUnicycleMpc(
   size_t k_obs, double w_weight = 1000.0, double cbf_gamma = 1.0)
 {
@@ -321,6 +337,34 @@ TEST(ObstacleK, SentinelDiscontinuityDoesNotBlowUpSlack)
   // this transition, forcing the slack to absorb it; after the fix it stays at
   // an ordinary avoidance magnitude.
   EXPECT_LT(mpc->getMaxObstacleSlack(), 10.0);
+}
+
+// fillSlotRange places a real obstacle from one node onward while the same slot
+// stays at the far sentinel before it -- the (sentinel at node k, real obstacle
+// at node k+1) discontinuity fillSlot cannot express, since it writes the same
+// triple at every node. The core guard at proxqp.cpp:433-436 already lands on
+// this branch (Wave 1); this exercises it at cbf_gamma = 0.5 and records the
+// observed QP status and largest obstacle slack as a characterization.
+TEST(ObstacleK, SlotDiscontinuityAtHalfGammaStaysBounded)
+{
+  const size_t k = 1;
+  const size_t node_k = 4;   // last sentinel node; node_k + 1 is the first real one
+
+  auto mpc = makeUnicycleMpc(k, 100.0, 0.5);   // K = 1, cbf_gamma = 0.5
+  MatrixXd obs = makeObs(kNp, k);              // every node starts at the far sentinel
+  fillSlotRange(obs, k, 0, node_k + 1, kNp, 2.5, 0.5, 1.0);
+  mpc->setObs(obs);
+
+  mpc->setPose(VectorXd::Zero(3));
+  mpc->solve();
+
+  const auto status = mpc->qp_info.status;
+  const double max_slack = mpc->getMaxObstacleSlack();
+  RecordProperty("qp_status", static_cast<int>(status));
+  RecordProperty("max_obstacle_slack", std::to_string(max_slack));
+
+  EXPECT_EQ(status, proxsuite::proxqp::QPSolverOutput::PROXQP_SOLVED);
+  EXPECT_LT(max_slack, 10.0);   // ordinary avoidance magnitude, not the ~1e5 blow-up
 }
 
 // K=0 reproduces the obstacle-off result exactly, and K=1 with every slot at the
