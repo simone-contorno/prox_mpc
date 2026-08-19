@@ -60,6 +60,11 @@ std::uint8_t solverStatusToMsg(proxsuite::proxqp::QPSolverOutput status)
 
 /// Stop speed below which a cancel ramp is considered complete [m/s, rad/s].
 constexpr double kCancelStopEpsilon = 0.01;
+/// Cap on the brake ramp's integration period, as a multiple of the configured
+/// step: the measured inter-cycle period is used so a server running slower than
+/// the configured step still brakes at the model's own rate, but a stale or
+/// hiccuped measurement must not turn one ramp step into an abrupt stop.
+constexpr double kMaxBrakePeriodFactor = 2.0;
 /// Upper bound on the costmap scan half-window [cells] to keep the per-cycle cost
 /// bounded on constrained hardware.
 constexpr int kMaxScanHalfWidth = 50;
@@ -82,15 +87,16 @@ double quat_yaw(const geometry_msgs::msg::Quaternion & q)
   return std::atan2(siny, cosy);
 }
 
-/// One deceleration step toward zero, respecting the sign of the previous value.
-/// A non-finite previous value (NaN or +/-inf) yields zero: an infinite measured
-/// velocity would otherwise survive the ramp and be published as the command.
-double brake_toward(double prev, double decel, double dt)
+/// One step toward zero under the value's own rate bounds, which are the rate of
+/// change allowed downward (`rate_low`, negative) and upward (`rate_upp`), so an
+/// asymmetric model decelerates at its own rate in each direction. A non-finite
+/// previous value (NaN or +/-inf) yields zero: an infinite measured velocity
+/// would otherwise survive the ramp and be published as the command.
+double brake_toward(double prev, double rate_low, double rate_upp, double dt)
 {
   if (!std::isfinite(prev)) {return 0.0;}
-  const double step = std::abs(decel) * dt;
-  if (prev > 0.0) {return std::max(0.0, prev - step);}
-  if (prev < 0.0) {return std::min(0.0, prev + step);}
+  if (prev > 0.0) {return std::max(0.0, prev - std::abs(rate_low) * dt);}
+  if (prev < 0.0) {return std::min(0.0, prev + std::abs(rate_upp) * dt);}
   return 0.0;
 }
 
@@ -496,6 +502,23 @@ void ProxMpcController::readModelBounds(prox_mpc::Model & model, const std::stri
     required_bound(
       model, model_plugin, "du", 1, 1, "angular",
       "the solver-failure brake would never reach zero."));
+
+  /* Every declared control-rate bound, sign preserved, so the brake ramps each
+   * control channel at the model's own rate in each direction. A channel with no
+   * declared bound stays unbounded and is taken to zero in one step: there is no
+   * rate to respect, and freezing it at its last commanded value would leave the
+   * brake unable to stop that channel at all. */
+  const std::size_t m = model.getM();
+  du_low_.assign(m, -std::numeric_limits<double>::infinity());
+  du_upp_.assign(m, std::numeric_limits<double>::infinity());
+  for (const auto & entry : model.getIneq("du")) {
+    const auto idx = static_cast<std::size_t>(entry.second[0]);
+    if (idx < m) {
+      du_low_[idx] = entry.second[1];
+      du_upp_[idx] = entry.second[2];
+    }
+  }
+  last_cmd_u_ = VectorXd::Zero(m);
 }
 
 void ProxMpcController::cleanup()
@@ -522,6 +545,7 @@ void ProxMpcController::activate()
   failure_count_ = 0;
   veto_count_ = 0;
   steering_state_ = 0.0;
+  last_cmd_u_.setZero();
   last_cmd_v_ = 0.0;
   last_cmd_w_ = 0.0;
   cancelling_ = false;
@@ -574,16 +598,74 @@ geometry_msgs::msg::TwistStamped ProxMpcController::computeVelocityCommands(
   cmd.header.frame_id = costmap_ros_->getBaseFrameID();
   cmd.header.stamp = clock_->now();
 
+  /* Current pose in the costmap global frame (the server supplies it there).
+   * Read before the fail-safe ramp below, which needs it to set the model state
+   * it maps the braked controls through; its finiteness is checked once the ramp
+   * exists to handle the failure. */
+  const double cx = pose.pose.position.x;
+  const double cy = pose.pose.position.y;
+  const double ctheta = quat_yaw(pose.pose.orientation);
+
   /* Deceleration ramp shared by the cancel, solver-failure, and veto paths. It
-   * ramps down from the server-measured velocity (RPP/MPPI style) so the brake
-   * tracks the robot's actual speed rather than the last command, which may be
-   * stale (for example a cycle-1 failure while already moving). A non-finite
-   * measured velocity yields a safe zero through brake_toward. */
+   * ramps the model's own controls toward zero under the model's own control-rate
+   * bounds and maps the result through the model, the same seam the accepted
+   * command path uses: a model whose controls are not a body twist (the bicycle's
+   * second control is a steering rate, not a yaw rate) has no meaningful
+   * twist-space ramp. The speed channel ramps down from the server-measured
+   * velocity (RPP/MPPI style) so the brake tracks the robot's actual speed rather
+   * than a stale command; the remaining channels have no measurement and ramp
+   * from their last commanded value. A non-finite measured velocity yields a safe
+   * zero through brake_toward. */
   auto make_brake = [&]() -> geometry_msgs::msg::TwistStamped {
-      last_cmd_v_ = brake_toward(velocity.linear.x, a_dec_lin_, dt_);
-      last_cmd_w_ = brake_toward(velocity.angular.z, a_dec_ang_, dt_);
-      cmd.twist.linear.x = last_cmd_v_;
-      cmd.twist.angular.z = last_cmd_w_;
+      /* Step with the inter-cycle period the plugin already measures for its
+       * telemetry rather than the configured step, so a server running slower
+       * than dt_ still brakes at the model's declared rate; clamped below at dt_
+       * so the ramp is never slower than the configured one, and above so a stale
+       * measurement cannot turn one step into an abrupt stop. */
+      const double measured_period = have_last_cycle_ ?
+        std::chrono::duration<double>(
+        std::chrono::steady_clock::now() - last_cycle_wall_).count() : dt_;
+      const double period = std::clamp(measured_period, dt_, kMaxBrakePeriodFactor * dt_);
+
+      VectorXd u_brake = last_cmd_u_;
+      if (u_brake.size() > 0) {u_brake(0) = velocity.linear.x;}
+      for (Eigen::Index j = 0; j < u_brake.size(); ++j) {
+        u_brake(j) = brake_toward(
+          u_brake(j), du_low_[static_cast<std::size_t>(j)],
+          du_upp_[static_cast<std::size_t>(j)], period);
+      }
+      last_cmd_u_ = u_brake;
+
+      /* The model reads its own state through toTwist, and the accepted path's
+       * setX runs past the veto, so no braking cycle reaches it: set the state
+       * here from the current pose, with a non-finite pose leaving it at zero. */
+      VectorXd brake_state = VectorXd::Zero(n_);
+      if (std::isfinite(cx) && std::isfinite(cy) && std::isfinite(ctheta)) {
+        brake_state(0) = cx;
+        brake_state(1) = cy;
+        brake_state(2) = ctheta;
+      }
+      if (n_ > 3) {brake_state(3) = steering_state_;}
+      model_->setX(brake_state);
+
+      geometry_msgs::msg::Twist twist = model_->toTwist(u_brake);
+      if (!std::isfinite(twist.linear.x) || !std::isfinite(twist.angular.z)) {
+        /* Degraded mode of last resort: a model that maps braked controls to a
+         * non-finite twist would otherwise publish it on the safety path, so fall
+         * back to ramping the measured twist within the channel-0 and channel-1
+         * deceleration limits, which is what this path did before it went through
+         * the model. */
+        RCLCPP_WARN_THROTTLE(
+          logger_, *clock_, 2000,
+          "ProxMpcController: the model mapped the braked controls to a non-finite twist; "
+          "ramping the measured twist directly this cycle.");
+        twist = geometry_msgs::msg::Twist();
+        twist.linear.x = brake_toward(velocity.linear.x, a_dec_lin_, a_dec_lin_, period);
+        twist.angular.z = brake_toward(velocity.angular.z, a_dec_ang_, a_dec_ang_, period);
+      }
+      last_cmd_v_ = twist.linear.x;
+      last_cmd_w_ = twist.angular.z;
+      cmd.twist = twist;
       return cmd;
     };
 
@@ -600,10 +682,6 @@ geometry_msgs::msg::TwistStamped ProxMpcController::computeVelocityCommands(
       return make_brake();
     };
 
-  /* Current pose in the costmap global frame (the server supplies it there). */
-  const double cx = pose.pose.position.x;
-  const double cy = pose.pose.position.y;
-  const double ctheta = quat_yaw(pose.pose.orientation);
   if (!std::isfinite(cx) || !std::isfinite(cy) || !std::isfinite(ctheta)) {
     return fail("non-finite robot pose");
   }
@@ -931,6 +1009,7 @@ geometry_msgs::msg::TwistStamped ProxMpcController::computeVelocityCommands(
   failure_count_ = 0;
   veto_count_ = 0;
   if (n_ > 3) {steering_state_ = x_sol(1, 3);}
+  last_cmd_u_ = u0;
   last_cmd_v_ = twist.linear.x;
   last_cmd_w_ = twist.angular.z;
 
@@ -1008,6 +1087,7 @@ void ProxMpcController::reset()
   failure_count_ = 0;
   veto_count_ = 0;
   steering_state_ = 0.0;
+  last_cmd_u_.setZero();
   last_cmd_v_ = 0.0;
   last_cmd_w_ = 0.0;
   cancelling_ = false;

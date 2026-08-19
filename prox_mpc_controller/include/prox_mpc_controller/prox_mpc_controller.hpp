@@ -88,9 +88,10 @@ public:
   void reset() override;
 
 protected:
-  /// Read the model's speed bounds (both bounds of `u[0]`) and its per-channel
-  /// deceleration limits (lower bounds of `du[0]` and `du[1]`) into v_max_,
-  /// v_min_, max_linear_vel_, a_dec_lin_ and a_dec_ang_. A model that declares
+  /// Read the model's speed bounds (both bounds of `u[0]`), its per-channel
+  /// deceleration limits (lower bounds of `du[0]` and `du[1]`) and its full set
+  /// of control-rate bounds into v_max_, v_min_, max_linear_vel_, a_dec_lin_,
+  /// a_dec_ang_, du_low_ and du_upp_. A model that declares
   /// none of a required bound cannot be driven safely - a zero deceleration limit
   /// leaves the brake ramp stuck at the current velocity, and a zero speed bound
   /// clamps the cruise speed to zero - so a missing bound throws
@@ -244,9 +245,23 @@ protected:
   double v_min_{0.0};
   double max_linear_vel_{0.0};
 
-  /// Deceleration limits read from the model's du bounds.
+  /// Deceleration limits read from the model's du bounds. They also serve as the
+  /// last-resort twist-space ramp when a model maps the braked controls to a
+  /// non-finite twist.
   double a_dec_lin_{0.5};
   double a_dec_ang_{0.5};
+
+  /// The model's control-rate (du) bounds, indexed by control channel, with each
+  /// side's sign preserved so an asymmetric model brakes at its own rate in each
+  /// direction. A channel the model declares no bound for is left unbounded, so
+  /// the brake takes it to zero in one step rather than freezing it.
+  std::vector<double> du_low_;
+  std::vector<double> du_upp_;
+
+  /// Last commanded control vector; the ramp's starting point for every control
+  /// channel that has no measurement. The speed channel starts from the measured
+  /// speed instead, so the brake tracks the robot rather than a stale command.
+  VectorXd last_cmd_u_;
 
   /// Speed limit requested by the server. setSpeedLimit() runs on the node's
   /// executor thread while the solver reads the model's bounds on the action
