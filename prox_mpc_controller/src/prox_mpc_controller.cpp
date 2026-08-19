@@ -292,6 +292,12 @@ void ProxMpcController::configure(
     RCLCPP_WARN(logger_, "max_solver_failures %d < 0; clamping to 0.", max_solver_failures_);
     max_solver_failures_ = 0;
   }
+  /* Obstacle-slot capacity K per predicted node: the knob for how many obstacles
+   * reach the solver, one per node at the default. Every extra slot is paid on
+   * every cycle of every scenario, and the costmap scan cost is unchanged, so
+   * the whole increase lands in the QP: at the shipped unicycle sizing (n=3,
+   * m=2, Np=Nc=20), K=2 is 16% more decision variables and 33% more inequality
+   * rows than K=1, and K=4 is 49% and 100% more. */
   declare("max_obstacles", max_obstacles_, 1);
   if (max_obstacles_ < 0) {
     RCLCPP_WARN(logger_, "max_obstacles %d < 0; clamping to 0.", max_obstacles_);
@@ -1217,7 +1223,7 @@ void ProxMpcController::reduceCostmap(const MatrixXd & reference, MatrixXd & obs
 }
 
 void ProxMpcController::fillStaticObstacles(
-  const MatrixXd & reference, MatrixXd & obs, std::size_t slot_begin,
+  const MatrixXd &, MatrixXd & obs, std::size_t slot_begin,
   const std::vector<std::vector<std::array<double, 3>>> & exclusions)
 {
   const std::size_t k_obs = static_cast<std::size_t>(max_obstacles_);
@@ -1247,9 +1253,22 @@ void ProxMpcController::fillStaticObstacles(
   const double sr2 = search_radius * search_radius;
   const double cr2 = obstacle_cluster_radius_ * obstacle_cluster_radius_;
 
+  /* Scan centres come from the nominal predicted trajectory, not from the plan
+   * reference: the QP linearizes node k's keep-out half-plane about its own
+   * predicted position, so centring the scan there removes the cross-track error
+   * the window would otherwise have to cover. The fill runs before solve(), and
+   * solve() shifts the trajectory by one node before assembling, so getX() here
+   * is the previous cycle's trajectory, un-shifted and one node stale: node k's
+   * constraint will be linearized about the row this reads as k + 2, clamped at
+   * the last node. Before the first solve the trajectory is zero, which is also
+   * what that first QP linearizes about, so the two stay consistent. */
+  const MatrixXd nominal = mpc_->getX();
+
   for (std::size_t node = 0; node < np_; ++node) {
-    const double pcx = reference(static_cast<Eigen::Index>(node + 1), 0);
-    const double pcy = reference(static_cast<Eigen::Index>(node + 1), 1);
+    const Eigen::Index centre_row = std::min(
+      static_cast<Eigen::Index>(node + 2), static_cast<Eigen::Index>(np_));
+    const double pcx = nominal(centre_row, 0);
+    const double pcy = nominal(centre_row, 1);
     unsigned int mx0 = 0;
     unsigned int my0 = 0;
     if (!costmap->worldToMap(pcx, pcy, mx0, my0)) {continue;}

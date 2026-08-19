@@ -118,7 +118,7 @@ protected:
   void fillObstacles(const MatrixXd & reference, MatrixXd & obs, const rclcpp::Time & now);
 
   /// Reduce the local costmap to at most max_obstacles_ (o_x, o_y, d_safe) triples
-  /// per predicted node, centered on the reference trajectory positions. This is
+  /// per predicted node, centered on the nominal predicted positions. This is
   /// the static (costmap-only) fill and the predict_obstacles_-off fallback.
   void reduceCostmap(const MatrixXd & reference, MatrixXd & obs);
 
@@ -126,7 +126,9 @@ protected:
   /// per node from the nearest occupied cells, skipping cells inside any per-node
   /// exclusion disc (a dynamic track's footprint). Slots below slot_begin and the
   /// far-sentinel default are left untouched. exclusions[node] = list of
-  /// (x, y, radius); an empty vector means no exclusions.
+  /// (x, y, radius); an empty vector means no exclusions. The scan centres come
+  /// from the MPC's own nominal trajectory, so the leading reference argument is
+  /// unused and is retained only to keep this released signature stable.
   void fillStaticObstacles(
     const MatrixXd & reference, MatrixXd & obs, std::size_t slot_begin,
     const std::vector<std::vector<std::array<double, 3>>> & exclusions);
