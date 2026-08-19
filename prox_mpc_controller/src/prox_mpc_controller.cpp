@@ -578,12 +578,16 @@ void ProxMpcController::deactivate()
   if (diag_pub_) {diag_pub_->on_deactivate();}
   /* Drop cached perception so a re-activated controller does not act on a tracked
    * obstacle observed before deactivation; it resumes costmap-only until a fresh
-   * message arrives (the staleness timeout would also catch this). */
+   * message arrives (the staleness timeout would also catch this). Both clears
+   * are made under the mutex: the controller server deactivates its action
+   * server, and so joins the thread that runs computeVelocityCommands, before
+   * calling this, but that ordering is an upstream implementation detail this
+   * teardown should not depend on. */
   {
     std::lock_guard<std::mutex> lock(obstacles_mutex_);
     latest_obstacles_.reset();
+    predicted_obstacles_.clear();
   }
-  predicted_obstacles_.clear();
   RCLCPP_INFO(logger_, "Deactivating ProxMpcController '%s'.", plugin_name_.c_str());
 }
 
