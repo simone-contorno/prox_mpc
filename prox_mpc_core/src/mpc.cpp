@@ -88,31 +88,42 @@ void MPC::configProxQP()
 }
 
 /*!
- * Run one SQP cycle and return the predicted state and control trajectories.
+ * Run one SQP cycle and return the predicted state and control trajectories,
+ * without retaining any of it: x, u, w and u0 are untouched, and commitCandidate()
+ * retains the result once the caller's own acceptance gates have passed.
  * Convergence must be checked by the caller through qp_info.status, which equals
- * PROXQP_SOLVED on success. On non-convergence solve() takes no safety action;
- * the returned first control is the last (non-converged) iterate and must not be
+ * PROXQP_SOLVED on success. On non-convergence this takes no safety action; the
+ * returned first control is the last (non-converged) iterate and must not be
  * applied as is. The caller is responsible for the fallback, for example a
  * deceleration ramp toward zero that respects the robot's limits.
  */
-std::tuple<MatrixXd, MatrixXd> MPC::solve()
+std::tuple<MatrixXd, MatrixXd> MPC::solveCandidate()
 {
+  /* The whole cycle runs on the candidate copies. Nothing below writes x, u, w
+   * or u0, so a cycle the caller rejects leaves the retained state exactly as the
+   * last accepted cycle left it. */
+  cand_x = x;
+  cand_u = u;
+  cand_w = w;
+  cand_solved = false;
+  cand_finite = false;
+
   /* Slide states and control by 1 position. The right-hand side is .eval()'d into
    * a temporary because source and destination overlap: Eigen assumes no aliasing
    * for block/row assignments, so an explicit temporary keeps the shift correct. */
-  x.topRows(x.rows() - 1) = x.bottomRows(x.rows() - 1).eval();
-  x.row(x.rows() - 1) = x.row(x.rows() - 2);
+  cand_x.topRows(cand_x.rows() - 1) = cand_x.bottomRows(cand_x.rows() - 1).eval();
+  cand_x.row(cand_x.rows() - 1) = cand_x.row(cand_x.rows() - 2);
 
   /* With Nc == 1, u has a single row: there is no previous row to shift, and
    * u.row(u.rows() - 2) would read out of bounds. */
-  if (u.rows() > 1) {
-    u.topRows(u.rows() - 1) = u.bottomRows(u.rows() - 1).eval();
-    u.row(u.rows() - 1) = u.row(u.rows() - 2);
+  if (cand_u.rows() > 1) {
+    cand_u.topRows(cand_u.rows() - 1) = cand_u.bottomRows(cand_u.rows() - 1).eval();
+    cand_u.row(cand_u.rows() - 1) = cand_u.row(cand_u.rows() - 2);
   }
 
   /* Update current predicted state with the current real pose */
-  x.row(0) = pose;
-  u.row(0) = u0;
+  cand_x.row(0) = pose;
+  cand_u.row(0) = u0;
 
   /* Set ProxQP */
   proxqp->setdt(dt);
@@ -125,12 +136,13 @@ std::tuple<MatrixXd, MatrixXd> MPC::solve()
   const auto sqp_start = std::chrono::steady_clock::now();
   do{
     /* Solve the QP sub-problem */
-    auto [x_sol, u_sol, w_sol, info] = proxqp->solve(x, u, u0, w, goal_x, goal_u);
+    auto [x_sol, u_sol, w_sol, info] =
+      proxqp->solve(cand_x, cand_u, u0, cand_w, goal_x, goal_u);
 
     /* Update */
-    x += x_sol;
-    u += u_sol;
-    w += w_sol;
+    cand_x += x_sol;
+    cand_u += u_sol;
+    cand_w += w_sol;
     qp_info = info;
     qp_iter_ext += qp_info.iter_ext;
     sqp_iter++;
@@ -151,14 +163,46 @@ std::tuple<MatrixXd, MatrixXd> MPC::solve()
   } while (qp_info.status != proxsuite::proxqp::QPSolverOutput::PROXQP_SOLVED &&
     sqp_iter < max_iter_sqp && !timed_out);
 
-  /* On a converged solve the first control becomes the command sent to the robot
-   * and the warm-start reference for the next cycle. On non-convergence solve()
-   * takes no safety action: it keeps the last good command and reports the
-   * failure through qp_info.status, leaving the fallback policy to the caller. */
-  if (qp_info.status == proxsuite::proxqp::QPSolverOutput::PROXQP_SOLVED) {
-    u0 = u.row(0);
-  }
+  cand_solved = qp_info.status == proxsuite::proxqp::QPSolverOutput::PROXQP_SOLVED;
+  /* Full-horizon finiteness, not only the first control: a non-finite tail would
+   * otherwise be committed and then warm-start the next cycle. */
+  cand_finite = cand_x.allFinite() && cand_u.allFinite() && cand_w.allFinite();
+  cand_u0 = cand_u.row(0);
 
+  return {cand_x, cand_u};
+}
+
+/*!
+ * Retain the last candidate. The first control becomes the warm-start reference
+ * for the next cycle and the anchor of its control-rate constraint, so it is
+ * advanced only for a candidate that both converged and is finite.
+ */
+bool MPC::commitCandidate()
+{
+  if (cand_solved == false || cand_finite == false) {return false;}
+  x = cand_x;
+  u = cand_u;
+  w = cand_w;
+  u0 = cand_u0;
+  return true;
+}
+
+/* Whether the last candidate is finite over the whole horizon. */
+bool MPC::getCandidateFinite() {return cand_finite;}
+
+/*!
+ * Run one SQP cycle and commit it. This is the propose-and-commit entry point:
+ * the increments are retained whatever the QP reported, and the first control
+ * advances only on a converged solve. Callers that must not advance on a cycle
+ * their own gates reject use solveCandidate()/commitCandidate() instead.
+ */
+std::tuple<MatrixXd, MatrixXd> MPC::solve()
+{
+  solveCandidate();
+  x = cand_x;
+  u = cand_u;
+  w = cand_w;
+  if (cand_solved == true) {u0 = cand_u0;}
   return {x, u};
 }
 
@@ -215,6 +259,12 @@ bool MPC::getGuess() {return guess;}
  * @param x matrix.
  */
 void MPC::setX(MatrixXd x) {this->x = x;}
+
+/*!
+ * Set the previous control input the next cycle's rate constraint is anchored on.
+ * @param u0 control actually applied (length m).
+ */
+void MPC::setU0(VectorXd u0) {this->u0 = u0;}
 
 /*!
  * Set the intermediate states weight matrix.

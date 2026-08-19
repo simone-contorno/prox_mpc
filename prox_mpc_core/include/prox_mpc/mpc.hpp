@@ -34,11 +34,43 @@ public:
 
   /* Solving */
 
+  /*!
+   * Run one SQP cycle and commit its result, the entry point this class shipped
+   * with. Equivalent to solveCandidate() followed by retaining the candidate
+   * whatever its status, with u0 advanced only on a converged solve.
+   */
   std::tuple<MatrixXd, MatrixXd> solve();
+
+  /*!
+   * Run one SQP cycle without retaining anything: x, u, w and u0 keep the values
+   * they had on entry, and the caller commits with commitCandidate() once its own
+   * acceptance gates have passed. This is the transactional entry point.
+   */
+  std::tuple<MatrixXd, MatrixXd> solveCandidate();
+
+  /*!
+   * Retain the candidate produced by the last solveCandidate(), advancing x, u, w
+   * and u0. It is a no-op returning false unless that candidate both converged
+   * and is finite over the whole horizon, so a caller that never commits simply
+   * does not advance.
+   */
+  bool commitCandidate();
+
+  /* Whether the last solveCandidate() produced finite x, u and w over the whole
+   * horizon. False before the first solveCandidate(). */
+  bool getCandidateFinite();
 
   /* Set */
 
   void setX(MatrixXd x);
+
+  /*!
+   * Set the previous control input the next cycle's rate constraint is anchored
+   * on. A caller that overrides the command this class produced - a deceleration
+   * ramp on a rejected cycle, say - sets it here so the anchor is the control
+   * actually applied rather than one that was never sent.
+   */
+  void setU0(VectorXd u0);
   void setQ(MatrixXd Q);
   void setR(MatrixXd R);
   void setS(MatrixXd S);
@@ -114,6 +146,14 @@ protected:
   MatrixXd goal_x;    // State's goals.
   MatrixXd goal_u;    // Control's goals.
   bool guess = true;  // Use (true) / don't use (false) warm start for initial guesses.
+
+  /* Staged result of the last solveCandidate(), retained only by commitCandidate(). */
+  MatrixXd cand_x;              // Candidate states.
+  MatrixXd cand_u;              // Candidate controls.
+  VectorXd cand_w;              // Candidate slack.
+  VectorXd cand_u0;             // Candidate first control input.
+  bool cand_solved = false;     // Whether the candidate's last QP converged.
+  bool cand_finite = false;     // Whether the candidate is finite over the whole horizon.
 
   /* Default solver limits (centralized; override via the setters) */
   static constexpr size_t kDefaultMaxExtQP = 10000;  // Max QP external iterations.
