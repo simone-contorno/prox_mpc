@@ -143,9 +143,17 @@ protected:
   /// per node from the nearest occupied cells, skipping cells inside any per-node
   /// exclusion disc (a dynamic track's footprint). Slots below slot_begin and the
   /// far-sentinel default are left untouched. exclusions[node] = list of
-  /// (x, y, radius); an empty vector means no exclusions. The scan centres come
-  /// from the MPC's own nominal trajectory, so the leading reference argument is
-  /// unused and is retained only to keep this released signature stable.
+  /// (x, y, radius); an empty vector means no exclusions.
+  ///
+  /// The leading reference argument is deliberately unread. The scan is centred
+  /// on the MPC's own nominal predicted trajectory, because that is what the QP
+  /// linearizes each node's keep-out half-plane about, and a plan reference
+  /// centred elsewhere would size the window for a cross-track error the
+  /// constraint does not carry. The parameter stays because this is a protected
+  /// member of a released class and dropping it changes the signature a derived
+  /// controller compiled against; a subclass that passes a reference here should
+  /// expect it to have no effect. fillObstacles() does read its own reference,
+  /// for the dynamic-track priority.
   void fillStaticObstacles(
     const MatrixXd & reference, MatrixXd & obs, std::size_t slot_begin,
     const std::vector<std::vector<std::array<double, 3>>> & exclusions);
@@ -293,9 +301,15 @@ protected:
   double v_min_{0.0};
   double max_linear_vel_{0.0};
 
-  /// Deceleration limits read from the model's du bounds. They also serve as the
-  /// last-resort twist-space ramp when a model maps the braked controls to a
-  /// non-finite twist.
+  /// Magnitudes of the model's declared lower `du` bounds for control channels 0
+  /// and 1. They are rate limits on the model's own controls, not on a body
+  /// twist: for a bicycle, channel 1 bounds a steering acceleration rather than a
+  /// yaw one. The brake ramps the controls themselves under du_low_/du_upp_ and
+  /// maps them through the model, so these two are read only by the last-resort
+  /// ramp used when that mapping returns a non-finite twist, where a body-twist
+  /// rate is the only thing left to ramp. The names date from the released
+  /// interface and are kept so a derived controller still compiles; they describe
+  /// where the numbers are applied rather than what they bound.
   double a_dec_lin_{0.5};
   double a_dec_ang_{0.5};
 
