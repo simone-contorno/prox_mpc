@@ -98,6 +98,30 @@ public:
     return twist;
   }
 
+  /*!
+   * Declare how this model's state and control vectors map onto the planar
+   * quantities a Nav2 consumer drives: which state entries carry x, y and yaw,
+   * which control entry carries the signed longitudinal speed, whether a
+   * steering angle is carried and where, where the point the state refers to
+   * sits in base_link, and the wheelbase the steering geometry is defined on.
+   *
+   * The default reproduces the convention the bundled models and the bundled
+   * controller followed before this hook existed: state [x, y, yaw, (delta)],
+   * control [v, ...], the state referenced to base_link, and a steering angle
+   * at state index 3 for any model carrying more than three states. The
+   * wheelbase is left at 0, which a consumer reads as undeclared; a model that
+   * carries a steering angle must override this and declare one.
+   *
+   * Read once at the consumer's configuration time, so it is not a control-loop
+   * query and may build its result.
+   */
+  virtual PlanarMapping getPlanarMapping() const
+  {
+    PlanarMapping mapping;
+    if (this->n > 3) {mapping.idx_steering = 3;}
+    return mapping;
+  }
+
   /* Get */
 
   std::string getName();
