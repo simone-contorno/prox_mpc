@@ -25,6 +25,7 @@
 #include <nav2_costmap_2d/cost_values.hpp>
 #include <nav2_costmap_2d/costmap_2d.hpp>
 #include <nav2_costmap_2d/footprint_collision_checker.hpp>
+#include <nav2_costmap_2d/layered_costmap.hpp>
 #include <nav2_util/node_utils.hpp>
 #include <pluginlib/class_list_macros.hpp>
 #include <tf2/exceptions.h>
@@ -827,7 +828,23 @@ geometry_msgs::msg::TwistStamped ProxMpcController::computeVelocityCommands(
       nav2_costmap_2d::FootprintCollisionChecker<nav2_costmap_2d::Costmap2D *> checker(costmap);
       const double fcost = checker.footprintCostAtPose(
         x_sol(1, 0), x_sol(1, 1), x_sol(1, 2), footprint);
-      if (fcost >= static_cast<double>(nav2_costmap_2d::INSCRIBED_INFLATED_OBSTACLE)) {
+      /* Upstream Nav2's own collision policy, in upstream's order: unknown space
+       * is not a collision when the costmap tracks it, and everything else is
+       * judged at LETHAL_OBSTACLE rather than INSCRIBED_INFLATED_OBSTACLE,
+       * because a real polygon check has already been performed and an inflated
+       * cell is not by itself a collision (RPP collision_checker.cpp:143-154,
+       * MPPI cost_critic.hpp:71-78). It inherits upstream's masking property:
+       * footprintCostAtPose returns the maximum cost under the footprint, so a
+       * footprint spanning one unknown and one lethal cell reports 255 and is
+       * judged clear. The in-loop QP keep-out half-plane still carries that
+       * lethal cell, because the horizon extraction includes it at
+       * costmap_cost_threshold and skips only NO_INFORMATION. */
+      const bool unknown_is_clear =
+        fcost == static_cast<double>(nav2_costmap_2d::NO_INFORMATION) &&
+        costmap_ros_->getLayeredCostmap()->isTrackingUnknown();
+      if (!unknown_is_clear &&
+        fcost >= static_cast<double>(nav2_costmap_2d::LETHAL_OBSTACLE))
+      {
         /* Escalate a persistent veto so a robot stuck behind a static obstacle one
          * step ahead triggers the behavior-tree recovery instead of braking
          * forever. The veto counter is kept separate from the solver-failure
