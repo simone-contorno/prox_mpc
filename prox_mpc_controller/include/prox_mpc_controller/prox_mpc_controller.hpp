@@ -162,9 +162,11 @@ protected:
 
   /// Fill and publish one SolverDiagnostics for this control cycle, only when the
   /// publisher exists and the diagnostics topic has a subscriber (zero cost
-  /// otherwise). `solve_ms` is the wall time measured around mpc_->solve();
-  /// `converged` is the cycle's solve result; `num_active_obstacles` is the count
-  /// of filled, non-sentinel obstacle slots at the current node.
+  /// otherwise). `solve_ms` is the wall time measured around the solve;
+  /// `converged` reports whether the cycle's command was accepted and applied,
+  /// which is what the message's own field documents - the QP's own outcome stays
+  /// separately visible in `status`; `num_active_obstacles` is the count of
+  /// filled, non-sentinel obstacle slots at the current node.
   void publishDiagnostics(
     const rclcpp::Time & stamp, double solve_ms, bool converged,
     std::uint16_t num_active_obstacles);

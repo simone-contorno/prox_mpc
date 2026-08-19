@@ -1092,11 +1092,21 @@ geometry_msgs::msg::TwistStamped ProxMpcController::computeVelocityCommands(
   const bool solved =
     (mpc_->qp_info.status == proxsuite::proxqp::QPSolverOutput::PROXQP_SOLVED);
 
-  /* Publish per-cycle telemetry before the gate's early returns, so every solve
-   * (including non-converged ones) is observable when diagnostics are enabled. */
-  publishDiagnostics(cmd.header.stamp, solve_ms, solved, num_active_obs);
+  /* The message defines `converged` as a converged solve whose applied iterate is
+   * finite, so it is set only past every acceptance gate; the QP's own outcome
+   * stays separately readable in the `status` field. Publication moves with it, so
+   * a vetoed or braked cycle is recorded as what it was. Every path out of the
+   * cycle publishes before returning or throwing, including the escalation. */
+  bool converged = false;
+  auto publish_cycle = [&]() {
+      publishDiagnostics(cmd.header.stamp, solve_ms, converged, num_active_obs);
+    };
 
-  if (!solved) {return fail("solver did not converge");}
+  if (!solved) {
+    publish_cycle();
+    return fail("solver did not converge");
+  }
+
 
   /* Defense-in-depth finiteness guard. In this architecture a PROXQP_SOLVED status
    * normally implies a finite iterate (x_sol/u_sol are accumulated QP increments,
@@ -1106,6 +1116,7 @@ geometry_msgs::msg::TwistStamped ProxMpcController::computeVelocityCommands(
    * because the model's toTwist mapping can be non-finite even for finite u0. */
   const VectorXd u0 = u_sol.row(0);
   if (!u0.allFinite() || !x_sol.row(1).allFinite()) {
+    publish_cycle();
     return fail("non-finite solver output");
   }
 
@@ -1163,6 +1174,7 @@ geometry_msgs::msg::TwistStamped ProxMpcController::computeVelocityCommands(
           logger_, *clock_, 2000,
           "ProxMpcController: footprint check vetoed the command; decelerating "
           "(veto %d/%d).", veto_count_, max_solver_failures_);
+        publish_cycle();
         return make_brake();
       }
     } else {
@@ -1177,15 +1189,18 @@ geometry_msgs::msg::TwistStamped ProxMpcController::computeVelocityCommands(
   model_->setX(state);
   const geometry_msgs::msg::Twist twist = model_->toTwist(u0);
   if (!twist_is_finite(twist)) {
+    publish_cycle();
     return fail("non-finite command");
   }
 
+  converged = true;
   failure_count_ = 0;
   veto_count_ = 0;
   if (has_steering_) {steering_state_ = x_sol(1, idx_steer_);}
   last_cmd_u_ = u0;
   last_cmd_v_ = twist.linear.x;
   last_cmd_w_ = twist.angular.z;
+  publish_cycle();
 
   /* Publish the predicted NMPC trajectory (costmap global frame) for
    * visualization, distinct from the Nav2 global plan. Skipped when unsubscribed. */
