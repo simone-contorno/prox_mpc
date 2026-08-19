@@ -88,15 +88,16 @@ public:
   void reset() override;
 
 protected:
-  /// Read the model's speed bounds (both bounds of `u[0]`), its per-channel
-  /// deceleration limits (lower bounds of `du[0]` and `du[1]`) and its full set
-  /// of control-rate bounds into v_max_, v_min_, max_linear_vel_, a_dec_lin_,
-  /// a_dec_ang_, du_low_ and du_upp_. A model that declares
-  /// none of a required bound cannot be driven safely - a zero deceleration limit
-  /// leaves the brake ramp stuck at the current velocity, and a zero speed bound
-  /// clamps the cruise speed to zero - so a missing bound throws
-  /// nav2_core::ControllerException naming it. `model_plugin` is the plugin name
-  /// reported in that message.
+  /// Read the model's declared bounds into the cached control-law limits: both
+  /// bounds of `u[0]` into v_max_, v_min_ and max_linear_vel_; the lower bounds
+  /// of `du[0]` and `du[1]` into a_dec_lin_ and a_dec_ang_; every declared `du`
+  /// bound into du_low_ and du_upp_; the `u[1]` bound of a model with a steering
+  /// state into steer_rate_low_ and steer_rate_upp_. It also sizes last_cmd_u_ to
+  /// the model's control dimension. A model that declares none of a required
+  /// bound cannot be driven safely - a zero deceleration limit leaves the brake
+  /// ramp stuck at the current velocity, and a zero speed bound clamps the cruise
+  /// speed to zero - so a missing bound throws nav2_core::ControllerException
+  /// naming it. `model_plugin` is the plugin name reported in that message.
   void readModelBounds(prox_mpc::Model & model, const std::string & model_plugin);
 
   /// Convert a requested speed limit to an absolute bound (a fraction of the
