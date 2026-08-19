@@ -1023,8 +1023,8 @@ geometry_msgs::msg::TwistStamped ProxMpcController::computeVelocityCommands(
         /* Single-pose plan: the pose orientation is in the plan frame, so it
          * carries the same yaw offset the positions above were rotated by. */
         th = (plan_size < 2) ? quat_yaw(global_plan_.poses.back().pose.orientation) + tyaw :
-        (have_terminal_yaw ? terminal_yaw :
-        std::atan2(gy.back() - gy[plan_size - 2], gx.back() - gx[plan_size - 2]));
+          (have_terminal_yaw ? terminal_yaw :
+          std::atan2(gy.back() - gy[plan_size - 2], gx.back() - gx[plan_size - 2]));
         return;
       }
       std::size_t i = 0;

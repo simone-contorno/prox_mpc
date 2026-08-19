@@ -15,9 +15,13 @@
 
 #include <prox_mpc/model.hpp>
 #include <prox_mpc/models/bicycle.hpp>
+#include <prox_mpc/models/bicycle_front_axle.hpp>
+#include <prox_mpc/models/bicycle_rear_axle.hpp>
 #include <prox_mpc/models/unicycle.hpp>
 
 using prox_mpc::Bicycle;
+using prox_mpc::BicycleFrontAxle;
+using prox_mpc::BicycleRearAxle;
 using prox_mpc::Unicycle;
 using prox_mpc::Model;
 
@@ -247,15 +251,33 @@ TEST(ModelInterface, ToTwistSemantics)
   EXPECT_NEAR(tw_u.linear.x, 0.7, kTol);
   EXPECT_NEAR(tw_u.angular.z, 0.3, kTol);
 
-  Bicycle bicycle;
   const double L = 1.6;
   const double delta = 0.2;
   VectorXd xb(4);
   xb << 0.0, 0.0, 0.0, delta;
-  bicycle.setX(xb);
   VectorXd ub(2);
-  ub << 0.7, 0.1;                 // [v, delta_dot]; omega = v sin(delta)/L
+  ub << 0.7, 0.1;                 // [v, delta_dot]
+
+  // Both bicycles report the body twist of base_link, so the front-axle model's
+  // control - the front-wheel speed - is projected onto the body x axis, while
+  // the rear-axle model's control is already that speed. The yaw rate follows
+  // each model's own steering law.
+  BicycleFrontAxle front;
+  front.setX(xb);
+  auto tw_f = front.toTwist(ub);
+  EXPECT_NEAR(tw_f.linear.x, 0.7 * std::cos(delta), kTol);
+  EXPECT_NEAR(tw_f.angular.z, 0.7 * std::sin(delta) / L, kTol);
+
+  BicycleRearAxle rear;
+  rear.setX(xb);
+  auto tw_r = rear.toTwist(ub);
+  EXPECT_NEAR(tw_r.linear.x, 0.7, kTol);
+  EXPECT_NEAR(tw_r.angular.z, 0.7 * std::tan(delta) / L, kTol);
+
+  // The deprecated alias is the front-axle model.
+  Bicycle bicycle;
+  bicycle.setX(xb);
   auto tw_b = bicycle.toTwist(ub);
-  EXPECT_NEAR(tw_b.linear.x, 0.7, kTol);
-  EXPECT_NEAR(tw_b.angular.z, 0.7 * std::sin(delta) / L, kTol);
+  EXPECT_NEAR(tw_b.linear.x, tw_f.linear.x, kTol);
+  EXPECT_NEAR(tw_b.angular.z, tw_f.angular.z, kTol);
 }

@@ -68,7 +68,9 @@ constexpr double kModelDecel = 0.5;        // bundled-model du bound [m/s^2, rad
 constexpr double kResolution = 0.05;       // test costmap resolution [m]
 constexpr unsigned int kGridCells = 200u;  // 10 m x 10 m grid
 constexpr double kGridOrigin = -5.0;       // centered grid origin [m]
-constexpr double kBicycleWheelbase = 1.6;  // bundled Bicycle model wheelbase [m], bicycle.hpp:30
+constexpr double kBicycleWheelbase = 1.6;  // bundled bicycle wheelbase [m]
+// The bundled bicycles are not the default model, so a test that needs one names it.
+constexpr const char * kBicyclePlugin = "prox_mpc_core/BicycleFrontAxle";
 constexpr double kSteerRateBound = 1.0;    // bundled Bicycle u[1] bound [rad/s], bicycle.hpp:41
 
 // Exposes the protected helper and runtime state so the fail-safe and reduction
@@ -425,11 +427,12 @@ protected:
 
 // --- configure() -----------------------------------------------------------
 
-// configure() loads the default Bicycle model, sizes the MPC, and reads the
-// model's speed bound from its declared constraints.
+// configure() loads the named model, sizes the MPC, and reads the model's speed
+// bound from its declared constraints.
 TEST_F(ProxMpcControllerTest, ConfigureLoadsModelAndSizesMpc)
 {
-  auto c = makeConfigured();
+  auto c = makeConfigured(
+    {rclcpp::Parameter("FollowPath.model_plugin", std::string(kBicyclePlugin))});
   ASSERT_NE(c->model(), nullptr);
   ASSERT_NE(c->mpc(), nullptr);
   EXPECT_EQ(c->nDim(), 4u);                  // bicycle state [x, y, theta, delta]
@@ -837,11 +840,14 @@ TEST_F(ProxMpcControllerTest, ComputeTracksAcrossHeadingWrap)
 }
 
 // On a curved plan the bicycle steering reference is pre-positioned to the path
-// curvature (delta_ref = atan(L*kappa) != 0); on a straight plan it stays zero.
-// Read back from the state reference the controller hands the MPC.
+// curvature; on a straight plan it stays zero. Read back from the state
+// reference the controller hands the MPC. The front-axle model's inverse is
+// asin(L*kappa), the rear-axle one's is atan(L*kappa); both are far above the
+// threshold asserted here.
 TEST_F(ProxMpcControllerTest, CurvatureSetsBicycleSteeringReference)
 {
-  auto c = makeConfigured();   // default Bicycle (n = 4, L = 1.6)
+  auto c = makeConfigured(
+    {rclcpp::Parameter("FollowPath.model_plugin", std::string(kBicyclePlugin))});
   c->activate();
   ASSERT_EQ(c->nDim(), 4u);
 
@@ -861,7 +867,7 @@ TEST_F(ProxMpcControllerTest, CurvatureSetsBicycleSteeringReference)
   for (Eigen::Index k = 0; k < gx_arc.rows(); ++k) {
     max_delta_arc = std::max(max_delta_arc, std::abs(gx_arc(k, 3)));
   }
-  EXPECT_GT(max_delta_arc, 0.2);                   // atan(L*kappa) ~ atan(0.8) = 0.675 rad
+  EXPECT_GT(max_delta_arc, 0.2);                   // asin(L*kappa) = asin(0.8) = 0.927 rad
 }
 
 // The unicycle (no steering state, n = 3) keeps the go-straight default even on
@@ -1269,6 +1275,7 @@ TEST_F(ProxMpcControllerTest, ComputeSolverFailureRampsThenEscalates)
 {
   auto c = makeConfigured(
   {
+    rclcpp::Parameter("FollowPath.model_plugin", std::string(kBicyclePlugin)),
     rclcpp::Parameter("FollowPath.max_int_iter_qp", 1),
     rclcpp::Parameter("FollowPath.max_ext_iter_qp", 1),
     rclcpp::Parameter("FollowPath.max_iter_sqp", 1),
@@ -1291,12 +1298,14 @@ TEST_F(ProxMpcControllerTest, ComputeSolverFailureRampsThenEscalates)
   // if the QP ever converged in a single iteration.
   ASSERT_NE(c->mpc()->qp_info.status, proxsuite::proxqp::QPSolverOutput::PROXQP_SOLVED);
 
-  // v_cmd = max(0, v_meas - a_dec * dt); a_dec = 0.5, dt = 0.1 -> step 0.05.
-  EXPECT_NEAR(cmd.twist.linear.x, 0.30 - kModelDecel * 0.1, 1e-6);
-  // delta decays toward zero at the u[1] rate bound: 0.2 - 1.0 * 0.1 = 0.1 rad.
-  // angular.z = v * sin(delta) / L, not a ramp of the measured angular.z.
+  // The ramped control is v = max(0, v_meas - a_dec * dt); a_dec = 0.5, dt = 0.1
+  // -> step 0.05. delta decays toward zero at the u[1] rate bound:
+  // 0.2 - 1.0 * 0.1 = 0.1 rad. The front-axle model's twist is the base_link one,
+  // so linear.x is v cos(delta) rather than the front-wheel speed v, and
+  // angular.z is v sin(delta) / L rather than a ramp of the measured yaw rate.
   const double expected_delta = 0.2 - kSteerRateBound * 0.1;
   const double expected_v = 0.30 - kModelDecel * 0.1;
+  EXPECT_NEAR(cmd.twist.linear.x, expected_v * std::cos(expected_delta), 1e-9);
   EXPECT_NEAR(
     cmd.twist.angular.z, expected_v * std::sin(expected_delta) / kBicycleWheelbase, 1e-9);
   EXPECT_EQ(c->failureCount(), 1);
@@ -2230,15 +2239,17 @@ TEST_F(ProxMpcControllerTest, BrakePreservesAsymmetricDecelerationBoundsPerDirec
   EXPECT_NEAR(cmd_rev.twist.linear.x, -1.0 + 0.5 * 0.1, 1e-6);   // du[0] upp = +0.5
 }
 
-// The bicycle's brake maps through the model's own toTwist physics
-// (angular.z = v * sin(delta) / L), not a twist-space ramp of the measured
-// yaw rate, and a pinned brake_period_s steps both the speed ramp and the
-// steering decay by the same pinned amount rather than the measured period
+// The bicycle's brake maps through the model's own toTwist physics - for the
+// front-axle model linear.x = v cos(delta) and angular.z = v sin(delta) / L, both
+// the base_link twist - rather than a twist-space ramp of the measured yaw rate,
+// and a pinned brake_period_s steps both the speed ramp and the steering decay by
+// the same pinned amount rather than the measured period
 // BrakeMeasuredPeriodClampedToConfiguredRange exercises.
 TEST_F(ProxMpcControllerTest, BicycleBrakeMapsThroughToTwistWithPinnedPeriod)
 {
   auto c = makeConfigured(
   {
+    rclcpp::Parameter("FollowPath.model_plugin", std::string(kBicyclePlugin)),
     rclcpp::Parameter("FollowPath.brake_period_s", 0.2),
     rclcpp::Parameter("FollowPath.max_int_iter_qp", 1),
     rclcpp::Parameter("FollowPath.max_ext_iter_qp", 1),
@@ -2256,7 +2267,7 @@ TEST_F(ProxMpcControllerTest, BicycleBrakeMapsThroughToTwistWithPinnedPeriod)
 
   const double expected_v = 1.0 - kModelDecel * 0.2;             // du[0] bound, pinned period
   const double expected_delta = 0.5 - kSteerRateBound * 0.2;     // u[1] bound, pinned period
-  EXPECT_NEAR(cmd.twist.linear.x, expected_v, 1e-9);
+  EXPECT_NEAR(cmd.twist.linear.x, expected_v * std::cos(expected_delta), 1e-9);
   EXPECT_NEAR(
     cmd.twist.angular.z, expected_v * std::sin(expected_delta) / kBicycleWheelbase, 1e-9);
 }
