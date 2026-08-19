@@ -1411,12 +1411,14 @@ void ProxMpcController::fillStaticObstacles(
 
   /* One distinct physical object, tracked across nodes: (x, y) is where it was
    * seen most recently, best_d2 its closest approach to any node's scan centre,
-   * and last_node the node it was last seen at. */
+   * first_node the earliest node it was seen at and last_node the latest. Nodes
+   * are scanned in increasing order, so first_node is fixed at creation. */
   struct StaticObject
   {
     double x;
     double y;
     double best_d2;
+    std::size_t first_node;
     std::size_t last_node;
   };
   /* One (node, object) sighting, carrying the position seen at that node. */
@@ -1526,7 +1528,7 @@ void ProxMpcController::fillStaticObstacles(
         }
       }
       if (match == objects.size()) {
-        objects.push_back({pk[0], pk[1], pd2, node});
+        objects.push_back({pk[0], pk[1], pd2, node, node});
       } else {
         objects[match].x = pk[0];
         objects[match].y = pk[1];
@@ -1537,8 +1539,14 @@ void ProxMpcController::fillStaticObstacles(
     }
   }
 
-  /* Slots go to the objects that come closest to the horizon, so the capacity is
-   * spent on the most binding ones rather than on whichever was seen first. An
+  /* Slots go to the objects encountered earliest along the predicted trajectory,
+   * ties broken by closest approach. Ranking on closest approach alone spends the
+   * capacity on whichever object comes nearest anywhere on the horizon, which
+   * degrades as np grows: at a long horizon the winner can be an encounter many
+   * seconds out that is re-planned long before it happens, while a near obstacle
+   * gets no in-loop constraint. Time-to-encounter is invariant to horizon length,
+   * because extra nodes are appended past the ones that decide the order, and it
+   * is the rule Autoware's cruise planner uses (nearest along the trajectory). An
    * object that wins a slot keeps it at every node it was seen at; the nodes it
    * was not seen at keep the far sentinel, which the core reads as an unfilled
    * slot and excludes from the CBF coupling. */
@@ -1546,7 +1554,12 @@ void ProxMpcController::fillStaticObstacles(
   std::iota(order.begin(), order.end(), 0);
   std::stable_sort(
     order.begin(), order.end(),
-    [&objects](std::size_t a, std::size_t b) {return objects[a].best_d2 < objects[b].best_d2;});
+    [&objects](std::size_t a, std::size_t b) {
+      if (objects[a].first_node != objects[b].first_node) {
+        return objects[a].first_node < objects[b].first_node;
+      }
+      return objects[a].best_d2 < objects[b].best_d2;
+    });
 
   std::vector<std::size_t> slot_of(objects.size(), kNoObstacleSlot);
   for (std::size_t rank = 0; rank < order.size() && rank < budget; ++rank) {
