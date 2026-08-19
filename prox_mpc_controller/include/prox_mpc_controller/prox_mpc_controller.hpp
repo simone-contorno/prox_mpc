@@ -134,8 +134,10 @@ protected:
     const MatrixXd & reference, MatrixXd & obs, std::size_t slot_begin,
     const std::vector<std::vector<std::array<double, 3>>> & exclusions);
 
-  /// Cache the latest tracked-obstacle array (subscription callback; runs in the
-  /// controller-server executor alongside computeVelocityCommands).
+  /// Cache the latest tracked-obstacle array. This runs on the controller
+  /// server's node executor, while computeVelocityCommands runs on the action
+  /// server's own execution thread, so the two are concurrent and the exchange
+  /// between them must be guarded.
   void obstacleCallback(prox_mpc_msgs::msg::ObstacleArray::ConstSharedPtr msg);
 
   /// Publish the predicted dynamic-obstacle trajectories as RViz markers when the
@@ -171,9 +173,10 @@ protected:
   std::shared_ptr<rclcpp_lifecycle::LifecyclePublisher<prox_mpc_msgs::msg::SolverDiagnostics>>
   diag_pub_;
 
-  /// Tracked-obstacle input and its mutex-guarded latest message. The callback and
-  /// computeVelocityCommands run in the same controller-server executor; the mutex
-  /// guards the shared-pointer swap between them.
+  /// Tracked-obstacle input and its mutex-guarded latest message. The callback
+  /// runs on the node executor and computeVelocityCommands on the action server's
+  /// own execution thread, so they are concurrent: the mutex is what makes the
+  /// shared-pointer exchange between them safe, and removing it would be a race.
   rclcpp::Subscription<prox_mpc_msgs::msg::ObstacleArray>::SharedPtr obstacle_sub_;
   std::mutex obstacles_mutex_;
   prox_mpc_msgs::msg::ObstacleArray::ConstSharedPtr latest_obstacles_;
