@@ -66,6 +66,8 @@ constexpr double kModelDecel = 0.5;        // bundled-model du bound [m/s^2, rad
 constexpr double kResolution = 0.05;       // test costmap resolution [m]
 constexpr unsigned int kGridCells = 200u;  // 10 m x 10 m grid
 constexpr double kGridOrigin = -5.0;       // centered grid origin [m]
+constexpr double kBicycleWheelbase = 1.6;  // bundled Bicycle model wheelbase [m], bicycle.hpp:30
+constexpr double kSteerRateBound = 1.0;    // bundled Bicycle u[1] bound [rad/s], bicycle.hpp:41
 
 // Exposes the protected helper and runtime state so the fail-safe and reduction
 // branches can be driven and the safe command asserted (white-box, no production
@@ -248,8 +250,14 @@ void addPredictedSamples(
 class StubGoalChecker : public nav2_core::GoalChecker
 {
 public:
+  // Isotropic tolerance: the shape every goal checker Nav2 ships actually
+  // produces (SimpleGoalChecker writes the same scalar into both fields).
   StubGoalChecker(double xy_tol, bool valid)
-  : xy_tol_(xy_tol), valid_(valid) {}
+  : StubGoalChecker(xy_tol, xy_tol, valid) {}
+  // Anisotropic tolerance, for a custom goal checker whose x and y tolerances
+  // differ; the pair equal tests above can never exercise this shape.
+  StubGoalChecker(double x_tol, double y_tol, bool valid)
+  : x_tol_(x_tol), y_tol_(y_tol), valid_(valid) {}
   void initialize(
     const rclcpp_lifecycle::LifecycleNode::WeakPtr &, const std::string &,
     const std::shared_ptr<nav2_costmap_2d::Costmap2DROS>) override {}
@@ -260,13 +268,14 @@ public:
   bool getTolerances(
     geometry_msgs::msg::Pose & pose_tolerance, geometry_msgs::msg::Twist &) override
   {
-    pose_tolerance.position.x = xy_tol_;
-    pose_tolerance.position.y = xy_tol_;
+    pose_tolerance.position.x = x_tol_;
+    pose_tolerance.position.y = y_tol_;
     return valid_;
   }
 
 private:
-  double xy_tol_;
+  double x_tol_;
+  double y_tol_;
   bool valid_;
 };
 }  // namespace
@@ -1034,6 +1043,15 @@ TEST_F(ProxMpcControllerTest, ComputeSkipsDuplicateLeadingPlanPointForHeading)
 
 // A non-converged solve decelerates the last command at the model deceleration
 // limit, then escalates to NoValidControl once the failure budget is spent.
+//
+// The brake ramps the model's own controls through toTwist() rather than
+// ramping the measured twist directly, so the bicycle's angular.z is not a
+// twist-space ramp of the measured yaw rate: the second control is a steering
+// rate, and the yaw rate the command carries is derived from the (decayed)
+// steering state as v * sin(delta) / L. steeringState() is seeded non-zero so
+// the decay (bounded by the model's u[1] steering-rate limit, not the du[1]
+// steering-acceleration bound a twist-space ramp would have used) is what
+// supplies the angle that mapping reads.
 TEST_F(ProxMpcControllerTest, ComputeSolverFailureRampsThenEscalates)
 {
   auto c = makeConfigured(
@@ -1045,6 +1063,7 @@ TEST_F(ProxMpcControllerTest, ComputeSolverFailureRampsThenEscalates)
   });
   c->activate();
   c->setPlan(makeStraightPlan(31, 0.2));
+  c->steeringState() = 0.2;   // non-zero steering belief for the decay to move
 
   // The brake ramps from the server-measured velocity, so supply a non-zero
   // measured twist (angular negative to exercise the opposite-sign brake step).
@@ -1061,7 +1080,12 @@ TEST_F(ProxMpcControllerTest, ComputeSolverFailureRampsThenEscalates)
 
   // v_cmd = max(0, v_meas - a_dec * dt); a_dec = 0.5, dt = 0.1 -> step 0.05.
   EXPECT_NEAR(cmd.twist.linear.x, 0.30 - kModelDecel * 0.1, 1e-6);
-  EXPECT_NEAR(cmd.twist.angular.z, -0.30 + kModelDecel * 0.1, 1e-6);
+  // delta decays toward zero at the u[1] rate bound: 0.2 - 1.0 * 0.1 = 0.1 rad.
+  // angular.z = v * sin(delta) / L, not a ramp of the measured angular.z.
+  const double expected_delta = 0.2 - kSteerRateBound * 0.1;
+  const double expected_v = 0.30 - kModelDecel * 0.1;
+  EXPECT_NEAR(
+    cmd.twist.angular.z, expected_v * std::sin(expected_delta) / kBicycleWheelbase, 1e-9);
   EXPECT_EQ(c->failureCount(), 1);
 
   // Second consecutive failure exceeds max_solver_failures = 1 -> escalate.
@@ -1283,13 +1307,21 @@ TEST_F(ProxMpcControllerTest, ResetClearsRuntimeState)
 // reduceCostmap clusters nearby lethal cells into at most K representatives per
 // node, skips unknown cells and out-of-grid nodes, and leaves empty slots at the
 // far sentinel.
+//
+// The scan is centered on the MPC's own nominal trajectory (mpc()->getX()), not
+// on the reference argument, which fillStaticObstacles no longer reads (its
+// signature keeps the parameter only so the released call site stays stable).
+// Node j's window is centered on nominal row min(j + 2, Np) (the fill runs
+// before solve() shifts the trajectory, so this reads one node ahead to
+// compensate for that staleness). Np = 3 so nodes 0 and 1 read distinct rows
+// (2 and 3); node 2 clamps to the same row as node 1.
 TEST_F(ProxMpcControllerTest, ReduceCostmapClustersAndSentinels)
 {
-  // Np = 2, K = 2; a large robot radius forces the scan window to clamp.
+  // Np = 3, K = 2; a large robot radius forces the scan window to clamp.
   auto c = makeConfigured(
   {
-    rclcpp::Parameter("FollowPath.np", 2),
-    rclcpp::Parameter("FollowPath.nc", 2),
+    rclcpp::Parameter("FollowPath.np", 3),
+    rclcpp::Parameter("FollowPath.nc", 3),
     rclcpp::Parameter("FollowPath.max_obstacles", 2),
     rclcpp::Parameter("FollowPath.robot_radius", 3.0),
     rclcpp::Parameter("FollowPath.safety_margin", 0.1),
@@ -1303,14 +1335,16 @@ TEST_F(ProxMpcControllerTest, ReduceCostmapClustersAndSentinels)
   fillCost(1.0, 2.0, 1.3, 2.3, nav2_costmap_2d::LETHAL_OBSTACLE);   // cluster B
   fillCost(0.8, 0.8, 0.8, 0.8, nav2_costmap_2d::NO_INFORMATION);    // ignored
 
-  const std::size_t np = 2;
+  const std::size_t np = 3;
   const std::size_t k = 2;
-  MatrixXd reference = MatrixXd::Zero(static_cast<Eigen::Index>(np + 1), 4);
-  reference(1, 0) = 1.15;          // node 0: inside the grid, near both clusters
-  reference(1, 1) = 1.0;
-  reference(2, 0) = 100.0;         // node 1: outside the grid -> worldToMap fails
-  reference(2, 1) = 100.0;
+  MatrixXd nominal = MatrixXd::Zero(static_cast<Eigen::Index>(np + 1), c->nDim());
+  nominal(2, 0) = 1.15;    // row read by node 0: inside the grid, near both clusters
+  nominal(2, 1) = 1.0;
+  nominal(3, 0) = 100.0;   // row read by nodes 1 and 2: outside the grid
+  nominal(3, 1) = 100.0;
+  c->mpc()->setX(nominal);
 
+  MatrixXd reference = MatrixXd::Zero(static_cast<Eigen::Index>(np + 1), c->nDim());
   MatrixXd obs(static_cast<Eigen::Index>(np * k), 3);
   c->reduceCostmap(reference, obs);
 
@@ -1322,9 +1356,11 @@ TEST_F(ProxMpcControllerTest, ReduceCostmapClustersAndSentinels)
   const double sep = std::hypot(obs(0, 0) - obs(1, 0), obs(0, 1) - obs(1, 1));
   EXPECT_GE(sep, 0.3);             // representatives at least a cluster radius apart
 
-  // Node 1: out of grid, both slots stay at the far sentinel.
+  // Nodes 1 and 2: out of grid (nominal row 3), every slot stays at the sentinel.
   EXPECT_NEAR(obs(2, 0), prox_mpc::MPC::kObsFarSentinel, kTol);
   EXPECT_NEAR(obs(3, 0), prox_mpc::MPC::kObsFarSentinel, kTol);
+  EXPECT_NEAR(obs(4, 0), prox_mpc::MPC::kObsFarSentinel, kTol);
+  EXPECT_NEAR(obs(5, 0), prox_mpc::MPC::kObsFarSentinel, kTol);
 }
 
 // --- fillObstacles(): predictive + hybrid fill (white-box) -----------------
@@ -1373,6 +1409,11 @@ TEST_F(ProxMpcControllerTest, PredictiveFillPropagatesObstacleAndKeepsIdentity)
 
 // The hybrid fill keeps a static costmap obstacle in a remaining slot while a
 // dynamic track occupies the reserved slot.
+//
+// The static scan is centered on the MPC's own nominal trajectory
+// (mpc()->getX()), not on the reference argument: at Np = 2 both nodes read the
+// same clamped nominal row (min(node + 2, Np) = 2 for node 0 and node 1 alike),
+// so setting that one row near the static block reproduces both nodes seeing it.
 TEST_F(ProxMpcControllerTest, HybridFillKeepsStaticObstacle)
 {
   auto c = makeConfigured(
@@ -1390,15 +1431,16 @@ TEST_F(ProxMpcControllerTest, HybridFillKeepsStaticObstacle)
   const std::size_t k = 2;
   const rclcpp::Time now(1000, 0, RCL_ROS_TIME);
 
-  // A static lethal block near node 0's reference position.
+  // A static lethal block near the nominal trajectory's node-0/node-1 row.
   fillCost(1.0, 0.8, 1.3, 1.2, nav2_costmap_2d::LETHAL_OBSTACLE);
   // A dynamic obstacle far away, so its exclusion disc does not cover the block.
   c->injectObstacles(makeObstacleMsg(now, 5.0, 5.0, 1.0, 0.0, 0.2));
 
-  MatrixXd reference = MatrixXd::Zero(3, c->nDim());
-  reference(1, 0) = 1.15; reference(1, 1) = 1.0;     // node 0 near the static block
-  reference(2, 0) = 1.15; reference(2, 1) = 1.0;
+  MatrixXd nominal = MatrixXd::Zero(3, c->nDim());
+  nominal(2, 0) = 1.15; nominal(2, 1) = 1.0;   // row read by both node 0 and node 1
+  c->mpc()->setX(nominal);
 
+  MatrixXd reference = MatrixXd::Zero(3, c->nDim());
   MatrixXd obs(static_cast<Eigen::Index>(2 * k), 3);
   c->fillObstacles(reference, obs, now);
 
