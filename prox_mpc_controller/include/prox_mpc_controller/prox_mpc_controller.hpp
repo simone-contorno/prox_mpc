@@ -214,6 +214,10 @@ protected:
   /// Cruise-speed reduction gain on path curvature; 0.0 disables the reduction.
   double curvature_gain_{0.0};
 
+  /// Deceleration-ramp step [s] on a braking cycle; 0 measures the inter-cycle
+  /// period instead, clamped into [dt_, kMaxBrakePeriodFactor * dt_].
+  double brake_period_s_{0.0};
+
   /// Control-law parameters.
   int max_solver_failures_{3};
   int max_obstacles_{1};

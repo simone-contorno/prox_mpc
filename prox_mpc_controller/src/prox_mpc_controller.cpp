@@ -301,6 +301,15 @@ void ProxMpcController::configure(
     RCLCPP_WARN(logger_, "max_solver_failures %d < 0; clamping to 0.", max_solver_failures_);
     max_solver_failures_ = 0;
   }
+  /* Step [s] the deceleration ramp advances by on a braking cycle. 0 (default)
+   * measures the inter-cycle period, so a server running slower than dt still
+   * brakes at the model's declared rate, clamped below at dt and above at
+   * kMaxBrakePeriodFactor * dt so a stale measurement cannot collapse the ramp
+   * into a single step. A positive value overrides the measurement and is used
+   * as-is, for a deployment that wants the ramp independent of scheduling
+   * jitter. */
+  declare("brake_period_s", brake_period_s_, 0.0);
+  clamp_low("brake_period_s", brake_period_s_, 0.0, 0.0);
   /* Obstacle-slot capacity K per predicted node: the knob for how many obstacles
    * reach the solver, one per node at the default. Every extra slot is paid on
    * every cycle of every scenario, and the costmap scan cost is unchanged, so
@@ -636,15 +645,21 @@ geometry_msgs::msg::TwistStamped ProxMpcController::computeVelocityCommands(
    * from their last commanded value. A non-finite measured velocity yields a safe
    * zero through brake_toward. */
   auto make_brake = [&]() -> geometry_msgs::msg::TwistStamped {
-      /* Step with the inter-cycle period the plugin already measures for its
-       * telemetry rather than the configured step, so a server running slower
-       * than dt_ still brakes at the model's declared rate; clamped below at dt_
-       * so the ramp is never slower than the configured one, and above so a stale
-       * measurement cannot turn one step into an abrupt stop. */
-      const double measured_period = have_last_cycle_ ?
-        std::chrono::duration<double>(
-        std::chrono::steady_clock::now() - last_cycle_wall_).count() : dt_;
-      const double period = std::clamp(measured_period, dt_, kMaxBrakePeriodFactor * dt_);
+      /* Step with brake_period_s_ when the operator set one, otherwise with the
+       * inter-cycle period the plugin already measures for its telemetry rather
+       * than the configured step, so a server running slower than dt_ still
+       * brakes at the model's declared rate; the measurement is clamped below at
+       * dt_ so the ramp is never slower than the configured one, and above so a
+       * stale reading cannot turn one step into an abrupt stop. The ramp
+       * saturates at zero either way, so an over-large step shortens the stop
+       * rather than reversing or overshooting it. */
+      double period = brake_period_s_;
+      if (period <= 0.0) {
+        const double measured_period = have_last_cycle_ ?
+          std::chrono::duration<double>(
+          std::chrono::steady_clock::now() - last_cycle_wall_).count() : dt_;
+        period = std::clamp(measured_period, dt_, kMaxBrakePeriodFactor * dt_);
+      }
 
       /* A rejected cycle used to freeze the steering belief, so the next solve
        * linearized about an angle the wheels no longer hold: every rejected cycle
