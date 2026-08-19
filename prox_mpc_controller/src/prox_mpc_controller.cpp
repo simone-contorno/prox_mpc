@@ -239,7 +239,7 @@ void ProxMpcController::configure(
     };
 
   std::string model_plugin;
-  declare("model_plugin", model_plugin, std::string("prox_mpc_core/Bicycle"));
+  declare("model_plugin", model_plugin, std::string("prox_mpc_core/Unicycle"));
   double model_l = 0.0;
   declare("model_params.L", model_l, 1.6);
   /* Optional model input-velocity bound [m/s]; 0.0 (default) keeps the model's

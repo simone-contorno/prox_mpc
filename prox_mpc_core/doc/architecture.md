@@ -144,8 +144,10 @@ Two further virtual hooks let a model be loaded and used generically:
 
 ### Model selection
 
-`prox_mpc::Model` is a `pluginlib` base type, and `Bicycle` and `Unicycle` are
-registered as plugins named `prox_mpc_core/Bicycle` and `prox_mpc_core/Unicycle`.
+`prox_mpc::Model` is a `pluginlib` base type. The bundled models are registered
+as `prox_mpc_core/BicycleFrontAxle`, `prox_mpc_core/BicycleRearAxle` and
+`prox_mpc_core/Unicycle`, with `prox_mpc_core/Bicycle` kept as a deprecated alias
+for the front-axle model.
 A consumer loads a model with a `pluginlib::ClassLoader<prox_mpc::Model>`, calls
 `configure(...)`, and passes the instance to `MPC::init(...)`. Adding a new model
 therefore requires no change to this library: a model only needs to derive from

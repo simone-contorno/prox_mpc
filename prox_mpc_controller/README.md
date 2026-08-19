@@ -43,7 +43,7 @@ driving a TurtleBot3 waffle under a full Nav2 stack in Gazebo Harmonic (see
 - **NMPC behind `nav2_core::Controller`:** one SQP cycle per control step over the
   ProxQP solver; linear models converge in a single QP solve.
 - **Model selected by configuration:** the vehicle model is loaded with
-  `pluginlib` (`model_plugin`, e.g. `prox_mpc_core/Bicycle` or
+  `pluginlib` (`model_plugin`, e.g. `prox_mpc_core/BicycleFrontAxle` or
   `prox_mpc_core/Unicycle`), so switching the robot model needs no code change.
 - **Plan-following reference:** arc-length sampling of the global plan with a
   continuous (unwrapped) heading, a curvature-aware steering reference for the
@@ -145,7 +145,7 @@ disabled (single formatter, and a short SPDX header per file with the full text 
   overlay is not sourced, or the package failed to build against Nav2.
 - **`controller_server` aborts at configure with a model-load error:** the
   `model_plugin` name is wrong or its package is not on the overlay; the valid
-  bundled names are `prox_mpc_core/Bicycle` and `prox_mpc_core/Unicycle`.
+  bundled names are `prox_mpc_core/Unicycle`, `prox_mpc_core/BicycleFrontAxle` and `prox_mpc_core/BicycleRearAxle`, plus `prox_mpc_core/Bicycle` as a deprecated alias for the front-axle model.
 - **Robot rotates in place instead of translating:** the cruise speed samples the
   reference too close to the robot; raise `desired_linear_vel` toward the model's
   speed bound (see the config notes in the

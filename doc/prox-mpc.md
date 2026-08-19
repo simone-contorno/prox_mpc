@@ -51,7 +51,7 @@ Three classes in the `prox_mpc` namespace do the work:
 
 - `prox_mpc::Model` - the vehicle interface.
   A model supplies the Euler linearisation (`updateA`, `updateB`, `updatec`) and, optionally, `configure(params)` (set constants by name) and `toTwist(u)` (map a control vector to a `geometry_msgs/msg/Twist`).
-  `Model` is a `pluginlib` base type; the bundled `prox_mpc_core/Bicycle` (4-state, with a steering angle) and `prox_mpc_core/Unicycle` (3-state) are registered against it.
+  `Model` is a `pluginlib` base type; the bundled `prox_mpc_core/BicycleFrontAxle` and `prox_mpc_core/BicycleRearAxle` (4-state, with a steering angle) and `prox_mpc_core/Unicycle` (3-state) are registered against it, along with `prox_mpc_core/Bicycle` as a deprecated alias for the front-axle model.
 - `prox_mpc::ProxQP` - assembles the QP for one linearisation and solves it with ProxQP.
 - `prox_mpc::MPC` - the SQP driver: it holds the horizons, weights, and obstacle capacity, runs the SQP loop, and exposes the solution plus the solver telemetry (`qp_info`, `sqp_iter`, `qp_iter_ext`, and the peak obstacle slack).
 
@@ -107,7 +107,7 @@ controller_server:
     controller_plugins: ["FollowPath"]
     FollowPath:
       plugin: "prox_mpc_controller::ProxMpcController"
-      model_plugin: "prox_mpc_core/Unicycle"   # or prox_mpc_core/Bicycle
+      model_plugin: "prox_mpc_core/Unicycle"   # or prox_mpc_core/BicycleFrontAxle / BicycleRearAxle
       # horizons, weights, solver limits, obstacle settings:
       # see config/prox_mpc_controller.yaml and doc/architecture.md
 ```

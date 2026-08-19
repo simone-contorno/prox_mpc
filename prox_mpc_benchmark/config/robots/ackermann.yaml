@@ -1,11 +1,11 @@
-# Ackermann (car-like) robot paired with the ProxMPC Bicycle model.
+# Ackermann (car-like) robot paired with a ProxMPC bicycle model.
 # Mode (a) spawns the SDF in models/ackermann_robot and bridges a body Twist to
 # Ackermann steering via ros_gz; mode (b2) gives the kinematic plant a bicycle
 # integrator. For the standalone mode (b1) only `model` is relevant.
 robot:
   name: ackermann
-  model: bicycle                      # prox_mpc Bicycle (4-state [x, y, theta, delta])
-  model_plugin: prox_mpc_core/Bicycle
+  model: bicycle                      # 4-state [x, y, theta, delta]
+  model_plugin: prox_mpc_core/BicycleFrontAxle
   drive: ackermann
   wheelbase: 1.0                  # L [m]; must match the SDF and model_params.L
   robot_radius: 0.5

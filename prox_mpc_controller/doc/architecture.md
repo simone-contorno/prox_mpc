@@ -208,8 +208,8 @@ and fail the lifecycle transition.
 
 | Parameter | Type | Default | Unit | Description |
 | --- | --- | --- | --- | --- |
-| `model_plugin` | string | `prox_mpc_core/Bicycle` | - | `prox_mpc::Model` plugin loaded by name. |
-| `model_params.L` | double | 1.6 | m | Wheelbase forwarded to `Model::configure`; pre-positions the bicycle steering reference. |
+| `model_plugin` | string | `prox_mpc_core/Unicycle` | - | `prox_mpc::Model` plugin loaded by name. Bundled: `prox_mpc_core/Unicycle`, `prox_mpc_core/BicycleFrontAxle`, `prox_mpc_core/BicycleRearAxle`, and `prox_mpc_core/Bicycle` as a deprecated alias for the front-axle model. |
+| `model_params.L` | double | 1.6 | m | Wheelbase forwarded to `Model::configure`. The steering reference is built on the wheelbase the loaded model declares back through `getPlanarMapping()`, not on this value directly. |
 | `model_params.v_max` | double | 0.0 | m/s | Optional forward-speed bound on the model's `u[0]` input. Forwarded to `Model::configure` only when `> 0.0`; the default 0.0 keeps the model's built-in limit. |
 | `model_params.v_min` | double | 0.0 | m/s | Reverse-speed bound, forwarded only alongside a positive `v_max`. A negative value is used as given; otherwise the bound is set to `-v_max`. |
 | `np` | int | 20 | nodes | Prediction horizon. |
@@ -222,6 +222,7 @@ and fail the lifecycle transition.
 | --- | --- | --- | --- | --- |
 | `desired_linear_vel` | double | 1.0 | m/s | Cruise speed the plan is sampled at; clamped to the model's speed bound. |
 | `curvature_gain` | double | 0.0 | - | Cruise reduction on path curvature; 0.0 disables it. |
+| `allow_reversing` | bool | false | - | Follow the plan's own pose orientations into reverse travel, signing the reference speed and truncating the reference at the first direction change. Off reproduces the forward-only reference. |
 
 ### Cost weights
 

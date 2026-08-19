@@ -13,10 +13,13 @@ controller_server:
       # editing the core or this list; the controller configures it after loading.
       # The model must declare a bound on its speed input (u[0]) and control-rate
       # (du) bounds for both channels: they set the speed cap and the deceleration
-      # ramp, and a model missing either fails configure().
-      model_plugin: "prox_mpc_core/Bicycle"
+      # ramp, and a model missing either fails configure(). Bundled names are
+      # prox_mpc_core/Unicycle, prox_mpc_core/BicycleFrontAxle and
+      # prox_mpc_core/BicycleRearAxle; prox_mpc_core/Bicycle is a deprecated
+      # alias for the front-axle model.
+      model_plugin: "prox_mpc_core/Unicycle"
       model_params:        # forwarded to Model::configure(); absent keys keep the literals
-        L: 1.6             # wheelbase [m]
+        L: 1.6             # wheelbase [m], used by the bicycle models
         v_max: 0.0         # [m/s] forward input bound; forwarded only when > 0, else the model literal
         v_min: 0.0         # [m/s] reverse input bound; used only alongside a positive v_max (< 0, else -v_max)
 
@@ -28,9 +31,12 @@ controller_server:
       # Reference tracking. Cruise speed the global plan is sampled at to build
       # the state/control reference; tapered toward zero near the plan end and
       # clamped by any active speed limit. Must not exceed the model's speed
-      # bound (the bundled Bicycle/Unicycle default v_max to 3.0 m/s).
+      # bound (every bundled model defaults v_max to 3.0 m/s).
       desired_linear_vel: 1.0   # [m/s]
       curvature_gain: 0.0       # cruise reduction on path curvature; 0.0 disables it
+      # Follow a plan's own pose orientations into reverse travel, truncating the
+      # reference at the first direction change.
+      allow_reversing: false
 
       # Cost weights (assembled as in the demo).
       q_pos: 10.0
