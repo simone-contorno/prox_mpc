@@ -21,7 +21,7 @@ They are registered against the same `prox_mpc::Model` base as the core models, 
 
 ## Overview
 
-The package is a header-and-plugin fixture: it contributes one deliberately faulty `prox_mpc::Model` implementation and its `pluginlib` registration, with no executable and no ROS node.
+The package is a header-and-plugin fixture: it contributes `prox_mpc::Model` implementations the bundled production models cannot stand in for (a deliberately faulty one, an asymmetric-bounds one) and their `pluginlib` registration, with no executable and no ROS node.
 It is a `<test_depend>` of [prox_mpc_controller](../prox_mpc_controller), so it is present only when that package's tests are built.
 
 ## Models
@@ -29,9 +29,12 @@ It is a `<test_depend>` of [prox_mpc_controller](../prox_mpc_controller), so it 
 | Plugin name | Class | Purpose |
 | --- | --- | --- |
 | `prox_mpc_test_models/NonFiniteTwist` | `prox_mpc_test_models::NonFiniteTwistModel` | Finite linear dynamics (state `[x, y, theta]`, control `[v, omega]`) so the QP converges and reports `PROXQP_SOLVED` with a finite first control, but `toTwist()` deliberately returns a non-finite command (`linear.x = NaN`). |
+| `prox_mpc_test_models/AsymmetricBounds` | `prox_mpc_test_models::AsymmetricBoundsModel` | Same finite linear dynamics as `NonFiniteTwist`, but every declared bound is asymmetric (reverse speed capped tighter than forward speed; braking rate harder than accelerating rate). Both bundled production models declare symmetric bounds, so this is the only fixture that can show the controller preserving an asymmetric range instead of assuming symmetry. |
 
 The `NonFiniteTwist` model is the only seam that reaches the controller's non-finite-command fail-safe: a finite-mapping model cannot produce a non-finite twist from a finite control, so this fixture is required to cover that branch.
 The controller test asserts the controller brakes at the model deceleration limit and then escalates to `nav2_core::NoValidControl` once the failure budget is spent.
+
+The `AsymmetricBounds` model is the only seam that reaches the controller's asymmetry-preserving speed-limit and brake-ramp logic, for the same reason: a model with symmetric bounds cannot show a controller defect that only discards sign asymmetry.
 
 ## How It Is Used
 
@@ -61,6 +64,7 @@ ros2 plugin list --package prox_mpc_test_models   # lists prox_mpc_test_models/N
 ```text
 prox_mpc_test_models/
 ├── include/prox_mpc_test_models/
+│   ├── asymmetric_bounds_model.hpp
 │   └── non_finite_twist_model.hpp
 ├── src/
 │   └── plugins.cpp

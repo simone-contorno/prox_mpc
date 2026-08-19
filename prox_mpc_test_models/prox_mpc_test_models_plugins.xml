@@ -9,4 +9,16 @@
       exercise the controller's non-finite-command fail-safe. Test fixture only.
     </description>
   </class>
+  <class
+    name="prox_mpc_test_models/AsymmetricBounds"
+    type="prox_mpc_test_models::AsymmetricBoundsModel"
+    base_class_type="prox_mpc::Model">
+    <description>
+      Fixture model with an asymmetric range on every declared bound (state
+      [x, y, theta], control [v, omega]): reverse speed capped tighter than
+      forward speed, and a harder braking rate than accelerating rate. Used to
+      test that the controller preserves bound asymmetry instead of assuming
+      symmetry. Test fixture only.
+    </description>
+  </class>
 </library>

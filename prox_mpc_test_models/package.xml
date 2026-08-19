@@ -4,9 +4,9 @@
   <name>prox_mpc_test_models</name>
   <version>1.0.0</version>
   <description>Test-fixture prox_mpc::Model plugins for the ProxMPC stack. These
-  fault-injection models exercise controller fail-safe paths that the bundled
-  models cannot reach (for example a non-finite command). Not for production
-  use.</description>
+  models exercise controller paths the bundled production models cannot reach
+  (for example a non-finite command, or an asymmetric bound). Not for
+  production use.</description>
   <maintainer email="simone.contorno@outlook.it">Simone Contorno</maintainer>
   <license>Apache-2.0</license>
   <url type="repository">https://github.com/simone-contorno/prox_mpc</url>
