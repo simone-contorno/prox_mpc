@@ -1633,6 +1633,52 @@ TEST_F(ProxMpcControllerTest, ReduceCostmapCentersOnNominalNotReference)
   EXPECT_NEAR(obs(0, 0), 2.0, 0.15);
 }
 
+// The obstacle-slot ranking keys on the earliest node an object is first seen
+// at, ties broken by closest approach -- not on closest approach anywhere in
+// the horizon. A long np is needed to separate the two rules: at the shipped
+// np and scan radius, every candidate is first seen at the same node, so the
+// tie-break alone reproduces the old (closest-approach) order and no fixture
+// built at those defaults can tell the two rules apart. Object A is seen only
+// at the early node 2, offset ~0.25 m from that node's scan center (moderate
+// approach). Object B is seen only at the late node 15, offset ~0 m (the
+// closer approach overall). Ranking on closest-approach-anywhere would give
+// the single slot to B; ranking on earliest-encounter gives it to A.
+TEST_F(ProxMpcControllerTest, ObstacleSlotRankingPrefersEarliestEncounter)
+{
+  auto c = makeConfigured(
+  {
+    rclcpp::Parameter("FollowPath.np", 20),
+    rclcpp::Parameter("FollowPath.nc", 20),
+    rclcpp::Parameter("FollowPath.max_obstacles", 1),
+    rclcpp::Parameter("FollowPath.robot_radius", 0.3),
+    rclcpp::Parameter("FollowPath.safety_margin", 0.1),
+    rclcpp::Parameter("FollowPath.obstacle_cluster_radius", 0.3),
+  });
+  // search_radius = d_safe + obstacle_cluster_radius = 0.4 + 0.3 = 0.7 m. Both
+  // clusters stay well inside the 10 m x 10 m grid (+/-5 m): a cluster placed
+  // at the grid edge would silently fail to paint (worldToMap rejects it).
+  fillCost(2.25, -0.05, 2.35, 0.05, nav2_costmap_2d::LETHAL_OBSTACLE);   // A: near (2.3, 0)
+  fillCost(3.5, -0.05, 3.55, 0.05, nav2_costmap_2d::LETHAL_OBSTACLE);    // B: near (3.5, 0)
+
+  const std::size_t np = 20;
+  MatrixXd nominal = MatrixXd::Zero(static_cast<Eigen::Index>(np + 1), c->nDim());
+  // node 2 reads row min(2 + 2, np) = 4: centered on A, ~0.25 m away.
+  nominal(4, 0) = 2.0;
+  // node 15 reads row min(15 + 2, np) = 17: centered on B, ~0 m away (closer).
+  nominal(17, 0) = 3.5;
+  // Every other node's row is left at (0, 0): more than 0.7 m from both A and
+  // B, so no other node picks up either one.
+  c->mpc()->setX(nominal);
+
+  MatrixXd reference = MatrixXd::Zero(static_cast<Eigen::Index>(np + 1), c->nDim());
+  MatrixXd obs(static_cast<Eigen::Index>(np), 3);
+  c->reduceCostmap(reference, obs);
+
+  EXPECT_LT(obs(2, 0), prox_mpc::MPC::kObsFarSentinel);      // node 2: A wins the slot
+  EXPECT_NEAR(obs(2, 0), 2.3, 0.1);
+  EXPECT_NEAR(obs(15, 0), prox_mpc::MPC::kObsFarSentinel, kTol);   // node 15: B did not
+}
+
 // --- fillObstacles(): predictive + hybrid fill (white-box) -----------------
 
 // The predictive fill propagates a tracked obstacle by position + velocity*dt_k
