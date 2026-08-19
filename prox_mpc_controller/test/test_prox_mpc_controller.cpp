@@ -870,6 +870,69 @@ TEST_F(ProxMpcControllerTest, GoalCheckerToleranceInertOutsideBand)
   EXPECT_NEAR(c->mpc()->getGoalU()(0, 0), vref_base, kTol);
 }
 
+// The taper radius is the tolerance itself (std::min of the two axes), not the
+// diagonal upstream's hypot(x, y) would read: SimpleGoalChecker writes the same
+// scalar into both fields, so hypot(T, T) = sqrt(2) * T would start the taper
+// about 41% too far from the goal. StubGoalChecker(t, true) is isotropic
+// (equal x and y), so this pins the sqrt(2) defect specifically, which an
+// equal-tolerance stub run at only one remaining distance cannot: one point
+// where the true tolerance is already satisfied (no easing) but hypot's
+// inflated radius would still ease, and one where both ease, but by
+// numerically different factors. A short horizon (np * dt) keeps the
+// horizon-based cruise taper from binding at these near-goal poses, isolating
+// the goal-checker term.
+TEST_F(ProxMpcControllerTest, GoalCheckerToleranceIsRadialNotHypotExpanded)
+{
+  auto c = makeConfigured(
+  {
+    rclcpp::Parameter("FollowPath.np", 2),
+    rclcpp::Parameter("FollowPath.nc", 2),
+    rclcpp::Parameter("FollowPath.dt", 0.01),
+  });
+  c->activate();
+  c->setPlan(makeStraightPlan(6, 0.2));            // 1 m plan
+
+  const double t = 0.1;
+  StubGoalChecker checker(t, true);
+
+  // remaining = 0.12 m: inside hypot(t, t) = 0.1414 m (would still ease under
+  // the old reading) but outside the true radial tolerance t = 0.1 m.
+  c->computeVelocityCommands(
+    makePose(0.88, 0.0, 0.0), geometry_msgs::msg::Twist(), &checker);
+  EXPECT_NEAR(c->mpc()->getGoalU()(0, 0), 1.0, kTol);   // desired_linear_vel, unreduced
+
+  // remaining = 0.05 m: inside t, so both readings ease, but the radial factor
+  // (0.05 / 0.1 = 0.5) differs from hypot's (0.05 / 0.14142 = 0.3536).
+  c->computeVelocityCommands(
+    makePose(0.95, 0.0, 0.0), geometry_msgs::msg::Twist(), &checker);
+  EXPECT_NEAR(c->mpc()->getGoalU()(0, 0), 0.5, 1e-6);
+}
+
+// An anisotropic custom goal checker (x and y tolerances differ) is read
+// through std::min of the two axes: the conservative reading for a checker
+// whose y tolerance is tighter than its x, and distinct from both RPP's
+// x-only reading and a hypot diagonal, neither of which an equal-tolerance
+// stub can separate from std::min.
+TEST_F(ProxMpcControllerTest, GoalCheckerToleranceReadsAnisotropicAsMinimum)
+{
+  auto c = makeConfigured(
+  {
+    rclcpp::Parameter("FollowPath.np", 2),
+    rclcpp::Parameter("FollowPath.nc", 2),
+    rclcpp::Parameter("FollowPath.dt", 0.01),
+  });
+  c->activate();
+  c->setPlan(makeStraightPlan(6, 0.2));
+
+  // remaining = 0.08 m; x_tol = 0.3, y_tol = 0.1. std::min gives 0.08 / 0.1 =
+  // 0.8, versus RPP's x-only 0.08 / 0.3 = 0.2667 or a hypot diagonal
+  // 0.08 / hypot(0.3, 0.1) = 0.253 -- both far from 0.8.
+  StubGoalChecker checker(0.3, 0.1, true);
+  c->computeVelocityCommands(
+    makePose(0.92, 0.0, 0.0), geometry_msgs::msg::Twist(), &checker);
+  EXPECT_NEAR(c->mpc()->getGoalU()(0, 0), 0.8, 1e-6);
+}
+
 // The predicted NMPC trajectory is published as a Path (Np+1 poses, costmap
 // global frame) for visualization, distinct from the Nav2 global plan.
 TEST_F(ProxMpcControllerTest, PublishesPredictedTrajectory)
@@ -1183,6 +1246,82 @@ TEST_F(ProxMpcControllerTest, PersistentFootprintVetoEscalates)
     nav2_core::NoValidControl);
 }
 
+// The veto threshold matches upstream Nav2 (RPP collision_checker.cpp:150-154,
+// MPPI cost_critic.hpp:71-78): INSCRIBED_INFLATED_OBSTACLE alone no longer
+// vetoes, because a real polygon check has already been performed and an
+// inflated cell is not by itself a collision; only LETHAL_OBSTACLE does.
+TEST_F(ProxMpcControllerTest, FootprintVetoMatchesUpstreamLethalThreshold)
+{
+  {
+    auto c = makeConfigured({rclcpp::Parameter("FollowPath.max_obstacles", 0)});
+    c->activate();
+    c->setPlan(makeStraightPlan(31, 0.2));
+    fillCost(-0.6, -0.6, 0.6, 0.6, nav2_costmap_2d::INSCRIBED_INFLATED_OBSTACLE);
+    const auto cmd = c->computeVelocityCommands(
+      makePose(0.0, 0.0, 0.0), geometry_msgs::msg::Twist(), nullptr);
+    EXPECT_GT(cmd.twist.linear.x, 0.0);          // no veto: command passes through
+  }
+  {
+    auto c = makeConfigured({rclcpp::Parameter("FollowPath.max_obstacles", 0)});
+    c->activate();
+    c->setPlan(makeStraightPlan(31, 0.2));
+    fillCost(-0.6, -0.6, 0.6, 0.6, nav2_costmap_2d::LETHAL_OBSTACLE);
+    const auto cmd = c->computeVelocityCommands(
+      makePose(0.0, 0.0, 0.0), geometry_msgs::msg::Twist(), nullptr);
+    EXPECT_NEAR(cmd.twist.linear.x, 0.0, kTol);  // vetoed: brakes
+  }
+}
+
+// NO_INFORMATION does not veto when the layered costmap reports
+// isTrackingUnknown() (RPP collision_checker.cpp:150-154, MPPI
+// cost_critic.hpp:71-78): the robot is allowed to plan into and through
+// genuinely unmeasured space rather than braking at its boundary.
+// LayeredCostmap::isTrackingUnknown() reads the costmap's stored default value
+// directly, so setting it is enough to flip the policy; the fixture otherwise
+// starts every cell at FREE_SPACE (SetUp()).
+TEST_F(ProxMpcControllerTest, FootprintVetoIgnoresUnknownWhenCostmapTracksUnknown)
+{
+  auto c = makeConfigured({rclcpp::Parameter("FollowPath.max_obstacles", 0)});
+  c->activate();
+  c->setPlan(makeStraightPlan(31, 0.2));
+  costmap_ros_->getCostmap()->setDefaultValue(nav2_costmap_2d::NO_INFORMATION);
+  fillCost(-0.6, -0.6, 0.6, 0.6, nav2_costmap_2d::NO_INFORMATION);
+
+  const auto cmd = c->computeVelocityCommands(
+    makePose(0.0, 0.0, 0.0), geometry_msgs::msg::Twist(), nullptr);
+  EXPECT_GT(cmd.twist.linear.x, 0.0);            // no veto: command passes through
+}
+
+// The controller's veto comment (prox_mpc_controller.cpp, the footprint-veto
+// block) and DECISIONS.md's node 9 refinement both describe an inherited
+// upstream masking property: footprintCostAtPose takes the maximum cost under
+// the footprint's perimeter, and since NO_INFORMATION (255) is numerically
+// larger than LETHAL_OBSTACLE (254), a footprint spanning both was expected to
+// read NO_INFORMATION and be reported clear. Measured directly against this
+// nav2_costmap_2d release, that does not reproduce: lineCost does not let an
+// unmeasured cell out-rank a lethal one on the same edge, in either traversal
+// order, so a footprint spanning both is reported at LETHAL_OBSTACLE and still
+// vetoes. This test pins the actually observed behaviour (see the stage
+// report's findings for the discrepancy) rather than the documented-but-
+// unverified one, so a future nav2 release that reintroduces the masking shows
+// up as a failing test here instead of a silent divergence.
+TEST_F(ProxMpcControllerTest, FootprintVetoStillFiresWhenLethalAdjoinsUnknown)
+{
+  auto c = makeConfigured({rclcpp::Parameter("FollowPath.max_obstacles", 0)});
+  c->activate();
+  c->setPlan(makeStraightPlan(31, 0.2));
+  costmap_ros_->getCostmap()->setDefaultValue(nav2_costmap_2d::NO_INFORMATION);
+  // Bottom half of the one-step-ahead footprint lethal, top half unknown: both
+  // values are present under the perimeter regardless of the exact predicted
+  // pose within it.
+  fillCost(-0.6, -0.6, 0.6, 0.6, nav2_costmap_2d::LETHAL_OBSTACLE);
+  fillCost(-0.6, 0.0, 0.6, 0.6, nav2_costmap_2d::NO_INFORMATION);
+
+  const auto cmd = c->computeVelocityCommands(
+    makePose(0.0, 0.0, 0.0), geometry_msgs::msg::Twist(), nullptr);
+  EXPECT_NEAR(cmd.twist.linear.x, 0.0, kTol);    // vetoed: the lethal half still fires
+}
+
 // --- setSpeedLimit() -------------------------------------------------------
 
 // An absolute speed limit applies the value as the linear bound.
@@ -1245,6 +1384,36 @@ TEST_F(ProxMpcControllerTest, SpeedLimitAppliesOnNextControlCycle)
   runCycle(c);
   EXPECT_NEAR(c->maxLinearVel(), 0.5 * kModelVMax, kTol);
   EXPECT_NEAR(c->model()->getIneq("u").at(0)[2], 0.5 * kModelVMax, kTol);
+}
+
+// A Nav2 speed limit must never broaden the feasible set: it narrows the
+// model's own bounds, it does not replace them. AsymmetricBounds declares an
+// asymmetric reverse limit (v_min = -0.3, tighter than v_max = 2.0), which
+// neither bundled model can express, so this is the only fixture that can show
+// the defect: the old code applied every limit as model_->updateIneq("u", 0,
+// -v_lim, v_lim), replacing v_min outright. A non-negative v_min is not
+// reachable through the controller's own parameters (v_min is always < 0 for
+// a model that can stop), so an asymmetric negative v_min is the strongest
+// reachable form, together with the NO_SPEED_LIMIT restore path.
+TEST_F(ProxMpcControllerTest, SpeedLimitPreservesAsymmetricLowerBound)
+{
+  auto c = makeRunning(
+    {rclcpp::Parameter(
+      "FollowPath.model_plugin", std::string("prox_mpc_test_models/AsymmetricBounds"))});
+
+  c->setSpeedLimit(1.0, false);
+  runCycle(c);
+  EXPECT_NEAR(c->maxLinearVel(), 1.0, kTol);
+  EXPECT_NEAR(c->model()->getIneq("u").at(0)[1], -0.3, kTol);   // lower bound untouched
+  EXPECT_NEAR(c->model()->getIneq("u").at(0)[2], 1.0, kTol);    // upper bound narrowed
+
+  // NO_SPEED_LIMIT restores the model's own upper bound; the lower bound must
+  // stay at the model's -0.3, not widen to -v_max (-2.0).
+  c->setSpeedLimit(0.0, false);
+  runCycle(c);
+  EXPECT_NEAR(c->maxLinearVel(), 2.0, kTol);
+  EXPECT_NEAR(c->model()->getIneq("u").at(0)[1], -0.3, kTol);
+  EXPECT_NEAR(c->model()->getIneq("u").at(0)[2], 2.0, kTol);
 }
 
 // --- cancel() / reset() ----------------------------------------------------
@@ -1361,6 +1530,40 @@ TEST_F(ProxMpcControllerTest, ReduceCostmapClustersAndSentinels)
   EXPECT_NEAR(obs(3, 0), prox_mpc::MPC::kObsFarSentinel, kTol);
   EXPECT_NEAR(obs(4, 0), prox_mpc::MPC::kObsFarSentinel, kTol);
   EXPECT_NEAR(obs(5, 0), prox_mpc::MPC::kObsFarSentinel, kTol);
+}
+
+// A static obstacle near the MPC's nominal predicted state, but well outside a
+// reference-centered scan window, is picked up: the pre-Wave-2 code centered
+// the search on reference(node+1), so a lethal cell beyond d_safe +
+// obstacle_cluster_radius of the plan reference position never entered the
+// window at all, no matter how close it was to where the solver actually
+// predicted the robot would be.
+TEST_F(ProxMpcControllerTest, ReduceCostmapCentersOnNominalNotReference)
+{
+  auto c = makeConfigured(
+  {
+    rclcpp::Parameter("FollowPath.np", 1),
+    rclcpp::Parameter("FollowPath.nc", 1),
+    rclcpp::Parameter("FollowPath.max_obstacles", 1),
+    rclcpp::Parameter("FollowPath.robot_radius", 0.3),
+    rclcpp::Parameter("FollowPath.safety_margin", 0.1),
+    rclcpp::Parameter("FollowPath.obstacle_cluster_radius", 0.2),
+  });
+  // search_radius = d_safe + obstacle_cluster_radius = 0.4 + 0.2 = 0.6 m.
+  fillCost(1.9, -0.1, 2.1, 0.1, nav2_costmap_2d::LETHAL_OBSTACLE);   // near (2, 0)
+
+  MatrixXd nominal = MatrixXd::Zero(2, c->nDim());
+  nominal(1, 0) = 2.0;   // node 0 reads row min(0 + 2, Np = 1) = 1: at the obstacle
+  c->mpc()->setX(nominal);
+
+  // reference stays at the origin: more than 0.6 m from the obstacle, so a
+  // reference-centered window would never see it (2.0 m - 0.6 m margin).
+  MatrixXd reference = MatrixXd::Zero(2, c->nDim());
+  MatrixXd obs(1, 3);
+  c->reduceCostmap(reference, obs);
+
+  EXPECT_LT(obs(0, 0), prox_mpc::MPC::kObsFarSentinel);
+  EXPECT_NEAR(obs(0, 0), 2.0, 0.15);
 }
 
 // --- fillObstacles(): predictive + hybrid fill (white-box) -----------------
