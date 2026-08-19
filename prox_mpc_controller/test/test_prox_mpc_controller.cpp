@@ -1104,6 +1104,73 @@ TEST_F(ProxMpcControllerTest, ComputeSkipsDuplicateLeadingPlanPointForHeading)
   EXPECT_NEAR(gx(0, 2), M_PI / 2.0, 1e-6);
 }
 
+// A sparse (coarsely spaced) plan is projected onto its true nearest segment
+// point, not snapped to whichever vertex happens to be nearest: at the default
+// 0.05 m costmap resolution, an 8 m vertex spacing is far too coarse for
+// vertex snapping and true segment projection to agree. The pre-Wave-2 code
+// compared distance to vertices only, so it could jump the tracked progress
+// straight to the far end of a long segment.
+TEST_F(ProxMpcControllerTest, PlanProjectionSparsePlanUsesTrueSegmentPoint)
+{
+  auto c = makeConfigured();
+  c->activate();
+  nav_msgs::msg::Path path;
+  path.header.frame_id = "map";
+  for (double x : {-4.0, 4.0}) {   // one 8 m segment, within the 10 m x 10 m grid
+    geometry_msgs::msg::PoseStamped ps;
+    ps.header.frame_id = "map";
+    ps.pose.position.x = x;
+    ps.pose.orientation.w = 1.0;
+    path.poses.push_back(ps);
+  }
+  c->setPlan(path);
+
+  // 5 m along the segment (from x = -4), offset toward the far vertex so
+  // vertex-only snapping picks (4, 0) (distance 3.007) over (-4, 0) (5.004).
+  c->computeVelocityCommands(makePose(1.0, 0.2, 0.0), geometry_msgs::msg::Twist(), nullptr);
+
+  // True segment projection: s0 = 5.0 m of 8.0 m, remaining = 3.0 m, well
+  // inside the horizon (np * dt = 2.0 s at the default 1.0 m/s cruise), so the
+  // cruise reference is not tapered. Vertex snapping to (4, 0) (s0 = 8.0 m)
+  // would leave 0 m remaining and collapse the reference to zero.
+  EXPECT_EQ(c->planIndex(), 0u);
+  EXPECT_NEAR(c->mpc()->getGoalU()(0, 0), 1.0, 1e-6);
+}
+
+// A self-intersecting (looping) plan does not jump the tracked progress
+// forward onto a distant later branch merely because that branch happens to
+// have a VERTEX geometrically close to the robot: the true continuous
+// projection onto the segment the robot is actually on stays closer, because
+// it is not restricted to vertices.
+TEST_F(ProxMpcControllerTest, PlanProjectionSelfIntersectingPlanAvoidsForwardJump)
+{
+  auto c = makeConfigured();
+  c->activate();
+
+  nav_msgs::msg::Path path;
+  path.header.frame_id = "map";
+  auto addPose = [&](double x, double y) {
+      geometry_msgs::msg::PoseStamped ps;
+      ps.header.frame_id = "map";
+      ps.pose.position.x = x;
+      ps.pose.position.y = y;
+      ps.pose.orientation.w = 1.0;
+      path.poses.push_back(ps);
+    };
+  addPose(-4.0, 0.0);   // P0
+  addPose(4.0, 0.0);    // P1: the segment the robot is actually on
+  addPose(4.0, 4.0);    // P2
+  addPose(0.0, 1.2);    // P3: a later branch looping back near the robot
+  addPose(0.0, 4.0);    // P4
+  c->setPlan(path);
+
+  // On segment P0-P1, offset 0.05 m: the nearest VERTEX is P3 (distance
+  // 1.524 m), closer than either P0 (5.0 m) or P1 (3.0 m), but the nearest
+  // point on any segment is on P0-P1 itself, 0.05 m away.
+  c->computeVelocityCommands(makePose(1.0, 0.05, 0.0), geometry_msgs::msg::Twist(), nullptr);
+  EXPECT_EQ(c->planIndex(), 0u);   // stays on segment 0, not the P2-P3 branch (index 2)
+}
+
 // A non-converged solve decelerates the last command at the model deceleration
 // limit, then escalates to NoValidControl once the failure budget is spent.
 //
