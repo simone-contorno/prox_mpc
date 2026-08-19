@@ -440,24 +440,46 @@ void ProxQP::setC(const MatrixXd & x)
        * SAME obstacle slot at the previous node's time. A predictive (moving) fill
        * carries a different obstacle position per node, so node k uses obs[slot -
        * max_obs]; for node 0 (x(0) is the fixed pose) and for a static fill this
-       * reduces to obs[slot]. Held constant per SQP iteration (its gradient is not
-       * added to C); the re-linearization across iterations recovers the value. */
+       * reduces to obs[slot]. */
       const size_t prev_slot = (node >= 1) ? (slot - max_obs) : slot;
       /* If either this slot or the previous node's slot is unfilled (holds the far
        * sentinel), the pair does not describe the same obstacle across two nodes;
        * skip the coupling term by leaving obs_h_prev at zero. It enters setd() only
        * as (1 - cbf_gamma) * obs_h_prev, which is already exactly zero at the
-       * shipped cbf_gamma = 1.0, so the check is gated on gamma < 1 to add no
-       * per-slot cost at the default. */
-      if (cbf_gamma < 1.0 &&
-        (obs(slot, 0) >= 0.5 * MPC::kObsFarSentinel ||
-        obs(prev_slot, 0) >= 0.5 * MPC::kObsFarSentinel))
-      {
-        obs_h_prev(slot) = 0.0;
-      } else {
-        const double dxp = x(node, 0) - obs(prev_slot, 0);
-        const double dyp = x(node, 1) - obs(prev_slot, 1);
-        obs_h_prev(slot) = sqrt(dxp * dxp + dyp * dyp) - obs(prev_slot, 2);
+       * shipped cbf_gamma = 1.0, so the whole coupling - value and gradient alike -
+       * is gated on gamma < 1 and adds nothing at the default. Leaving the gradient
+       * columns unwritten there also keeps them out of the constraint matrix's
+       * sparsity pattern, which is what costs factorization work per cycle. */
+      if (cbf_gamma < 1.0) {
+        const size_t col_prev = x_start + n * node;  // position block of node k
+        double gx = 0.0;
+        double gy = 0.0;
+        if (obs(slot, 0) >= 0.5 * MPC::kObsFarSentinel ||
+          obs(prev_slot, 0) >= 0.5 * MPC::kObsFarSentinel)
+        {
+          obs_h_prev(slot) = 0.0;
+        } else {
+          const double dxp = x(node, 0) - obs(prev_slot, 0);
+          const double dyp = x(node, 1) - obs(prev_slot, 1);
+          const double norm_prev = sqrt(dxp * dxp + dyp * dyp);
+          obs_h_prev(slot) = norm_prev - obs(prev_slot, 2);
+          /* Second half of the linearization: the constraint is
+           * h_{k+1}(p_{k+1}) >= (1 - gamma) h_k(p_k) - s, so the previous node's
+           * clearance depends on that node's own position too. Carrying only the
+           * value term made the coupled constraint first-order exact in p_{k+1}
+           * alone; this row completes it with -(1 - gamma) grad h_k. The same
+           * deterministic unit fallback as above covers exact coincidence. */
+          const double gain = -(1.0 - cbf_gamma);
+          if (norm_prev < kObsNormalEps) {
+            gx = gain;
+            gy = 0.0;
+          } else {
+            gx = gain * dxp / norm_prev;
+            gy = gain * dyp / norm_prev;
+          }
+        }
+        C(r, col_prev) = gx;
+        C(r, col_prev + 1) = gy;
       }
     }
     i++;
