@@ -626,19 +626,38 @@ geometry_msgs::msg::TwistStamped ProxMpcController::computeVelocityCommands(
   }
 
   /* Project the current pose onto the plan (forward-only), giving the arc-length
-   * offset s0 the sampling starts from. */
+   * offset s0 the sampling starts from. The projection is onto the plan segments
+   * and not onto its vertices: taking the nearest vertex's arc length quantizes
+   * s0 to the vertex spacing, about 5 cm for the NavFn and Smac plans emitted at
+   * the default 0.05 m costmap resolution and unbounded for a coarse or sparse
+   * third-party plan. */
   if (plan_index_ >= plan_size) {plan_index_ = 0;}
   std::size_t best = plan_index_;
+  double best_t = 0.0;
   double best_d2 = std::numeric_limits<double>::max();
-  for (std::size_t i = plan_index_; i < plan_size; ++i) {
-    const double d2 = (gx[i] - cx) * (gx[i] - cx) + (gy[i] - cy) * (gy[i] - cy);
+  for (std::size_t i = plan_index_; i + 1 < plan_size; ++i) {
+    const double ex = gx[i + 1] - gx[i];
+    const double ey = gy[i + 1] - gy[i];
+    const double len2 = ex * ex + ey * ey;
+    /* A duplicate consecutive plan position carries no direction; project onto
+     * its start vertex instead of dividing by zero. */
+    const double t = (len2 > 1e-18) ?
+      std::clamp(((cx - gx[i]) * ex + (cy - gy[i]) * ey) / len2, 0.0, 1.0) : 0.0;
+    const double px = gx[i] + t * ex;
+    const double py = gy[i] + t * ey;
+    const double d2 = (px - cx) * (px - cx) + (py - cy) * (py - cy);
     if (d2 < best_d2) {
       best_d2 = d2;
       best = i;
+      best_t = t;
     }
   }
   plan_index_ = best;
-  const double s0 = s[best];
+  /* s is the cumulative segment length, so the arc length at the projected point
+   * is exact rather than interpolated. A single-pose plan, and a plan already
+   * tracked to its last vertex, leave the loop unentered at best_t = 0. */
+  const double s0 =
+    (best + 1 < plan_size) ? s[best] + best_t * (s[best + 1] - s[best]) : s[best];
 
   /* Cruise speed, tapered so the horizon does not overshoot the plan end, and
    * clamped by any active speed limit (goal-hold near the end). */
