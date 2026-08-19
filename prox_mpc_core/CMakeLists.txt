@@ -81,7 +81,8 @@ ament_target_dependencies(${PROJECT_NAME}_models
 )
 
 # Export prox_mpc::Model as a pluginlib base so models are selected outside the
-# core (no core edit per new model). Bicycle/Unicycle are the bundled plugins.
+# core (no core edit per new model). The bundled plugins are BicycleFrontAxle,
+# BicycleRearAxle, the deprecated Bicycle alias, and Unicycle.
 pluginlib_export_plugin_description_file(prox_mpc_core prox_mpc_core_plugins.xml)
 
 # Install
