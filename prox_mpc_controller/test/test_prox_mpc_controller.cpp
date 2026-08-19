@@ -1762,6 +1762,88 @@ TEST_F(ProxMpcControllerTest, ObstacleSlotRankingPrefersEarliestEncounter)
   EXPECT_NEAR(obs(15, 0), prox_mpc::MPC::kObsFarSentinel, kTol);   // node 15: B did not
 }
 
+// The footprint the veto uses is read fresh each cycle rather than cached at
+// configure() time -- it is the one "in force at the start of the cycle", the
+// hoisted-out-of-the-lock read node 28 chose, and the same per-cycle read RPP
+// and MPPI both perform to keep a runtime footprint update taking effect.
+TEST_F(ProxMpcControllerTest, FootprintVetoUsesFootprintInForceAtCycleStart)
+{
+  auto c = makeConfigured({rclcpp::Parameter("FollowPath.max_obstacles", 0)});
+  c->activate();
+  c->setPlan(makeStraightPlan(31, 0.2));
+
+  // A lethal block straddling the default footprint's right edge (half-extent
+  // 0.5 m, padded to ~0.51 m): footprintCostAtPose checks the polygon
+  // perimeter only, not its interior, so the block must cross an edge to be
+  // seen at all. The much smaller footprint used below does not reach it.
+  fillCost(0.4, -0.05, 0.6, 0.05, nav2_costmap_2d::LETHAL_OBSTACLE);
+
+  const auto cmd_default = c->computeVelocityCommands(
+    makePose(0.0, 0.0, 0.0), geometry_msgs::msg::Twist(), nullptr);
+  EXPECT_NEAR(cmd_default.twist.linear.x, 0.0, kTol);   // default footprint reaches it: vetoed
+
+  // Shrink the footprint before the next cycle; the veto must use this new
+  // footprint, not the one configure() saw.
+  costmap_ros_->setRobotFootprint(makeSquareFootprint(0.05));
+  const auto cmd_small = c->computeVelocityCommands(
+    makePose(0.0, 0.0, 0.0), geometry_msgs::msg::Twist(), nullptr);
+  EXPECT_GT(cmd_small.twist.linear.x, 0.0);   // the shrunk footprint no longer reaches it
+}
+
+// The costmap-reduction path finds the same candidate obstacle set it did
+// before the critical section was narrowed to the cell reads: the grid lock
+// now closes and reopens once per node instead of once per fill, so this
+// checks that the per-node scans it protects still each find their own
+// cluster and nothing else. This is a regression guard on the invariant node
+// 29 chose (the candidate set, not fill atomicity against a concurrent
+// costmap write) rather than evidence the lock-scope change altered
+// single-threaded behavior, which it does not: the same instructions run
+// either way, just under a narrower held lock.
+TEST_F(ProxMpcControllerTest, CostmapReductionCandidateSetUnaffectedByNarrowedLock)
+{
+  auto c = makeConfigured(
+  {
+    rclcpp::Parameter("FollowPath.np", 4),
+    rclcpp::Parameter("FollowPath.nc", 4),
+    rclcpp::Parameter("FollowPath.max_obstacles", 2),   // >= 2 slots: no cross-node competition
+    rclcpp::Parameter("FollowPath.robot_radius", 0.3),
+    rclcpp::Parameter("FollowPath.safety_margin", 0.1),
+    rclcpp::Parameter("FollowPath.obstacle_cluster_radius", 0.2),
+  });
+  // search_radius = 0.4 + 0.2 = 0.6 m; each cluster sits inside exactly one
+  // node's window and outside every other node's.
+  fillCost(1.9, -0.05, 2.0, 0.05, nav2_costmap_2d::LETHAL_OBSTACLE);   // near (2, 0): node 0
+  fillCost(3.9, -0.05, 4.0, 0.05, nav2_costmap_2d::LETHAL_OBSTACLE);   // near (4, 0): node 1
+
+  const std::size_t np = 4;
+  const std::size_t k = 2;
+  MatrixXd nominal = MatrixXd::Zero(static_cast<Eigen::Index>(np + 1), c->nDim());
+  nominal(2, 0) = 2.0;    // node 0 reads row min(0 + 2, np) = 2
+  nominal(3, 0) = 4.0;    // node 1 reads row min(1 + 2, np) = 3
+  nominal(4, 0) = -4.0;   // nodes 2 and 3 read row min(node + 2, np) = 4: no obstacle there
+  c->mpc()->setX(nominal);
+
+  MatrixXd reference = MatrixXd::Zero(static_cast<Eigen::Index>(np + 1), c->nDim());
+  MatrixXd obs(static_cast<Eigen::Index>(np * k), 3);
+  c->reduceCostmap(reference, obs);
+
+  // The near-(2,0) object is seen only at node 0 and ranks first (earliest
+  // first_node), winning slot 0; row = node * k + slot = 0 * 2 + 0 = 0.
+  EXPECT_LT(obs(0, 0), prox_mpc::MPC::kObsFarSentinel);
+  EXPECT_NEAR(obs(0, 0), 2.0, 0.1);
+  // The near-(4,0) object is seen only at node 1 and ranks second, winning
+  // slot 1; row = 1 * 2 + 1 = 3.
+  EXPECT_LT(obs(3, 0), prox_mpc::MPC::kObsFarSentinel);
+  EXPECT_NEAR(obs(3, 0), 4.0, 0.1);
+  // Node 0's slot 1 and node 1's slot 0 were never assigned either object.
+  EXPECT_NEAR(obs(1, 0), prox_mpc::MPC::kObsFarSentinel, kTol);
+  EXPECT_NEAR(obs(2, 0), prox_mpc::MPC::kObsFarSentinel, kTol);
+  // Nodes 2 and 3 (both centered far from either cluster) stay empty.
+  for (Eigen::Index r = 4; r < obs.rows(); ++r) {
+    EXPECT_NEAR(obs(r, 0), prox_mpc::MPC::kObsFarSentinel, kTol) << "row " << r;
+  }
+}
+
 // --- fillObstacles(): predictive + hybrid fill (white-box) -----------------
 
 // The predictive fill propagates a tracked obstacle by position + velocity*dt_k
