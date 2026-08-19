@@ -1472,6 +1472,26 @@ TEST_F(ProxMpcControllerTest, FootprintVetoStillFiresWhenLethalAdjoinsUnknown)
   EXPECT_NEAR(cmd.twist.linear.x, 0.0, kTol);    // vetoed: the lethal half still fires
 }
 
+// The threshold change (INSCRIBED_INFLATED_OBSTACLE -> LETHAL_OBSTACLE) still
+// takes effect next to unknown space: since the checker resolves a mixed
+// perimeter to the highest non-unknown cost present (the previous test's
+// finding), an INSCRIBED_INFLATED_OBSTACLE cell mixed with NO_INFORMATION
+// resolves to 253, which the old >= 253 threshold still vetoed but the new
+// >= 254 one does not, independent of the masking property itself.
+TEST_F(ProxMpcControllerTest, FootprintVetoThresholdChangeAppliesNextToUnknown)
+{
+  auto c = makeConfigured({rclcpp::Parameter("FollowPath.max_obstacles", 0)});
+  c->activate();
+  c->setPlan(makeStraightPlan(31, 0.2));
+  costmap_ros_->getCostmap()->setDefaultValue(nav2_costmap_2d::NO_INFORMATION);
+  fillCost(-0.6, -0.6, 0.6, 0.6, nav2_costmap_2d::INSCRIBED_INFLATED_OBSTACLE);
+  fillCost(-0.6, 0.0, 0.6, 0.6, nav2_costmap_2d::NO_INFORMATION);
+
+  const auto cmd = c->computeVelocityCommands(
+    makePose(0.0, 0.0, 0.0), geometry_msgs::msg::Twist(), nullptr);
+  EXPECT_GT(cmd.twist.linear.x, 0.0);   // no veto: 253 no longer meets the threshold
+}
+
 // --- setSpeedLimit() -------------------------------------------------------
 
 // An absolute speed limit applies the value as the linear bound.
