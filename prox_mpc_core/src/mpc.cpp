@@ -536,9 +536,30 @@ double MPC::getMaxObstacleSlack() {return w.size() > 0 ? w.maxCoeff() : 0.0;}
 
 /*!
  * Set the obstacle triples for the current cycle.
- * @param obs (Np*K) x 3 matrix of [o_x, o_y, d_safe] per (node, slot); empty
- *   slots should hold the far sentinel so their soft constraint is non-binding.
+ *
+ * Two block layouts are accepted, and nothing between them. In the (Np*K) x 3
+ * form, block j holds the obstacle at predicted state j+1 and the position at
+ * the current time is reconstructed from the first two blocks. In the
+ * ((Np+1)*K) x 3 form, block j holds the obstacle at predicted state j, so the
+ * leading block is the obstacle now and nothing is inferred; a caller that
+ * knows where the obstacle is should supply it. Both are validated here rather
+ * than indexed out of bounds during assembly, where EIGEN_NO_DEBUG leaves the
+ * access unchecked.
+ *
+ * @param obs matrix of [o_x, o_y, d_safe] per (block, slot); empty slots should
+ *   hold the far sentinel so their soft constraint is non-binding.
  */
-void MPC::setObs(MatrixXd obs) {this->obs = obs;}
+void MPC::setObs(MatrixXd obs)
+{
+  if (max_obs > 0 && Np > 0) {
+    const Eigen::Index rows_horizon = static_cast<Eigen::Index>(Np * max_obs);
+    const Eigen::Index rows_with_now = static_cast<Eigen::Index>((Np + 1) * max_obs);
+    if (obs.cols() != 3 || (obs.rows() != rows_horizon && obs.rows() != rows_with_now)) {
+      throw std::invalid_argument(
+              "MPC::setObs: obs must be (Np*max_obs) x 3 or ((Np+1)*max_obs) x 3");
+    }
+  }
+  this->obs = obs;
+}
 
 }  // namespace prox_mpc
