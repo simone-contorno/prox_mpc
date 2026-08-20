@@ -451,7 +451,6 @@ void ProxQP::setC(const MatrixXd & x)
        * columns unwritten there also keeps them out of the constraint matrix's
        * sparsity pattern, which is what costs factorization work per cycle. */
       if (cbf_gamma < 1.0) {
-        const size_t col_prev = x_start + n * node;  // position block of node k
         double gx = 0.0;
         double gy = 0.0;
         if (obs(slot, 0) >= 0.5 * MPC::kObsFarSentinel ||
@@ -478,8 +477,18 @@ void ProxQP::setC(const MatrixXd & x)
             gy = gain * dyp / norm_prev;
           }
         }
-        C(r, col_prev) = gx;
-        C(r, col_prev + 1) = gy;
+        /* Node 0's gradient columns are inert: x(0) is pinned to the current
+         * pose by the identity equality in setE, so an increment there is fixed
+         * at zero and these coefficients cannot influence the solution. Writing
+         * them would still enlarge the constraint matrix's sparsity pattern and
+         * cost factorization work on every cycle, so they are skipped. Node 0's
+         * VALUE term above is not inert - it is the constant right-hand side of
+         * the first coupled constraint - and is always computed. */
+        if (node >= 1) {
+          const size_t col_prev = x_start + n * node;  // position block of node k
+          C(r, col_prev) = gx;
+          C(r, col_prev + 1) = gy;
+        }
       }
     }
     i++;
