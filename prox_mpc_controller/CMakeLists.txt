@@ -148,6 +148,33 @@ if(BUILD_TESTING)
     tf2_ros
     visualization_msgs
   )
+
+  # Wave 3 contract tests: transactional-solve wiring, SolverDiagnostics'
+  # gate-aware converged field and its publisher, the model/Nav2 adapter
+  # contract (Model::getPlanarMapping()), and terminal-heading/reverse-travel
+  # tracking. The fault-injection fixtures it loads by name through pluginlib
+  # come from prox_mpc_test_models, already a <test_depend> above.
+  ament_add_gtest(test_wave3_contracts
+    test/test_wave3_contracts.cpp
+    SKIP_LINKING_MAIN_LIBRARIES)
+  target_link_libraries(test_wave3_contracts
+    ${PROJECT_NAME}
+    Eigen3::Eigen
+    proxsuite::proxsuite
+  )
+  ament_target_dependencies(test_wave3_contracts
+    geometry_msgs
+    nav2_core
+    nav2_costmap_2d
+    nav_msgs
+    pluginlib
+    prox_mpc_core
+    prox_mpc_msgs
+    rclcpp
+    rclcpp_lifecycle
+    tf2
+    tf2_ros
+  )
 endif()
 
 ament_package()
