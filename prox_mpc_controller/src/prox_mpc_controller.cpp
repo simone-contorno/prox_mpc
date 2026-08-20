@@ -1157,11 +1157,7 @@ geometry_msgs::msg::TwistStamped ProxMpcController::computeVelocityCommands(
   const std::size_t k_obs = mpc_->getMaxObs();
   std::uint16_t num_active_obs = 0;
   if (k_obs > 0) {
-    /* One block per predicted state INCLUDING the current one: block 0 is the
-     * obstacle now, which the controller knows exactly, so the solver's first
-     * coupled constraint compares two clearances at one obstacle time instead of
-     * reconstructing the current position from the two blocks after it. */
-    MatrixXd obs(static_cast<Eigen::Index>((np_ + 1) * k_obs), 3);
+    MatrixXd obs(static_cast<Eigen::Index>(np_ * k_obs), 3);
     fillObstacles(goal_x, obs, cmd.header.stamp);
     mpc_->setObs(obs);
     /* Count filled (non-sentinel) slots at the current node (rows 0..k_obs-1). */
@@ -1421,12 +1417,6 @@ void ProxMpcController::fillObstacles(
 {
   predicted_obstacles_.clear();
   const std::size_t k_obs = static_cast<std::size_t>(max_obstacles_);
-  /* Two accepted block layouts, told apart by the row count the caller sized the
-   * matrix to: with a leading current-time block, or without one. The solver
-   * accepts both, and a derived controller compiled against the previous shape
-   * still passes the smaller one. */
-  const bool has_now =
-    obs.rows() >= static_cast<Eigen::Index>((np_ + 1) * std::max<std::size_t>(k_obs, 1));
 
   /* Default every slot to the far sentinel so unfilled ones stay non-binding. */
   for (Eigen::Index r = 0; r < obs.rows(); ++r) {
@@ -1586,14 +1576,8 @@ void ProxMpcController::fillObstacles(
     predicted_obstacles_[j].radius = dyn[j].radius;
     predicted_obstacles_[j].positions.resize(np_);
   }
-  const std::size_t first_block = has_now ? 0 : 1;
-  for (std::size_t block = first_block; block <= np_; ++block) {
-    /* With the leading block present, block b carries predicted state b, so
-     * block 0 is the current time and the shift, exclusion and marker
-     * bookkeeping below - all of which are per predicted node - start at block
-     * 1. Without it, block b-1 carries state b and the loop skips b = 0. */
-    const double dt_k = static_cast<double>(block) * dt_ + age;
-    const std::size_t node = (block > 0) ? (block - 1) : 0;
+  for (std::size_t node = 0; node < np_; ++node) {
+    const double dt_k = static_cast<double>(node + 1) * dt_ + age;
     for (std::size_t j = 0; j < n_dyn; ++j) {
       const DynObs & d = dyn[j];
       // Curved prediction when the tracker published samples; otherwise the
@@ -1610,8 +1594,7 @@ void ProxMpcController::fillObstacles(
       }
       const double d_safe = robot_radius_ + d.radius + safety_margin_ +
         prediction_uncertainty_growth_ * dt_k;
-      const Eigen::Index row =
-        static_cast<Eigen::Index>((has_now ? block : block - 1) * k_obs + j);
+      const Eigen::Index row = static_cast<Eigen::Index>(node * k_obs + j);
       /* Written in the solver's frame: the keep-out is meant to protect
        * base_link, and the solver constrains the model's reference point. */
       obs(row, 0) = px + shift_x[node];
@@ -1623,10 +1606,8 @@ void ProxMpcController::fillObstacles(
        * at every node keeps the static fill from re-adding the same object the
        * predictive half-plane already covers (the predicted cells are not in the
        * snapshot, so excluding them would not de-duplicate anything). */
-      if (block > 0) {
-        exclusions[node].push_back({d.x, d.y, d.radius + obstacle_cluster_radius_});
-        predicted_obstacles_[j].positions[node] = {px, py};
-      }
+      exclusions[node].push_back({d.x, d.y, d.radius + obstacle_cluster_radius_});
+      predicted_obstacles_[j].positions[node] = {px, py};
     }
   }
 
@@ -1655,10 +1636,6 @@ void ProxMpcController::fillStaticObstacles(
   const std::size_t k_obs = static_cast<std::size_t>(max_obstacles_);
   if (slot_begin >= k_obs) {return;}
   const std::size_t budget = k_obs - slot_begin;
-  /* Told apart by the row count, as in fillObstacles: with a leading
-   * current-time block the per-node hits go one block later. */
-  const bool has_now =
-    obs.rows() >= static_cast<Eigen::Index>((np_ + 1) * k_obs);
   /* The keep-out disc is centred on base_link, which is the point the robot disc
    * and the costmap footprint are both defined about, whatever point the model's
    * state refers to. The scan therefore looks around base_link and each hit is
@@ -1873,22 +1850,10 @@ void ProxMpcController::fillStaticObstacles(
   for (const auto & h : hits) {
     const std::size_t slot = slot_of[h.object];
     if (slot == kNoObstacleSlot) {continue;}
-    const double hx = h.x + shift_x[h.node];
-    const double hy = h.y + shift_y[h.node];
-    const Eigen::Index row =
-      static_cast<Eigen::Index>((has_now ? h.node + 1 : h.node) * k_obs + slot);
-    obs(row, 0) = hx;
-    obs(row, 1) = hy;
+    const Eigen::Index row = static_cast<Eigen::Index>(h.node * k_obs + slot);
+    obs(row, 0) = h.x + shift_x[h.node];
+    obs(row, 1) = h.y + shift_y[h.node];
     obs(row, 2) = d_safe;
-    if (has_now && h.node == 0) {
-      /* The current-time block. The costmap is a now-snapshot, so a cell seen at
-       * the first predicted node is where that object is now: block 0 carries the
-       * same triple rather than a second scan. */
-      const Eigen::Index row_now = static_cast<Eigen::Index>(slot);
-      obs(row_now, 0) = hx;
-      obs(row_now, 1) = hy;
-      obs(row_now, 2) = d_safe;
-    }
   }
 }
 

@@ -10,7 +10,6 @@ diff and is not stated here.
 | Change | Source compatible | ABI compatible | Wire compatible |
 | --- | --- | --- | --- |
 | `prox_mpc::Model` gains a non-pure virtual `getPlanarMapping()` | yes | **no** | n/a |
-| `MPC::setObs` accepts a second block layout | yes | yes | n/a |
 | `prox_mpc::MPC` gains `solveCandidate()`, `commitCandidate()`, `getCandidateFinite()`, `setU0()` and candidate members | yes | **no** | n/a |
 | `MPC::init()` rejects a nonsymmetric or indefinite weight matrix | yes | yes | n/a |
 | `MPC::setGoalX` / `setGoalU` reject an undersized matrix | yes | yes | n/a |
@@ -63,26 +62,6 @@ prox_mpc::PlanarMapping getPlanarMapping() const override
 may move its belief about the steering angle. The default reproduces the previous
 inference - control index 1 for a model with more than three states and more than
 one control - so a model that declares nothing behaves exactly as it did.
-
-## `setObs` accepts a second block layout
-
-`void MPC::setObs(MatrixXd)` and `void ProxQP::setObs(MatrixXd)` are unchanged:
-same name, same parameter type, same return type, same mangled symbol. **A caller
-passing the shape it passed before compiles, links and behaves identically.**
-
-What is new is a second accepted shape, distinguished by the row count:
-
-| Rows | Block `j` holds | Current-time position |
-| --- | --- | --- |
-| `Np * K` | predicted state `j + 1` | reconstructed from the first two blocks |
-| `(Np + 1) * K` | predicted state `j` | supplied in the leading block |
-
-Both are validated. A matrix that is neither shape now throws
-`std::invalid_argument` rather than being reinterpreted; previously only the
-first shape was accepted, so this widens what is legal and narrows nothing.
-
-Supply the longer form when the caller knows where the obstacle is now, which
-removes the reconstruction entirely. The bundled controller does.
 
 ## `MPC` gains candidate state
 
@@ -157,8 +136,7 @@ position only.
 Two further corrections land with it, both gated on `cbf_gamma < 1` and both
 inert at the shipped default. The first coupled constraint compares the clearance
 at the current pose against the clearance one step ahead; the obstacle position
-used on the current-pose side is now the obstacle's position *now*, taken from the
-leading block when the caller supplies one and otherwise reconstructed by
+used on the current-pose side is now the obstacle's position *now*, recovered by
 extending the first two blocks backward. It was previously the obstacle's
 one-step-ahead position, which evaluated the two sides at different obstacle times
 and was anti-conservative for a closing obstacle. Measured closed loop against a

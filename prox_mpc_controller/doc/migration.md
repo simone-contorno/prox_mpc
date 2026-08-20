@@ -137,20 +137,6 @@ engaged only when the goal checker publishes a yaw tolerance it enforces. Goal
 approach on a plan whose final orientation differs from its final segment tangent
 will differ from 1.0.0.
 
-## The obstacle matrix carries one more block
-
-The controller now hands the solver one obstacle block per predicted state
-*including the current one*, so the leading block is where each obstacle is now.
-The solver accepts that shape alongside the previous one and no signature
-changed; see `prox_mpc_core/doc/migration.md`. It matters because the first
-coupled constraint compares two clearances that must be evaluated at the same
-obstacle time, and the controller knows the current position exactly rather than
-having the core reconstruct it.
-
-`fillObstacles`, `reduceCostmap` and `fillStaticObstacles` read the block layout
-from the row count of the matrix they are handed, so a derived controller that
-allocates the previous `np * max_obstacles` shape keeps working unchanged.
-
 ## Object layout
 
 `ProxMpcController` gains two protected methods and eleven protected members,

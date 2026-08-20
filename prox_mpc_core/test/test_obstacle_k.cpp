@@ -253,65 +253,13 @@ TEST(ObstacleK, IndexingConsistency)
 // otherwise read out of bounds on the hot path instead of being caught.
 TEST(ObstacleK, SetObsRejectsWrongShape)
 {
-  auto mpc = makeUnicycleMpc(2);   // Np = 30, K = 2 -> (Np*K) x 3 = 60 x 3 or (Np+1)*K = 62 x 3
+  auto mpc = makeUnicycleMpc(2);   // Np = 30, K = 2 -> expects (Np*K) x 3 = 60 x 3
   auto solver = mpc->getSolver();
   ASSERT_EQ(solver->getMaxObs(), 2u);
 
   EXPECT_THROW(solver->setObs(MatrixXd::Zero(10, 3)), std::invalid_argument);       // too few rows
   EXPECT_THROW(solver->setObs(MatrixXd::Zero(kNp * 2, 2)), std::invalid_argument);  // wrong cols
-  EXPECT_NO_THROW(solver->setObs(makeObs(kNp, 2)));                                  // horizon form
-  // The current-time form carries one extra leading block.
-  EXPECT_NO_THROW(solver->setObs(makeObs(kNp + 1, 2)));
-  // Nothing between the two accepted shapes is accepted.
-  EXPECT_THROW(solver->setObs(MatrixXd::Zero(kNp * 2 + 1, 3)), std::invalid_argument);
-
-  // MPC's own setter validates the same two shapes before the solver sees them.
-  EXPECT_NO_THROW(mpc->setObs(makeObs(kNp, 2)));
-  EXPECT_NO_THROW(mpc->setObs(makeObs(kNp + 1, 2)));
-  EXPECT_THROW(mpc->setObs(MatrixXd::Zero(kNp * 2 + 1, 3)), std::invalid_argument);
-}
-
-// The two accepted obstacle shapes describe the same problem for a
-// constant-velocity fill: supplying the current-time block explicitly and
-// letting the core reconstruct it from the two blocks after it agree, and both
-// reduce to the same thing for a static fill, where every block is equal.
-TEST(ObstacleK, CurrentTimeBlockMatchesReconstruction)
-{
-  const double ox = 3.0;
-  const double oy = 1.4;
-  const double ovy = -0.5;          // crossing obstacle, the tracker's speed cap
-  const double d_safe = 1.0;
-
-  auto run = [&](bool with_now) {
-      auto mpc = makeUnicycleMpc(1, 1000.0, 0.3);
-      double min_dist = std::numeric_limits<double>::infinity();
-      VectorXd pose = VectorXd::Zero(3);
-      for (size_t step = 0; step < 40; step++) {
-        const double t = static_cast<double>(step) * kDt;
-        const double oy_now = oy + ovy * t;
-        const size_t blocks = with_now ? kNp + 1 : kNp;
-        MatrixXd obs(static_cast<Eigen::Index>(blocks), 3);
-        for (size_t b = 0; b < blocks; b++) {
-          // Block b holds state b with the leading block, state b+1 without it.
-          const double tk = static_cast<double>(with_now ? b : b + 1) * kDt;
-          obs(static_cast<Eigen::Index>(b), 0) = ox;
-          obs(static_cast<Eigen::Index>(b), 1) = oy_now + ovy * tk;
-          obs(static_cast<Eigen::Index>(b), 2) = d_safe;
-        }
-        mpc->setObs(obs);
-        mpc->setPose(pose);
-        auto [x, u] = mpc->solve();
-        pose = x.row(1);
-        min_dist = std::min(min_dist, std::hypot(pose(0) - ox, pose(1) - oy_now));
-      }
-      return min_dist;
-    };
-
-  /* Algebraically identical, so the tolerance covers only floating-point
-   * round-off accumulated through 40 closed-loop solves: the reconstruction
-   * computes o(0) + (o(0) - o(1)) where the other path is handed the value, and
-   * the two differ in the last bits. Measured separation is 2e-7 m. */
-  EXPECT_NEAR(run(true), run(false), 1e-6);
+  EXPECT_NO_THROW(solver->setObs(makeObs(kNp, 2)));                                  // correct shape
 }
 
 // cbf_gamma outside (0, 1] is rejected at both layers. Outside that range the

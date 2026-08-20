@@ -144,11 +144,7 @@ private:
   /* Obstacle avoidance: linearized signed-distance half-plane, K slots per node. */
   size_t max_obs = 0;             // Capacity K of obstacle slots per predicted node (0 = disabled).
   bool obstacle_active = false;   // Cached in init(): model declares avoidance and max_obs > 0.
-  MatrixXd obs;                   // Per (block, slot) obstacle triples x [o_x, o_y, d_safe].
-  /* Whether obs carries the (Np+1)-block form, whose leading block is the
-   * obstacle at the current time. False for the (Np) form, where block j holds
-   * state j+1 and the current time is reconstructed. */
-  bool obs_has_now = false;
+  MatrixXd obs;                   // Per (node, slot) obstacle triples (Np*K) x [o_x, o_y, d_safe].
 
   // Discrete-time control-barrier-function rate (Zeng et al., ACC 2021):
   // h(x_{k+1}) >= (1 - cbf_gamma) * h(x_k). cbf_gamma in (0, 1]; 1.0 reduces the

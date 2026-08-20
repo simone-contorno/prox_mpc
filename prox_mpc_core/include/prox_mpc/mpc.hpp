@@ -187,7 +187,7 @@ protected:
 
   /* Obstacle avoidance (linearized signed-distance, bounded K per node). */
   size_t max_obs = 0;  // Capacity K of obstacle slots per predicted node (0 = disabled).
-  MatrixXd obs;        // Per (block, slot) obstacle triples x [o_x, o_y, d_safe].
+  MatrixXd obs;        // Per (node, slot) obstacle triples (Np*K) x [o_x, o_y, d_safe].
 };
 
 }  // namespace prox_mpc

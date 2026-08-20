@@ -419,16 +419,8 @@ void ProxQP::setC(const MatrixXd & x)
       const size_t node = slot / max_obs;           // predicted-node index 0 .. Np-1
       col = x_start + n * (node + 1);               // position block of predicted node (node+1)
 
-      /* Row of the obstacle at the constrained state (node+1), and at the state
-       * before it. With the leading current-time block present both are direct
-       * lookups; without it, block j holds state j+1, so the constrained state is
-       * `slot` and the state before it has no block at node 0. */
-      const size_t cur_row = obs_has_now ? (slot + max_obs) : slot;
-      const size_t prev_row = obs_has_now ? slot :
-        ((node >= 1) ? (slot - max_obs) : slot);
-
-      const double dx = x(node + 1, 0) - obs(cur_row, 0);
-      const double dy = x(node + 1, 1) - obs(cur_row, 1);
+      const double dx = x(node + 1, 0) - obs(slot, 0);
+      const double dy = x(node + 1, 1) - obs(slot, 1);
       const double raw_norm = sqrt(dx * dx + dy * dy);
       double norm = raw_norm;
       if (norm < kObsNormalEps) {norm = kObsNormalEps;}
@@ -449,7 +441,7 @@ void ProxQP::setC(const MatrixXd & x)
       C(r, col + 1) = ny;                           // y
       C(r, w_start + slot) = 1;                     // slack
 
-      obs_h(slot) = norm - obs(cur_row, 2);         // signed distance at node k+1
+      obs_h(slot) = norm - obs(slot, 2);            // signed distance at node k+1
 
       /* Signed distance at the previous node k for the CBF coupling, against the
        * SAME obstacle slot at the previous node's time. A predictive (moving) fill
@@ -461,7 +453,8 @@ void ProxQP::setC(const MatrixXd & x)
        * evaluates the two sides of the constraint at different obstacle times and
        * does so anti-conservatively for a closing obstacle, at the first and most
        * actionable constraint in the horizon. The current-time position is
-       * recovered below, unless the caller supplied it in the leading block. */
+       * recovered below. */
+      const size_t prev_slot = (node >= 1) ? (slot - max_obs) : slot;
       /* If either this slot or the previous node's slot is unfilled (holds the far
        * sentinel), the pair does not describe the same obstacle across two nodes;
        * skip the coupling term by leaving obs_h_prev at zero. It enters setd() only
@@ -473,26 +466,26 @@ void ProxQP::setC(const MatrixXd & x)
       if (cbf_gamma < 1.0) {
         double gx = 0.0;
         double gy = 0.0;
-        if (obs(cur_row, 0) >= 0.5 * MPC::kObsFarSentinel ||
-          obs(prev_row, 0) >= 0.5 * MPC::kObsFarSentinel)
+        if (obs(slot, 0) >= 0.5 * MPC::kObsFarSentinel ||
+          obs(prev_slot, 0) >= 0.5 * MPC::kObsFarSentinel)
         {
           obs_h_prev(slot) = 0.0;
         } else {
-          /* Obstacle position at the previous state's own time. Every block is a
-           * direct lookup except node 0's without a leading current-time block,
-           * where the current position is recovered by extending the first two
-           * blocks backward: o_0 = 2 o(block 0) - o(block 1). That is exact for a
-           * static fill, where the two blocks are equal and it returns block 0
-           * unchanged, and exact for a constant-velocity fill. The clearance
-           * radius is a per-obstacle constant and is taken from the block rather
-           * than extrapolated. */
-          double ox = obs(prev_row, 0);
-          double oy = obs(prev_row, 1);
-          if (obs_has_now == false && node == 0 && Np >= 2) {
-            const size_t next_row = slot + max_obs;
-            if (obs(next_row, 0) < 0.5 * MPC::kObsFarSentinel) {
-              const double step_x = obs(slot, 0) - obs(next_row, 0);
-              const double step_y = obs(slot, 1) - obs(next_row, 1);
+          /* Obstacle position at the previous node's own time. For node 0 that is
+           * the current time, which the matrix carries no block for, so it is
+           * recovered by extending the first two blocks backward:
+           * o_0 = 2 o(block 0) - o(block 1). That is exact for a static fill,
+           * where the two blocks are equal and it returns o(block 0) unchanged,
+           * and exact for a constant-velocity fill. The clearance radius is a
+           * per-obstacle constant and is taken from the first block rather than
+           * extrapolated. */
+          double ox = obs(prev_slot, 0);
+          double oy = obs(prev_slot, 1);
+          if (node == 0 && Np >= 2) {
+            const size_t next_slot = slot + max_obs;
+            if (obs(next_slot, 0) < 0.5 * MPC::kObsFarSentinel) {
+              const double step_x = obs(slot, 0) - obs(next_slot, 0);
+              const double step_y = obs(slot, 1) - obs(next_slot, 1);
               /* Extrapolation amplifies inter-block noise as 2 e_1 - e_2, so an
                * implied displacement no obstacle could have travelled in one step
                * is treated as noise and the first block is used as it stands. */
@@ -506,7 +499,7 @@ void ProxQP::setC(const MatrixXd & x)
           const double dxp = x(node, 0) - ox;
           const double dyp = x(node, 1) - oy;
           const double norm_prev = sqrt(dxp * dxp + dyp * dyp);
-          obs_h_prev(slot) = norm_prev - obs(prev_row, 2);
+          obs_h_prev(slot) = norm_prev - obs(prev_slot, 2);
           /* Second half of the linearization: the constraint is
            * h_{k+1}(p_{k+1}) >= (1 - gamma) h_k(p_k) - s, so the previous node's
            * clearance depends on that node's own position too. Carrying only the
@@ -765,20 +758,14 @@ void ProxQP::setMaxObs(size_t max_obs) {this->max_obs = max_obs;}
  */
 void ProxQP::setObs(MatrixXd obs)
 {
-  // Shape check: setC indexes obs by block, and with EIGEN_NO_DEBUG the per-step
-  // access is unchecked, so a wrongly sized matrix is rejected here rather than
-  // read out of bounds on the control hot path. Two shapes are accepted and
-  // nothing between them: Np blocks, where block j holds the obstacle at state
-  // j+1 and the current time is reconstructed, or Np+1 blocks, where block j
-  // holds state j and the leading block is the obstacle now.
+  // Shape check: setC indexes obs(slot, .) for slot in [0, Np*max_obs). With
+  // EIGEN_NO_DEBUG the per-step access is unchecked, so reject an undersized
+  // matrix here rather than read out of bounds on the control hot path.
   if (max_obs > 0) {
-    const Eigen::Index rows_horizon = static_cast<Eigen::Index>(Np * max_obs);
-    const Eigen::Index rows_with_now = static_cast<Eigen::Index>((Np + 1) * max_obs);
-    if (obs.cols() != 3 || (obs.rows() != rows_horizon && obs.rows() != rows_with_now)) {
-      throw std::invalid_argument(
-              "ProxQP::setObs: obs must be (Np*max_obs) x 3 or ((Np+1)*max_obs) x 3");
+    const Eigen::Index expected_rows = static_cast<Eigen::Index>(Np * max_obs);
+    if (obs.rows() != expected_rows || obs.cols() != 3) {
+      throw std::invalid_argument("ProxQP::setObs: obs must be (Np*max_obs) x 3");
     }
-    obs_has_now = obs.rows() == rows_with_now;
   }
   this->obs = obs;
 }
