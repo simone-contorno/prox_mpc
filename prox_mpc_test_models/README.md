@@ -30,6 +30,7 @@ It is a `<test_depend>` of [prox_mpc_controller](../prox_mpc_controller), so it 
 | --- | --- | --- |
 | `prox_mpc_test_models/NonFiniteTwist` | `prox_mpc_test_models::NonFiniteTwistModel` | Finite linear dynamics (state `[x, y, theta]`, control `[v, omega]`) so the QP converges and reports `PROXQP_SOLVED` with a finite first control, but `toTwist()` deliberately returns a non-finite command (`linear.x = NaN`). |
 | `prox_mpc_test_models/AsymmetricBounds` | `prox_mpc_test_models::AsymmetricBoundsModel` | Same finite linear dynamics as `NonFiniteTwist`, but every declared bound is asymmetric (reverse speed capped tighter than forward speed; braking rate harder than accelerating rate). Both bundled production models declare symmetric bounds, so this is the only fixture that can show the controller preserving an asymmetric range instead of assuming symmetry. |
+| `prox_mpc_test_models/NonFiniteTwistOtherAxes` | `prox_mpc_test_models::NonFiniteTwistOtherAxesModel` | Same finite linear dynamics as `NonFiniteTwist`, but `toTwist()` fills `linear.y` and `angular.x` with non-finite values instead of `linear.x` -- the four `Twist` components a planar Nav2 consumer never reads, so nothing exercises the controller's validation of them without this fixture. |
 
 The `NonFiniteTwist` model is the only seam that reaches the controller's non-finite-command fail-safe: a finite-mapping model cannot produce a non-finite twist from a finite control, so this fixture is required to cover that branch.
 The controller test asserts the controller brakes at the model deceleration limit and then escalates to `nav2_core::NoValidControl` once the failure budget is spent.
@@ -65,7 +66,8 @@ ros2 plugin list --package prox_mpc_test_models   # lists prox_mpc_test_models/N
 prox_mpc_test_models/
 ├── include/prox_mpc_test_models/
 │   ├── asymmetric_bounds_model.hpp
-│   └── non_finite_twist_model.hpp
+│   ├── non_finite_twist_model.hpp
+│   └── non_finite_twist_other_axes_model.hpp
 ├── src/
 │   └── plugins.cpp
 ├── CHANGELOG.rst

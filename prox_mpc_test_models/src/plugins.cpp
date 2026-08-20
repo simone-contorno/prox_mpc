@@ -11,6 +11,8 @@
 #include <prox_mpc/model.hpp>
 #include <prox_mpc_test_models/asymmetric_bounds_model.hpp>
 #include <prox_mpc_test_models/non_finite_twist_model.hpp>
+#include <prox_mpc_test_models/non_finite_twist_other_axes_model.hpp>
 
 PLUGINLIB_EXPORT_CLASS(prox_mpc_test_models::NonFiniteTwistModel, prox_mpc::Model)
 PLUGINLIB_EXPORT_CLASS(prox_mpc_test_models::AsymmetricBoundsModel, prox_mpc::Model)
+PLUGINLIB_EXPORT_CLASS(prox_mpc_test_models::NonFiniteTwistOtherAxesModel, prox_mpc::Model)

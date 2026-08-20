@@ -21,4 +21,16 @@
       symmetry. Test fixture only.
     </description>
   </class>
+  <class
+    name="prox_mpc_test_models/NonFiniteTwistOtherAxes"
+    type="prox_mpc_test_models::NonFiniteTwistOtherAxesModel"
+    base_class_type="prox_mpc::Model">
+    <description>
+      Fault-injection test model: finite linear dynamics (state [x, y, theta],
+      control [v, omega]) but a toTwist() that deliberately fills linear.y and
+      angular.x (not linear.x, which NonFiniteTwist already covers) with
+      non-finite values, exercising the controller's command validation on the
+      four Twist components a planar consumer never reads. Test fixture only.
+    </description>
+  </class>
 </library>
