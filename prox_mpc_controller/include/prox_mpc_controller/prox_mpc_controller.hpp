@@ -95,9 +95,10 @@ protected:
   /// first access. Rejected: fewer than three states, an index outside the
   /// model's own dimensions, two planar quantities sharing one index, a model
   /// carrying a steering angle without declaring a usable wheelbase or with a
-  /// lateral reference offset, and, when the in-loop obstacle term is active, a
-  /// model whose position does not sit at state columns 0 and 1, which is where
-  /// the core's obstacle rows read it. Each rejection throws
+  /// lateral reference offset, a steering-rate control index outside the control
+  /// vector or colliding with the speed channel, and, when the in-loop obstacle
+  /// term is active, a model whose position does not sit at state columns 0 and
+  /// 1, which is where the core's obstacle rows read it. Each rejection throws
   /// nav2_core::ControllerException naming `model_plugin` and the reason.
   void readModelMapping(prox_mpc::Model & model, const std::string & model_plugin);
 
@@ -106,7 +107,8 @@ protected:
   /// lower bounds of `du[0]` and `du[1]` into a_dec_lin_ and a_dec_ang_; every
   /// declared `du` bound into du_low_ and du_upp_; the `u[1]` bound of a model
   /// with a steering state into steer_rate_low_ and steer_rate_upp_. It also
-  /// sizes last_cmd_u_ to the model's control dimension. A model that declares
+  /// sizes last_cmd_u_ to the model's control dimension, and reads the bound of
+  /// the declared steering-rate control when the model has one. A model that declares
   /// none of a required bound cannot be driven safely - a zero deceleration
   /// limit leaves the brake ramp stuck at the current velocity, and a zero speed
   /// bound clamps the cruise speed to zero - so a missing bound throws
@@ -245,7 +247,9 @@ protected:
   std::size_t idx_yaw_{2};
   std::size_t idx_v_{0};
   std::size_t idx_steer_{0};
+  std::size_t idx_steer_rate_{0};
   bool has_steering_{false};
+  bool has_steer_rate_{false};
 
   /// Position of the model's reference point in base_link [m]. The Nav2 pose is
   /// carried out to it before the solve and back before the footprint check,
@@ -325,9 +329,9 @@ protected:
   /// speed instead, so the brake tracks the robot rather than a stale command.
   VectorXd last_cmd_u_;
 
-  /// Rate bounds of the steering-rate control (`u[1]`) for a model that carries a
-  /// steering state, used to decay the steering belief on a rejected cycle. Zero
-  /// when the model declares none, which keeps the belief frozen.
+  /// Rate bounds of the control the model declares as its steering-angle rate,
+  /// used to decay the steering belief on a rejected cycle. Zero when the model
+  /// declares no such control, or no bound on it, which keeps the belief frozen.
   double steer_rate_low_{0.0};
   double steer_rate_upp_{0.0};
 

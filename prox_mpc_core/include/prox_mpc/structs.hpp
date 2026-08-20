@@ -67,6 +67,11 @@ struct PlanarMapping
   size_t idx_speed{0};            // Control index of the signed longitudinal speed [m/s].
   size_t idx_steering{kNoIndex};  // State index of the steering angle [rad], or kNoIndex.
 
+  /* Control index of the steering-angle rate [rad/s], or kNoIndex. Meaningful
+   * only alongside idx_steering: it is the channel whose declared bound sets how
+   * fast a consumer may move its belief about the steering angle. */
+  size_t idx_steer_rate{kNoIndex};
+
   /* Position of the point the state's x/y refer to, expressed in base_link
    * [m]: (0, 0) when the model is referenced to base_link itself, (L, 0) for a
    * model referenced to the front axle of a vehicle whose base_link sits on the

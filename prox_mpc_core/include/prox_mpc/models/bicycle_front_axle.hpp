@@ -91,12 +91,14 @@ public:
 
   /*!
    * The state's (x, y) is the front axle, one wheelbase ahead of base_link on
-   * the body x axis, and the steering angle is state index 3.
+   * the body x axis, the steering angle is state index 3 and its rate is
+   * control index 1.
    */
   PlanarMapping getPlanarMapping() const override
   {
     PlanarMapping mapping;
     mapping.idx_steering = 3;
+    mapping.idx_steer_rate = 1;
     mapping.ref_offset_x = this->params(0);
     mapping.wheelbase = this->params(0);
     return mapping;

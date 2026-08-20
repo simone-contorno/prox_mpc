@@ -102,12 +102,13 @@ public:
 
   /*!
    * The state's (x, y) is the rear axle, which is the base_link origin, and the
-   * steering angle is state index 3.
+   * steering angle is state index 3, with its rate at control index 1.
    */
   PlanarMapping getPlanarMapping() const override
   {
     PlanarMapping mapping;
     mapping.idx_steering = 3;
+    mapping.idx_steer_rate = 1;
     mapping.wheelbase = this->params(0);
     return mapping;
   }

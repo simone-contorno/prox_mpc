@@ -107,10 +107,11 @@ public:
    *
    * The default reproduces the convention the bundled models and the bundled
    * controller followed before this hook existed: state [x, y, yaw, (delta)],
-   * control [v, ...], the state referenced to base_link, and a steering angle
-   * at state index 3 for any model carrying more than three states. The
-   * wheelbase is left at 0, which a consumer reads as undeclared; a model that
-   * carries a steering angle must override this and declare one.
+   * control [v, delta_dot], the state referenced to base_link, and, for any
+   * model carrying more than three states, a steering angle at state index 3
+   * whose rate is control index 1. The wheelbase is left at 0, which a consumer
+   * reads as undeclared; a model that carries a steering angle must override
+   * this and declare one.
    *
    * Read once at the consumer's configuration time, so it is not a control-loop
    * query and may build its result.
@@ -118,7 +119,10 @@ public:
   virtual PlanarMapping getPlanarMapping() const
   {
     PlanarMapping mapping;
-    if (this->n > 3) {mapping.idx_steering = 3;}
+    if (this->n > 3) {
+      mapping.idx_steering = 3;
+      if (this->m > 1) {mapping.idx_steer_rate = 1;}
+    }
     return mapping;
   }
 

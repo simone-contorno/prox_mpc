@@ -553,6 +553,13 @@ void ProxMpcController::readModelMapping(
   }
 
   has_steering_ = mapping.idx_steering != prox_mpc::PlanarMapping::kNoIndex;
+  has_steer_rate_ = has_steering_ &&
+    mapping.idx_steer_rate != prox_mpc::PlanarMapping::kNoIndex;
+  if (has_steer_rate_) {
+    if (mapping.idx_steer_rate >= m_ || mapping.idx_steer_rate == mapping.idx_speed) {
+      reject("maps its steering rate to an unusable control index");
+    }
+  }
   if (has_steering_) {
     if (mapping.idx_steering >= n_ || mapping.idx_steering == mapping.idx_x ||
       mapping.idx_steering == mapping.idx_y || mapping.idx_steering == mapping.idx_yaw)
@@ -589,6 +596,7 @@ void ProxMpcController::readModelMapping(
   idx_yaw_ = mapping.idx_yaw;
   idx_v_ = mapping.idx_speed;
   idx_steer_ = has_steering_ ? mapping.idx_steering : 0;
+  idx_steer_rate_ = has_steer_rate_ ? mapping.idx_steer_rate : 0;
   ref_offset_x_ = mapping.ref_offset_x;
   ref_offset_y_ = mapping.ref_offset_y;
   wheelbase_ = has_steering_ ? mapping.wheelbase : 0.0;
@@ -638,13 +646,11 @@ void ProxMpcController::readModelBounds(prox_mpc::Model & model, const std::stri
    * than moving it at a rate the model never stated. */
   steer_rate_low_ = 0.0;
   steer_rate_upp_ = 0.0;
-  if (has_steering_ && m > 1) {
-    /* The mapping declares which control is the longitudinal speed; the steering
-     * rate is the other one of a two-control steered model, which is what both
-     * bundled bicycles declare. */
-    const std::size_t idx_rate = (idx_v_ == 0) ? 1 : 0;
+  if (has_steer_rate_) {
+    /* The model declares which control carries its steering-angle rate; the
+     * bound on that channel is how fast the belief may be moved. */
     for (const auto & entry : model.getIneq("u")) {
-      if (static_cast<std::size_t>(entry.second[0]) == idx_rate) {
+      if (static_cast<std::size_t>(entry.second[0]) == idx_steer_rate_) {
         steer_rate_low_ = entry.second[1];
         steer_rate_upp_ = entry.second[2];
       }
