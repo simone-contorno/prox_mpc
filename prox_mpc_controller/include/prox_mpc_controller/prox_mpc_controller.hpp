@@ -160,6 +160,19 @@ protected:
     const MatrixXd & reference, MatrixXd & obs, std::size_t slot_begin,
     const std::vector<std::vector<std::array<double, 3>>> & exclusions);
 
+  /// Per-node translation carrying an obstacle position from the frame the
+  /// keep-out is meant to protect - base_link - into the frame the solver
+  /// constrains, which is the model's own reference point. Both vectors are
+  /// sized to np_ and left all-zero for a model referenced to base_link, where
+  /// the two frames coincide and every obstacle is written unchanged.
+  ///
+  /// The solver constrains the model's reference point p_ref, so a keep-out
+  /// about base_link, p_base = p_ref - R(yaw) * offset, is expressed by moving
+  /// the obstacle to o + R(yaw) * offset: the residual is then p_base - o. The
+  /// yaw comes from the same nominal predicted trajectory the obstacle scan is
+  /// centred on, so it carries that trajectory's one-node staleness.
+  void keepOutShift(std::vector<double> & shift_x, std::vector<double> & shift_y);
+
   /// Cache the latest tracked-obstacle array. This runs on the controller
   /// server's node executor, while computeVelocityCommands runs on the action
   /// server's own execution thread, so the two are concurrent and the exchange

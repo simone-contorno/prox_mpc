@@ -1388,6 +1388,30 @@ void ProxMpcController::obstacleCallback(prox_mpc_msgs::msg::ObstacleArray::Cons
   latest_obstacles_ = msg;
 }
 
+void ProxMpcController::keepOutShift(
+  std::vector<double> & shift_x, std::vector<double> & shift_y)
+{
+  shift_x.assign(np_, 0.0);
+  shift_y.assign(np_, 0.0);
+  if (ref_offset_x_ == 0.0 && ref_offset_y_ == 0.0) {return;}
+
+  /* The nominal trajectory is the last committed one, un-shifted, so node j's
+   * constraint is linearized about the row read here as j + 2, clamped at the
+   * last node - the same one-node lag the scan centres carry, and for the same
+   * reason. Before the first solve it is zero, which is what that first QP
+   * linearizes about, so the two stay consistent. */
+  const MatrixXd nominal = mpc_->getX();
+  for (std::size_t node = 0; node < np_; ++node) {
+    const Eigen::Index row = std::min(
+      static_cast<Eigen::Index>(node + 2), static_cast<Eigen::Index>(np_));
+    const double yaw = nominal(row, static_cast<Eigen::Index>(idx_yaw_));
+    const double c = std::cos(yaw);
+    const double sn = std::sin(yaw);
+    shift_x[node] = ref_offset_x_ * c - ref_offset_y_ * sn;
+    shift_y[node] = ref_offset_x_ * sn + ref_offset_y_ * c;
+  }
+}
+
 void ProxMpcController::fillObstacles(
   const MatrixXd & reference, MatrixXd & obs, const rclcpp::Time & now)
 {
@@ -1543,6 +1567,9 @@ void ProxMpcController::fillObstacles(
    * (tracker-sampled curved prediction when available, straight ray otherwise).
    * The clearance grows with prediction time as the prediction ages. */
   std::vector<std::vector<std::array<double, 3>>> exclusions(np_);
+  std::vector<double> shift_x;
+  std::vector<double> shift_y;
+  keepOutShift(shift_x, shift_y);
   predicted_obstacles_.resize(n_dyn);
   for (std::size_t j = 0; j < n_dyn; ++j) {
     predicted_obstacles_[j].id = dyn[j].id;
@@ -1568,8 +1595,10 @@ void ProxMpcController::fillObstacles(
       const double d_safe = robot_radius_ + d.radius + safety_margin_ +
         prediction_uncertainty_growth_ * dt_k;
       const Eigen::Index row = static_cast<Eigen::Index>(node * k_obs + j);
-      obs(row, 0) = px;
-      obs(row, 1) = py;
+      /* Written in the solver's frame: the keep-out is meant to protect
+       * base_link, and the solver constrains the model's reference point. */
+      obs(row, 0) = px + shift_x[node];
+      obs(row, 1) = py + shift_y[node];
       obs(row, 2) = d_safe;
       /* Exclude the obstacle's CURRENT footprint from the static scan, not its
        * predicted one: the local costmap is a now-snapshot, so the moving object's
@@ -1607,11 +1636,11 @@ void ProxMpcController::fillStaticObstacles(
   const std::size_t k_obs = static_cast<std::size_t>(max_obstacles_);
   if (slot_begin >= k_obs) {return;}
   const std::size_t budget = k_obs - slot_begin;
-  /* The keep-out disc is centred on the model's own reference point, which is
-   * base_link for every model that declares no offset. For a model referenced
-   * away from base_link the disc does not cover the whole robot on its own; the
-   * footprint veto, which is checked at the base_link pose, is what covers the
-   * rest. */
+  /* The keep-out disc is centred on base_link, which is the point the robot disc
+   * and the costmap footprint are both defined about, whatever point the model's
+   * state refers to. The scan therefore looks around base_link and each hit is
+   * written in the solver's frame, so the QP half-plane and the footprint veto
+   * protect the same physical point. */
   const double d_safe = robot_radius_ + safety_margin_;
 
   /* The grid lock is taken only around the cell reads, once per node, and is
@@ -1654,6 +1683,12 @@ void ProxMpcController::fillStaticObstacles(
    * what that first QP linearizes about, so the two stay consistent. */
   const MatrixXd nominal = mpc_->getX();
 
+  /* Carries a scanned cell from base_link's frame into the solver's; all zero
+   * for a model referenced to base_link. */
+  std::vector<double> shift_x;
+  std::vector<double> shift_y;
+  keepOutShift(shift_x, shift_y);
+
   /* One distinct physical object, tracked across nodes: (x, y) is where it was
    * seen most recently, best_d2 its closest approach to any node's scan centre,
    * first_node the earliest node it was seen at and last_node the latest. Nodes
@@ -1687,8 +1722,10 @@ void ProxMpcController::fillStaticObstacles(
   for (std::size_t node = 0; node < np_; ++node) {
     const Eigen::Index centre_row = std::min(
       static_cast<Eigen::Index>(node + 2), static_cast<Eigen::Index>(np_));
-    const double pcx = nominal(centre_row, 0);
-    const double pcy = nominal(centre_row, 1);
+    const double pcx =
+      nominal(centre_row, static_cast<Eigen::Index>(idx_x_)) - shift_x[node];
+    const double pcy =
+      nominal(centre_row, static_cast<Eigen::Index>(idx_y_)) - shift_y[node];
 
     /* Occupied cells within the search window, sorted by distance to the node. */
     candidates.clear();
@@ -1814,8 +1851,8 @@ void ProxMpcController::fillStaticObstacles(
     const std::size_t slot = slot_of[h.object];
     if (slot == kNoObstacleSlot) {continue;}
     const Eigen::Index row = static_cast<Eigen::Index>(h.node * k_obs + slot);
-    obs(row, 0) = h.x;
-    obs(row, 1) = h.y;
+    obs(row, 0) = h.x + shift_x[h.node];
+    obs(row, 1) = h.y + shift_y[h.node];
     obs(row, 2) = d_safe;
   }
 }
