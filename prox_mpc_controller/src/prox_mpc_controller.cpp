@@ -604,6 +604,7 @@ void ProxMpcController::readModelMapping(
 
 void ProxMpcController::readModelBounds(prox_mpc::Model & model, const std::string & model_plugin)
 {
+  const std::size_t m = model.getM();
   v_max_ = required_bound(
     model, model_plugin, "u", idx_v_, 2, "linear",
     "the speed cap would collapse to zero and the controller would never move.");
@@ -618,17 +619,26 @@ void ProxMpcController::readModelBounds(prox_mpc::Model & model, const std::stri
     required_bound(
       model, model_plugin, "du", idx_v_, 1, "linear",
       "the solver-failure brake would never reach zero."));
-  fallback_ramp_ang_ = std::abs(
-    required_bound(
-      model, model_plugin, "du", 1, 1, "angular",
-      "the solver-failure brake would never reach zero."));
+  /* The second body-twist channel only exists to be ramped when the model has a
+   * second control to source a rate from. A single-control model is legitimate -
+   * the planar contract asks for one speed control and no more - so it keeps the
+   * default here rather than being asked for a bound on a channel it never
+   * declared, which would reject it while naming an "angular control" it does
+   * not have. The gate is the control count and not the declared steering rate:
+   * for a unicycle, channel 1 is a genuine body yaw rate and is exactly what
+   * this ramp wants, while the model declares no steering at all. */
+  if (m > 1) {
+    fallback_ramp_ang_ = std::abs(
+      required_bound(
+        model, model_plugin, "du", 1, 1, "angular",
+        "the solver-failure brake would never reach zero."));
+  }
 
   /* Every declared control-rate bound, sign preserved, so the brake ramps each
    * control channel at the model's own rate in each direction. A channel with no
    * declared bound stays unbounded and is taken to zero in one step: there is no
    * rate to respect, and freezing it at its last commanded value would leave the
    * brake unable to stop that channel at all. */
-  const std::size_t m = model.getM();
   du_low_.assign(m, -std::numeric_limits<double>::infinity());
   du_upp_.assign(m, std::numeric_limits<double>::infinity());
   for (const auto & entry : model.getIneq("du")) {

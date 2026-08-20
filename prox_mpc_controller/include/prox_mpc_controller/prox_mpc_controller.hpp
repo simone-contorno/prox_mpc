@@ -104,9 +104,9 @@ protected:
 
   /// Read the model's declared bounds into the cached control-law limits: both
   /// bounds of the speed control into v_max_, v_min_ and max_linear_vel_; the
-  /// lower bound of the speed control's `du` entry into fallback_ramp_lin_ and
-  /// that of `du[1]` into fallback_ramp_ang_; every declared `du` bound into
-  /// du_low_ and du_upp_; the bound of
+  /// lower bound of the speed control's `du` entry into fallback_ramp_lin_, and
+  /// that of `du[1]` into fallback_ramp_ang_ for a model that has a second
+  /// control; every declared `du` bound into du_low_ and du_upp_; the bound of
   /// the declared steering-rate control, when the model has one, into
   /// steer_rate_low_ and steer_rate_upp_. It also sizes last_cmd_u_ to the
   /// model's control dimension. A model that declares none of a required bound

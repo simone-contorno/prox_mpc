@@ -135,6 +135,25 @@ public:
   void updateB() override {}
 };
 
+// A conforming model with exactly one control: a speed channel and nothing else.
+// The planar contract asks for one speed control and no more, so this must be
+// accepted rather than rejected for lacking a second control's rate bound.
+class SingleControlModel : public prox_mpc::Model
+{
+public:
+  SingleControlModel()
+  {
+    setName("single_control");
+    setN(3);
+    setM(1);
+    setIneq("u", 0, -3.0, 3.0);
+    setIneq("du", 0, -0.5, 0.5);
+  }
+  void updatec(double, VectorXd) override {}
+  void updateA(double) override {}
+  void updateB() override {}
+};
+
 // The mirror case: control-rate bounds but no bound on the speed channel, which
 // would leave v_max (and hence the cruise-speed clamp) at zero.
 class NoUBoundModel : public prox_mpc::Model
@@ -636,6 +655,18 @@ TEST_F(ProxMpcControllerTest, MissingModelBoundIsFatal)
   // model's own bounds.
   auto configured = makeConfigured();
   EXPECT_NEAR(configured->vMax(), kModelVMax, kTol);
+}
+
+// A model with one control declares no second control-rate bound, and must not
+// be rejected for it: the second body-twist channel only exists to be ramped
+// when there is a control to source a rate from. Rejecting it would also have
+// named an "angular control" the model never declared.
+TEST_F(ProxMpcControllerTest, SingleControlModelReadsBounds)
+{
+  auto c = makeUnconfigured();
+  SingleControlModel one;
+  EXPECT_NO_THROW(c->readModelBounds(one, "test/SingleControl"));
+  EXPECT_NEAR(c->vMax(), 3.0, kTol);
 }
 
 // robot_radius below the costmap footprint's circumscribed radius is
