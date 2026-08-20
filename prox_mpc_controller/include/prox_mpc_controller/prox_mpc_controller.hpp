@@ -104,12 +104,13 @@ protected:
 
   /// Read the model's declared bounds into the cached control-law limits: both
   /// bounds of the speed control into v_max_, v_min_ and max_linear_vel_; the
-  /// lower bounds of `du[0]` and `du[1]` into a_dec_lin_ and a_dec_ang_; every
-  /// declared `du` bound into du_low_ and du_upp_; the `u[1]` bound of a model
-  /// with a steering state into steer_rate_low_ and steer_rate_upp_. It also
-  /// sizes last_cmd_u_ to the model's control dimension, and reads the bound of
-  /// the declared steering-rate control when the model has one. A model that declares
-  /// none of a required bound cannot be driven safely - a zero deceleration
+  /// lower bound of the speed control's `du` entry into fallback_ramp_lin_ and
+  /// that of `du[1]` into fallback_ramp_ang_; every declared `du` bound into
+  /// du_low_ and du_upp_; the bound of
+  /// the declared steering-rate control, when the model has one, into
+  /// steer_rate_low_ and steer_rate_upp_. It also sizes last_cmd_u_ to the
+  /// model's control dimension. A model that declares none of a required bound
+  /// cannot be driven safely - a zero deceleration
   /// limit leaves the brake ramp stuck at the current velocity, and a zero speed
   /// bound clamps the cruise speed to zero - so a missing bound throws
   /// nav2_core::ControllerException naming it. `model_plugin` is the plugin name
@@ -139,7 +140,7 @@ protected:
   /// Reduce the local costmap to at most max_obstacles_ (o_x, o_y, d_safe) triples
   /// per predicted node, centered on the nominal predicted positions. This is
   /// the static (costmap-only) fill and the predict_obstacles_-off fallback.
-  void reduceCostmap(const MatrixXd & reference, MatrixXd & obs);
+  void reduceCostmap(MatrixXd & obs);
 
   /// Windowed costmap scan that fills obstacle slots [slot_begin, max_obstacles_)
   /// per node from the nearest occupied cells, skipping cells inside any per-node
@@ -147,17 +148,13 @@ protected:
   /// far-sentinel default are left untouched. exclusions[node] = list of
   /// (x, y, radius); an empty vector means no exclusions.
   ///
-  /// The leading reference argument is deliberately unread. The scan is centred
-  /// on the MPC's own nominal predicted trajectory, because that is what the QP
-  /// linearizes each node's keep-out half-plane about, and a plan reference
-  /// centred elsewhere would size the window for a cross-track error the
-  /// constraint does not carry. The parameter stays because this is a protected
-  /// member of a released class and dropping it changes the signature a derived
-  /// controller compiled against; a subclass that passes a reference here should
-  /// expect it to have no effect. fillObstacles() does read its own reference,
-  /// for the dynamic-track priority.
+  /// The scan is centred on the MPC's own nominal predicted trajectory, because
+  /// that is what the QP linearizes each node's keep-out half-plane about; a plan
+  /// reference centred elsewhere would size the window for a cross-track error
+  /// the constraint does not carry. That is why no plan reference is passed here,
+  /// while fillObstacles() does take one, for the dynamic-track priority.
   void fillStaticObstacles(
-    const MatrixXd & reference, MatrixXd & obs, std::size_t slot_begin,
+    MatrixXd & obs, std::size_t slot_begin,
     const std::vector<std::vector<std::array<double, 3>>> & exclusions);
 
   /// Per-node translation carrying an obstacle position from the frame the
@@ -318,17 +315,19 @@ protected:
   double v_min_{0.0};
   double max_linear_vel_{0.0};
 
-  /// Magnitudes of the model's declared lower `du` bounds for control channels 0
-  /// and 1. They are rate limits on the model's own controls, not on a body
-  /// twist: for a bicycle, channel 1 bounds a steering acceleration rather than a
-  /// yaw one. The brake ramps the controls themselves under du_low_/du_upp_ and
-  /// maps them through the model, so these two are read only by the last-resort
-  /// ramp used when that mapping returns a non-finite twist, where a body-twist
-  /// rate is the only thing left to ramp. The names date from the released
-  /// interface and are kept so a derived controller still compiles; they describe
-  /// where the numbers are applied rather than what they bound.
-  double a_dec_lin_{0.5};
-  double a_dec_ang_{0.5};
+  /// Rates the last-resort deceleration ramp steps the two body-twist channels
+  /// by, taken as the magnitudes of the model's declared lower `du` bounds for
+  /// control channels 0 and 1.
+  ///
+  /// They are bounds on the model's own controls, not on a body twist: for a
+  /// bicycle, channel 1 bounds a steering acceleration rather than a yaw one.
+  /// The brake ramps the controls themselves under du_low_/du_upp_ and maps them
+  /// through the model, so these two are read only when that mapping returns a
+  /// non-finite twist and a body-twist rate is the only thing left to ramp. The
+  /// names say where they are applied; the model's own rate bounds live in
+  /// du_low_/du_upp_.
+  double fallback_ramp_lin_{0.5};
+  double fallback_ramp_ang_{0.5};
 
   /// The model's control-rate (du) bounds, indexed by control channel, with each
   /// side's sign preserved so an asymmetric model brakes at its own rate in each

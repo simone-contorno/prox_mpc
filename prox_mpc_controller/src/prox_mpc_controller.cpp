@@ -614,11 +614,11 @@ void ProxMpcController::readModelBounds(prox_mpc::Model & model, const std::stri
     model, model_plugin, "u", idx_v_, 1, "linear",
     "the speed cap would collapse to zero and the controller would never move.");
   max_linear_vel_ = v_max_;
-  a_dec_lin_ = std::abs(
+  fallback_ramp_lin_ = std::abs(
     required_bound(
       model, model_plugin, "du", idx_v_, 1, "linear",
       "the solver-failure brake would never reach zero."));
-  a_dec_ang_ = std::abs(
+  fallback_ramp_ang_ = std::abs(
     required_bound(
       model, model_plugin, "du", 1, 1, "angular",
       "the solver-failure brake would never reach zero."));
@@ -824,8 +824,10 @@ geometry_msgs::msg::TwistStamped ProxMpcController::computeVelocityCommands(
           "ProxMpcController: the model mapped the braked controls to a non-finite twist; "
           "ramping the measured twist directly this cycle.");
         twist = geometry_msgs::msg::Twist();
-        twist.linear.x = brake_toward(velocity.linear.x, a_dec_lin_, a_dec_lin_, period);
-        twist.angular.z = brake_toward(velocity.angular.z, a_dec_ang_, a_dec_ang_, period);
+        twist.linear.x = brake_toward(
+          velocity.linear.x, fallback_ramp_lin_, fallback_ramp_lin_, period);
+        twist.angular.z = brake_toward(
+          velocity.angular.z, fallback_ramp_ang_, fallback_ramp_ang_, period);
       }
       last_cmd_v_ = twist.linear.x;
       last_cmd_w_ = twist.angular.z;
@@ -1442,7 +1444,7 @@ void ProxMpcController::fillObstacles(
     predictive = std::isfinite(age) && age >= 0.0 && age <= obstacle_timeout_;
   }
   if (!predictive) {
-    fillStaticObstacles(reference, obs, 0, {});
+    fillStaticObstacles(obs, 0, {});
     return;
   }
 
@@ -1465,7 +1467,7 @@ void ProxMpcController::fillObstacles(
         logger_, *clock_, 2000,
         "ProxMpcController: tracked-obstacle TF %s <- %s unavailable (%s); "
         "costmap-only this cycle.", global_frame.c_str(), obs_frame.c_str(), ex.what());
-      fillStaticObstacles(reference, obs, 0, {});
+      fillStaticObstacles(obs, 0, {});
       return;
     }
   }
@@ -1614,11 +1616,11 @@ void ProxMpcController::fillObstacles(
   /* Hybrid: fill the remaining slots from the costmap (static clutter), excluding
    * cells inside a dynamic footprint to avoid double-counting the moving object. */
   if (n_dyn < k_obs) {
-    fillStaticObstacles(reference, obs, n_dyn, exclusions);
+    fillStaticObstacles(obs, n_dyn, exclusions);
   }
 }
 
-void ProxMpcController::reduceCostmap(const MatrixXd & reference, MatrixXd & obs)
+void ProxMpcController::reduceCostmap(MatrixXd & obs)
 {
   /* Default every slot to the far sentinel so unfilled ones stay non-binding. */
   for (Eigen::Index r = 0; r < obs.rows(); ++r) {
@@ -1626,11 +1628,11 @@ void ProxMpcController::reduceCostmap(const MatrixXd & reference, MatrixXd & obs
     obs(r, 1) = prox_mpc::MPC::kObsFarSentinel;
     obs(r, 2) = 0.0;
   }
-  fillStaticObstacles(reference, obs, 0, {});
+  fillStaticObstacles(obs, 0, {});
 }
 
 void ProxMpcController::fillStaticObstacles(
-  const MatrixXd &, MatrixXd & obs, std::size_t slot_begin,
+  MatrixXd & obs, std::size_t slot_begin,
   const std::vector<std::vector<std::array<double, 3>>> & exclusions)
 {
   const std::size_t k_obs = static_cast<std::size_t>(max_obstacles_);

@@ -1656,9 +1656,8 @@ TEST_F(ProxMpcControllerTest, ResetClearsRuntimeState)
 // node, skips unknown cells and out-of-grid nodes, and leaves empty slots at the
 // far sentinel.
 //
-// The scan is centered on the MPC's own nominal trajectory (mpc()->getX()), not
-// on the reference argument, which fillStaticObstacles no longer reads (its
-// signature keeps the parameter only so the released call site stays stable).
+// The scan is centered on the MPC's own nominal trajectory (mpc()->getX()); no
+// plan reference is passed, because the fill does not use one.
 // Node j's window is centered on nominal row min(j + 2, Np) (the fill runs
 // before solve() shifts the trajectory, so this reads one node ahead to
 // compensate for that staleness). Np = 3 so nodes 0 and 1 read distinct rows
@@ -1692,9 +1691,8 @@ TEST_F(ProxMpcControllerTest, ReduceCostmapClustersAndSentinels)
   nominal(3, 1) = 100.0;
   c->mpc()->setX(nominal);
 
-  MatrixXd reference = MatrixXd::Zero(static_cast<Eigen::Index>(np + 1), c->nDim());
   MatrixXd obs(static_cast<Eigen::Index>(np * k), 3);
-  c->reduceCostmap(reference, obs);
+  c->reduceCostmap(obs);
 
   // Node 0: two distinct representatives, each carrying d_safe = radius + margin.
   EXPECT_LT(obs(0, 0), prox_mpc::MPC::kObsFarSentinel);
@@ -1737,9 +1735,8 @@ TEST_F(ProxMpcControllerTest, ReduceCostmapCentersOnNominalNotReference)
 
   // reference stays at the origin: more than 0.6 m from the obstacle, so a
   // reference-centered window would never see it (2.0 m - 0.6 m margin).
-  MatrixXd reference = MatrixXd::Zero(2, c->nDim());
   MatrixXd obs(1, 3);
-  c->reduceCostmap(reference, obs);
+  c->reduceCostmap(obs);
 
   EXPECT_LT(obs(0, 0), prox_mpc::MPC::kObsFarSentinel);
   EXPECT_NEAR(obs(0, 0), 2.0, 0.15);
@@ -1782,9 +1779,8 @@ TEST_F(ProxMpcControllerTest, ObstacleSlotRankingPrefersEarliestEncounter)
   // B, so no other node picks up either one.
   c->mpc()->setX(nominal);
 
-  MatrixXd reference = MatrixXd::Zero(static_cast<Eigen::Index>(np + 1), c->nDim());
   MatrixXd obs(static_cast<Eigen::Index>(np), 3);
-  c->reduceCostmap(reference, obs);
+  c->reduceCostmap(obs);
 
   EXPECT_LT(obs(2, 0), prox_mpc::MPC::kObsFarSentinel);      // node 2: A wins the slot
   EXPECT_NEAR(obs(2, 0), 2.3, 0.1);
@@ -1852,9 +1848,8 @@ TEST_F(ProxMpcControllerTest, CostmapReductionCandidateSetUnaffectedByNarrowedLo
   nominal(4, 0) = -4.0;   // nodes 2 and 3 read row min(node + 2, np) = 4: no obstacle there
   c->mpc()->setX(nominal);
 
-  MatrixXd reference = MatrixXd::Zero(static_cast<Eigen::Index>(np + 1), c->nDim());
   MatrixXd obs(static_cast<Eigen::Index>(np * k), 3);
-  c->reduceCostmap(reference, obs);
+  c->reduceCostmap(obs);
 
   // The near-(2,0) object is seen only at node 0 and ranks first (earliest
   // first_node), winning slot 0; row = node * k + slot = 0 * 2 + 0 = 0.
@@ -1994,7 +1989,7 @@ TEST_F(ProxMpcControllerTest, StalenessFallbackRestoresCostmapOnly)
   MatrixXd obs_fill(static_cast<Eigen::Index>(2 * k), 3);
   c->fillObstacles(reference, obs_fill, now);
   MatrixXd obs_reduce(static_cast<Eigen::Index>(2 * k), 3);
-  c->reduceCostmap(reference, obs_reduce);
+  c->reduceCostmap(obs_reduce);
 
   for (Eigen::Index r = 0; r < obs_fill.rows(); ++r) {
     EXPECT_NEAR(obs_fill(r, 0), obs_reduce(r, 0), kTol);
@@ -2028,7 +2023,7 @@ TEST_F(ProxMpcControllerTest, PredictDisabledIgnoresTrackedObstacles)
   MatrixXd obs_fill(static_cast<Eigen::Index>(2 * k), 3);
   c->fillObstacles(reference, obs_fill, now);
   MatrixXd obs_reduce(static_cast<Eigen::Index>(2 * k), 3);
-  c->reduceCostmap(reference, obs_reduce);
+  c->reduceCostmap(obs_reduce);
 
   for (Eigen::Index r = 0; r < obs_fill.rows(); ++r) {
     EXPECT_NEAR(obs_fill(r, 0), obs_reduce(r, 0), kTol);

@@ -145,8 +145,11 @@ because the class is allocated and freed inside the same library. A downstream
 package that links the exported target and derives from or holds
 `ProxMpcController` directly must be rebuilt.
 
-`fillStaticObstacles`'s leading reference parameter is retained and remains
-unread; `a_dec_lin_` and `a_dec_ang_` keep their released names. Both are
-documented in the header rather than changed, so a derived controller still
-compiles. One protected method, `keepOutShift`, is added; it is non-virtual and
-symbol-additive.
+Two protected names changed with it. `fillStaticObstacles` and `reduceCostmap`
+lose their leading plan-reference parameter, which the scan stopped reading when
+it moved onto the solver's own nominal trajectory, and `a_dec_lin_`/`a_dec_ang_`
+become `fallback_ramp_lin_`/`fallback_ramp_ang_`, which is what they hold: the
+rates the last-resort twist ramp steps by, not a linear/angular acceleration
+pair. A derived controller that overrode or called either must be updated, which
+it must be rebuilt for in any case. One protected method, `keepOutShift`, is
+added.
