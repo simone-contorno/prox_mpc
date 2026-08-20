@@ -99,11 +99,11 @@ Three inputs that 1.0.0 accepted silently are now rejected.
 - `init()` throws `std::invalid_argument` unless `Q`, `S`, `R` and `W` are
   finite, symmetric and positive semidefinite. 1.0.0 accepted an asymmetric or
   indefinite weight and silently solved the symmetrised problem instead.
-- `setQ`, `setR`, `setS`, `setW`, `setNp`, `setNc`, `setMaxIntIterQP`,
-  `setMaxExtIterQP`, `setGuess` and `setQPtype` throw `std::logic_error` when
-  called after `init()`. 1.0.0 returned quietly while mutating only their own
-  members, leaving the buffers and the QP object sized for the previous
-  configuration.
+- `setQ`, `setR`, `setS`, `setW`, `setNp`, `setNc`, `setdt`, `setT`,
+  `setMaxIntIterQP`, `setMaxExtIterQP`, `setGuess` and `setQPtype` throw
+  `std::logic_error` when called after `init()`. 1.0.0 returned quietly while
+  mutating only their own members, leaving the buffers and the QP object sized
+  for the previous configuration.
 
 Call the structural setters before `init()`, size the goal matrices to the
 horizon, and pass symmetric positive-semidefinite weights. The bundled Nav2

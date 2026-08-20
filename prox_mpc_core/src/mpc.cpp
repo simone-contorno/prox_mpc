@@ -393,6 +393,7 @@ void MPC::setNc(size_t Nc)
  */
 void MPC::setdt(double dt)
 {
+  rejectAfterInit(initialized, "setdt");
   if (!std::isfinite(dt) || dt <= 0.0) {
     throw std::invalid_argument("MPC::setdt: dt must be > 0");
   }
@@ -407,6 +408,7 @@ void MPC::setdt(double dt)
  */
 void MPC::setT(double T)
 {
+  rejectAfterInit(initialized, "setT");
   if (T <= 0.0) {throw std::invalid_argument("MPC::setT: T must be > 0");}
   this->T = T;
   if (Np > 0) {this->dt = T / Np;}

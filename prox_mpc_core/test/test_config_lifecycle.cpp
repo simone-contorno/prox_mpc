@@ -80,6 +80,18 @@ TEST(ConfigLifecycle, SetNcRejectsAfterInit)
   EXPECT_THROW(mpc->setNc(4), std::logic_error);
 }
 
+TEST(ConfigLifecycle, SetdtRejectsAfterInit)
+{
+  auto mpc = makeInitialized();
+  EXPECT_THROW(mpc->setdt(0.2), std::logic_error);
+}
+
+TEST(ConfigLifecycle, SetTRejectsAfterInit)
+{
+  auto mpc = makeInitialized();
+  EXPECT_THROW(mpc->setT(1.0), std::logic_error);
+}
+
 TEST(ConfigLifecycle, SetMaxIntIterQPRejectsAfterInit)
 {
   auto mpc = makeInitialized();
