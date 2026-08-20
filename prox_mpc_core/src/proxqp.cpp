@@ -25,6 +25,13 @@ namespace
 // Guard for the obstacle-constraint normal: avoids 0/0 = NaN when the predicted
 // robot position coincides with the obstacle.
 constexpr double kObsNormalEps = 1e-9;
+// Fastest obstacle motion the backward extrapolation of the current-time
+// obstacle position is trusted for [m/s]. The reconstruction 2 o_1 - o_2
+// amplifies inter-block noise, so an implied inter-block displacement above
+// kMaxObsSpeed * dt is treated as noise rather than motion and the extrapolation
+// falls back to the first block. Nothing this controller plans around moves
+// faster than this.
+constexpr double kMaxObsSpeed = 10.0;
 }  // namespace
 
 /*!
@@ -439,8 +446,14 @@ void ProxQP::setC(const MatrixXd & x)
       /* Signed distance at the previous node k for the CBF coupling, against the
        * SAME obstacle slot at the previous node's time. A predictive (moving) fill
        * carries a different obstacle position per node, so node k uses obs[slot -
-       * max_obs]; for node 0 (x(0) is the fixed pose) and for a static fill this
-       * reduces to obs[slot]. */
+       * max_obs]; for a static fill this reduces to obs[slot].
+       *
+       * Node 0 is the exception: the previous state is x(0), the current pose, and
+       * the matrix's first block holds the obstacle at state 1, not now. Using it
+       * evaluates the two sides of the constraint at different obstacle times and
+       * does so anti-conservatively for a closing obstacle, at the first and most
+       * actionable constraint in the horizon. The current-time position is
+       * recovered below. */
       const size_t prev_slot = (node >= 1) ? (slot - max_obs) : slot;
       /* If either this slot or the previous node's slot is unfilled (holds the far
        * sentinel), the pair does not describe the same obstacle across two nodes;
@@ -458,8 +471,33 @@ void ProxQP::setC(const MatrixXd & x)
         {
           obs_h_prev(slot) = 0.0;
         } else {
-          const double dxp = x(node, 0) - obs(prev_slot, 0);
-          const double dyp = x(node, 1) - obs(prev_slot, 1);
+          /* Obstacle position at the previous node's own time. For node 0 that is
+           * the current time, which the matrix carries no block for, so it is
+           * recovered by extending the first two blocks backward:
+           * o_0 = 2 o(block 0) - o(block 1). That is exact for a static fill,
+           * where the two blocks are equal and it returns o(block 0) unchanged,
+           * and exact for a constant-velocity fill. The clearance radius is a
+           * per-obstacle constant and is taken from the first block rather than
+           * extrapolated. */
+          double ox = obs(prev_slot, 0);
+          double oy = obs(prev_slot, 1);
+          if (node == 0 && Np >= 2) {
+            const size_t next_slot = slot + max_obs;
+            if (obs(next_slot, 0) < 0.5 * MPC::kObsFarSentinel) {
+              const double step_x = obs(slot, 0) - obs(next_slot, 0);
+              const double step_y = obs(slot, 1) - obs(next_slot, 1);
+              /* Extrapolation amplifies inter-block noise as 2 e_1 - e_2, so an
+               * implied displacement no obstacle could have travelled in one step
+               * is treated as noise and the first block is used as it stands. */
+              const double max_step = kMaxObsSpeed * dt;
+              if (step_x * step_x + step_y * step_y <= max_step * max_step) {
+                ox = obs(slot, 0) + step_x;
+                oy = obs(slot, 1) + step_y;
+              }
+            }
+          }
+          const double dxp = x(node, 0) - ox;
+          const double dyp = x(node, 1) - oy;
           const double norm_prev = sqrt(dxp * dxp + dyp * dyp);
           obs_h_prev(slot) = norm_prev - obs(prev_slot, 2);
           /* Second half of the linearization: the constraint is
