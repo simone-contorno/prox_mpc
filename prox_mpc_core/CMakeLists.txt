@@ -124,13 +124,14 @@ if(BUILD_TESTING)
   find_package(ament_cmake_gtest REQUIRED)
 
   # (a) model interface, (b) regression baseline, (c) custom model, (d) obstacle K,
-  # (e) ROS-facing utils helpers
+  # (e) ROS-facing utils helpers, (f) transactional solve/commit contract
   foreach(test_name
       test_model_interface
       test_mpc_regression
       test_custom_model
       test_obstacle_k
-      test_utils)
+      test_utils
+      test_transactional_solve)
     ament_add_gtest(${test_name} test/${test_name}.cpp)
     target_link_libraries(${test_name}
       ${PROJECT_NAME}
