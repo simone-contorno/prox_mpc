@@ -42,6 +42,25 @@ void getBound(Model & model, const std::string & var, size_t idx, double & low, 
   }
   ASSERT_TRUE(found) << "bound not declared: " << var << "[" << idx << "]";
 }
+
+// A four-state, two-control model that overrides nothing: no updatec/updateA/
+// updateB call matters here (getPlanarMapping() never solves), so they are
+// stubs. Used to pin Model::getPlanarMapping()'s default inference for a model
+// that declares no mapping of its own: state count > 3 infers a steering angle
+// at index 3, and control count > 1 infers its rate at control index 1.
+class BareFourStateModel : public Model
+{
+public:
+  BareFourStateModel()
+  {
+    setName("bare_four_state");
+    setN(4);
+    setM(2);
+  }
+  void updatec(double, VectorXd) override {}
+  void updateA(double) override {}
+  void updateB() override {}
+};
 }  // namespace
 
 TEST(ModelInterface, BicycleIdentityAndBounds)
@@ -280,4 +299,355 @@ TEST(ModelInterface, ToTwistSemantics)
   auto tw_b = bicycle.toTwist(ub);
   EXPECT_NEAR(tw_b.linear.x, tw_f.linear.x, kTol);
   EXPECT_NEAR(tw_b.angular.z, tw_f.angular.z, kTol);
+}
+
+// --- BicycleRearAxle: identity, bounds, residual and Jacobians --------------
+//
+// BicycleFrontAxle (via the Bicycle alias) is covered above; BicycleRearAxle's
+// own name, bounds and kinematics (v tan(delta)/L rather than v sin(delta)/L,
+// and the steering bound capped at 1.0 rad rather than pi/2) are untested
+// anywhere before this.
+
+TEST(ModelInterface, RearAxleIdentityAndBounds)
+{
+  BicycleRearAxle model;
+  EXPECT_EQ(model.getName(), "bicycle_rear_axle");
+  EXPECT_EQ(model.getN(), 4u);
+  EXPECT_EQ(model.getM(), 2u);
+  EXPECT_NEAR(model.getParams()(0), 1.6, kTol);  // wheelbase L
+
+  double low = 0.0;
+  double upp = 0.0;
+  // Capped at 1.0 rad (not the front axle's pi/2): the rear-axle yaw law
+  // v tan(delta)/L diverges as |delta| approaches pi/2.
+  getBound(model, "x", 3, low, upp);
+  EXPECT_NEAR(low, -1.0, kTol);
+  EXPECT_NEAR(upp, 1.0, kTol);
+  getBound(model, "u", 0, low, upp);
+  EXPECT_NEAR(low, -3.0, kTol);
+  EXPECT_NEAR(upp, 3.0, kTol);
+  getBound(model, "du", 0, low, upp);
+  EXPECT_NEAR(low, -0.5, kTol);
+  EXPECT_NEAR(upp, 0.5, kTol);
+}
+
+TEST(ModelInterface, RearAxleEulerResidualAndJacobians)
+{
+  BicycleRearAxle model;
+  const double dt = 0.1;
+  const double L = 1.6;
+
+  VectorXd x(4);
+  x << 1.0, 2.0, 0.3, 0.1;          // [x, y, theta, delta]
+  VectorXd u(2);
+  u << 0.7, 0.2;                    // [v, delta_dot]
+  VectorXd x_next(4);
+  x_next << 1.05, 2.07, 0.34, 0.12;
+
+  model.setX(x);
+  model.setU(u);
+  model.updatec(dt, x_next);
+  model.updateA(dt);
+  model.updateB();
+
+  const double v = u(0);
+  const double theta = x(2);
+  const double delta = x(3);
+  const double sec2 = 1.0 / (std::cos(delta) * std::cos(delta));
+
+  VectorXd c_exp(4);
+  c_exp << x(0) - x_next(0) + dt * v * std::cos(theta),
+    x(1) - x_next(1) + dt * v * std::sin(theta),
+    x(2) - x_next(2) + dt * v * std::tan(delta) / L,
+    x(3) - x_next(3) + dt * u(1);
+  for (int i = 0; i < 4; i++) {
+    EXPECT_NEAR(model.getc()(i), c_exp(i), kTol);
+  }
+
+  MatrixXd a_exp(4, 4);
+  a_exp << 1.0, 0.0, -dt * v * std::sin(theta), 0.0,
+    0.0, 1.0, dt * v * std::cos(theta), 0.0,
+    0.0, 0.0, 1.0, dt * v * sec2 / L,
+    0.0, 0.0, 0.0, 1.0;
+  for (int r = 0; r < 4; r++) {
+    for (int col = 0; col < 4; col++) {
+      EXPECT_NEAR(model.getA()(r, col), a_exp(r, col), kTol);
+    }
+  }
+
+  MatrixXd b_exp(4, 2);
+  b_exp << std::cos(theta), 0.0,
+    std::sin(theta), 0.0,
+    std::tan(delta) / L, 0.0,
+    0.0, 1.0;
+  for (int r = 0; r < 4; r++) {
+    for (int col = 0; col < 2; col++) {
+      EXPECT_NEAR(model.getB()(r, col), b_exp(r, col), kTol);
+    }
+  }
+}
+
+// The rear-axle yaw law diverges as |delta| -> pi/2, so a steering bound past
+// the 1.0 rad cap is rejected at configure() rather than silently poisoning A,
+// B and c with a near-infinite Jacobian entry.
+TEST(ModelInterface, RearAxleRejectsSteerBoundBeyondCap)
+{
+  BicycleRearAxle model;
+  EXPECT_THROW(model.configure({{"delta_max", 1.2}}), std::invalid_argument);
+  EXPECT_THROW(model.configure({{"delta_min", -1.4}}), std::invalid_argument);
+  EXPECT_NO_THROW(model.configure({{"delta_min", -1.0}, {"delta_max", 1.0}}));
+  double low = 0.0;
+  double upp = 0.0;
+  getBound(model, "x", 3, low, upp);
+  EXPECT_NEAR(low, -1.0, kTol);
+  EXPECT_NEAR(upp, 1.0, kTol);
+}
+
+// --- Model::getPlanarMapping() -----------------------------------------------
+//
+// New non-pure virtual (Wave 3). Pin the bundled models' declared mappings and
+// the base class default a model that overrides nothing falls back to.
+
+// Unicycle carries no steering state (n == 3), so the default mapping declares
+// none: the base class only infers a steering angle for a model with more than
+// three states.
+TEST(ModelInterface, UnicyclePlanarMappingDeclaresNoSteering)
+{
+  Unicycle model;
+  const auto mapping = model.getPlanarMapping();
+  EXPECT_EQ(mapping.idx_x, 0u);
+  EXPECT_EQ(mapping.idx_y, 1u);
+  EXPECT_EQ(mapping.idx_yaw, 2u);
+  EXPECT_EQ(mapping.idx_speed, 0u);
+  EXPECT_EQ(mapping.idx_steering, prox_mpc::PlanarMapping::kNoIndex);
+  EXPECT_EQ(mapping.idx_steer_rate, prox_mpc::PlanarMapping::kNoIndex);
+  EXPECT_NEAR(mapping.ref_offset_x, 0.0, kTol);
+  EXPECT_NEAR(mapping.ref_offset_y, 0.0, kTol);
+  EXPECT_NEAR(mapping.wheelbase, 0.0, kTol);
+}
+
+// A model with more than three states and more than one control that declares
+// no override still drives: the base class default infers a steering angle at
+// state index 3 and its rate at control index 1, with no reference offset and
+// no wheelbase declared.
+TEST(ModelInterface, DefaultPlanarMappingInfersSteeringForUndeclaredFourStateModel)
+{
+  BareFourStateModel model;
+  const auto mapping = model.getPlanarMapping();
+  EXPECT_EQ(mapping.idx_steering, 3u);
+  EXPECT_EQ(mapping.idx_steer_rate, 1u);
+  EXPECT_NEAR(mapping.ref_offset_x, 0.0, kTol);
+  EXPECT_NEAR(mapping.ref_offset_y, 0.0, kTol);
+  EXPECT_NEAR(mapping.wheelbase, 0.0, kTol);  // undeclared
+}
+
+// BicycleFrontAxle declares its reference point one wheelbase ahead of
+// base_link on the body x axis, which is also the wheelbase the steering
+// geometry uses.
+TEST(ModelInterface, FrontAxlePlanarMappingDeclaresForwardOffset)
+{
+  BicycleFrontAxle model;
+  const auto mapping = model.getPlanarMapping();
+  EXPECT_EQ(mapping.idx_steering, 3u);
+  EXPECT_EQ(mapping.idx_steer_rate, 1u);
+  EXPECT_NEAR(mapping.ref_offset_x, 1.6, kTol);
+  EXPECT_NEAR(mapping.ref_offset_y, 0.0, kTol);
+  EXPECT_NEAR(mapping.wheelbase, 1.6, kTol);
+}
+
+// BicycleRearAxle's state already refers to base_link, so its reference offset
+// is zero even though it declares a steering angle.
+TEST(ModelInterface, RearAxlePlanarMappingDeclaresNoOffset)
+{
+  BicycleRearAxle model;
+  const auto mapping = model.getPlanarMapping();
+  EXPECT_EQ(mapping.idx_steering, 3u);
+  EXPECT_EQ(mapping.idx_steer_rate, 1u);
+  EXPECT_NEAR(mapping.ref_offset_x, 0.0, kTol);
+  EXPECT_NEAR(mapping.ref_offset_y, 0.0, kTol);
+  EXPECT_NEAR(mapping.wheelbase, 1.6, kTol);
+}
+
+// The deprecated Bicycle alias does not override getPlanarMapping(), so it
+// inherits BicycleFrontAxle's, resolving the alias physically as well as by
+// dynamics.
+TEST(ModelInterface, BicycleAliasInheritsFrontAxlePlanarMapping)
+{
+  Bicycle alias;
+  BicycleFrontAxle front;
+  const auto ma = alias.getPlanarMapping();
+  const auto mf = front.getPlanarMapping();
+  EXPECT_EQ(ma.idx_steering, mf.idx_steering);
+  EXPECT_EQ(ma.idx_steer_rate, mf.idx_steer_rate);
+  EXPECT_NEAR(ma.ref_offset_x, mf.ref_offset_x, kTol);
+  EXPECT_NEAR(ma.wheelbase, mf.wheelbase, kTol);
+}
+
+// --- Finite-difference Jacobian checks ---------------------------------------
+//
+// The existing residual/Jacobian tests above compare updateA()/updateB()
+// against an independently hand-derived closed form. This instead compares
+// them against a numerical (central finite-difference) derivative of
+// updatec()'s own residual, which catches a mismatch between the two
+// hand-written analytic expressions (residual and Jacobian) even if both were
+// transcribed from the same wrong formula.
+
+// d(residual)/d(x_k) and d(residual)/d(u_k) via central differences, compared
+// against updateA()/updateB() at the same operating point.
+void checkFiniteDifferenceJacobian(Model & model, const VectorXd & x, const VectorXd & u)
+{
+  const double dt = 0.1;
+  const double eps = 1e-6;
+  const VectorXd x_next = VectorXd::Zero(x.size());  // held fixed; only c's x_k-dependence is probed
+
+  auto residual = [&](const VectorXd & xx, const VectorXd & uu) {
+      model.setX(xx);
+      model.setU(uu);
+      model.updatec(dt, x_next);
+      return model.getc();
+    };
+
+  model.setX(x);
+  model.setU(u);
+  model.updateA(dt);
+  model.updateB();
+  const MatrixXd A = model.getA();
+  const MatrixXd B = model.getB();
+
+  for (Eigen::Index j = 0; j < x.size(); ++j) {
+    VectorXd xp = x;
+    VectorXd xm = x;
+    xp(j) += eps;
+    xm(j) -= eps;
+    const VectorXd fd = (residual(xp, u) - residual(xm, u)) / (2.0 * eps);
+    for (Eigen::Index i = 0; i < x.size(); ++i) {
+      EXPECT_NEAR(A(i, j), fd(i), 1e-4) << "dA/dx mismatch at (" << i << "," << j << ")";
+    }
+  }
+  // updateB() returns the raw kinematics Jacobian df/du (proxqp.cpp scales it
+  // by dt externally when assembling the equality matrix, model->getB()*dt),
+  // while the residual c = x_k - x_next + dt*f(x_k, u_k) is what the finite
+  // difference below actually differentiates, so its du derivative is dt*B,
+  // not B itself.
+  for (Eigen::Index j = 0; j < u.size(); ++j) {
+    VectorXd up = u;
+    VectorXd um = u;
+    up(j) += eps;
+    um(j) -= eps;
+    const VectorXd fd = (residual(x, up) - residual(x, um)) / (2.0 * eps);
+    for (Eigen::Index i = 0; i < x.size(); ++i) {
+      EXPECT_NEAR(dt * B(i, j), fd(i), 1e-4) << "dB/du mismatch at (" << i << "," << j << ")";
+    }
+  }
+}
+
+TEST(ModelInterface, FrontAxleFiniteDifferenceJacobianMatchesAnalytic)
+{
+  BicycleFrontAxle model;
+  VectorXd x(4);
+  x << 1.0, 2.0, 0.3, 0.1;
+  VectorXd u(2);
+  u << 0.7, 0.2;
+  checkFiniteDifferenceJacobian(model, x, u);
+}
+
+TEST(ModelInterface, RearAxleFiniteDifferenceJacobianMatchesAnalytic)
+{
+  BicycleRearAxle model;
+  VectorXd x(4);
+  x << 1.0, 2.0, 0.3, 0.1;
+  VectorXd u(2);
+  u << 0.7, 0.2;
+  checkFiniteDifferenceJacobian(model, x, u);
+}
+
+// --- Negative steering --------------------------------------------------------
+//
+// ToTwistSemantics above exercises only delta = +0.2; the sign of the yaw rate
+// (and, for the front axle, of the projected linear speed) must flip with it.
+
+TEST(ModelInterface, ToTwistWithNegativeSteering)
+{
+  const double L = 1.6;
+  const double delta = -0.25;
+  VectorXd xb(4);
+  xb << 0.0, 0.0, 0.0, delta;
+  VectorXd ub(2);
+  ub << 0.7, -0.1;
+
+  BicycleFrontAxle front;
+  front.setX(xb);
+  const auto tw_f = front.toTwist(ub);
+  EXPECT_NEAR(tw_f.linear.x, 0.7 * std::cos(delta), kTol);
+  EXPECT_NEAR(tw_f.angular.z, 0.7 * std::sin(delta) / L, kTol);
+  EXPECT_LT(tw_f.angular.z, 0.0);  // negative steering yaws the opposite way
+
+  BicycleRearAxle rear;
+  rear.setX(xb);
+  const auto tw_r = rear.toTwist(ub);
+  EXPECT_NEAR(tw_r.linear.x, 0.7, kTol);
+  EXPECT_NEAR(tw_r.angular.z, 0.7 * std::tan(delta) / L, kTol);
+  EXPECT_LT(tw_r.angular.z, 0.0);
+}
+
+// --- Twist integration vs. state propagation at the reference point ---------
+//
+// For a rigid body, the reference point's world-frame velocity is the body
+// twist's linear velocity (rotated into world) plus the rotational term of the
+// offset: d/dt p_ref = R(theta) * v_body + omega * (offset rotated 90 deg).
+// For the front axle this is an exact algebraic identity given v_body =
+// v cos(delta), omega = v sin(delta)/L and offset = (L, 0):
+//   xdot = v cos(delta) cos(theta) - omega L sin(theta) = v cos(theta + delta)
+//   ydot = v cos(delta) sin(theta) + omega L cos(theta) = v sin(theta + delta)
+// which is exactly the model's own propagation (BicycleEulerResidualAndJacobians
+// above). This cross-checks toTwist() against updateA()/updateB()/updatec()
+// independently of both: a bug that corrupted one but not the other would break
+// this identity even if each half's own tests still passed.
+TEST(ModelInterface, FrontAxleTwistIntegrationMatchesStatePropagation)
+{
+  const double L = 1.6;
+  const double theta = 0.5;
+  const double delta = 0.3;
+  const double v = 0.9;
+
+  VectorXd xb(4);
+  xb << 0.0, 0.0, theta, delta;
+  BicycleFrontAxle model;
+  model.setX(xb);
+  VectorXd u(2);
+  u << v, 0.0;
+  const auto twist = model.toTwist(u);
+
+  const double xdot_from_twist =
+    twist.linear.x * std::cos(theta) - twist.angular.z * L * std::sin(theta);
+  const double ydot_from_twist =
+    twist.linear.x * std::sin(theta) + twist.angular.z * L * std::cos(theta);
+
+  EXPECT_NEAR(xdot_from_twist, v * std::cos(theta + delta), 1e-9);
+  EXPECT_NEAR(ydot_from_twist, v * std::sin(theta + delta), 1e-9);
+}
+
+// The rear axle's reference point is base_link itself (zero offset), so its
+// twist trivially equals its own state velocity with no rotational offset term.
+TEST(ModelInterface, RearAxleTwistIntegrationMatchesStatePropagation)
+{
+  const double L = 1.6;
+  const double theta = 0.5;
+  const double delta = 0.3;
+  const double v = 0.9;
+
+  VectorXd xb(4);
+  xb << 0.0, 0.0, theta, delta;
+  BicycleRearAxle model;
+  model.setX(xb);
+  VectorXd u(2);
+  u << v, 0.0;
+  const auto twist = model.toTwist(u);
+
+  const double xdot_from_twist = twist.linear.x * std::cos(theta);
+  const double ydot_from_twist = twist.linear.x * std::sin(theta);
+
+  EXPECT_NEAR(xdot_from_twist, v * std::cos(theta), 1e-9);
+  EXPECT_NEAR(ydot_from_twist, v * std::sin(theta), 1e-9);
+  EXPECT_NEAR(twist.angular.z, v * std::tan(delta) / L, 1e-9);
 }
