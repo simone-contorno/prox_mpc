@@ -468,3 +468,136 @@ TEST(ObstacleK, MultiObstacleAndSentinelReducesToK1)
     EXPECT_NEAR(s_k2.last_x(r, 1), s_k1.last_x(r, 1), 1e-3);
   }
 }
+
+// --- Current-time obstacle reconstruction at node 0 (Wave 3) ----------------
+//
+// The matrix's row 0 (block 0) carries the obstacle's position one step ahead
+// (paired with x_sol row 1's time), not now, so the first coupled constraint's
+// "previous node" side -- which must compare against the current pose x(0) --
+// reconstructs the current-time position as 2*block0 - block1 rather than using
+// block0 directly (proxqp.cpp's node == 0 branch). A two-node constant-velocity
+// fill exercises the reconstruction directly, something no existing test above
+// does: every other fill in this file is either fully static (uniform across
+// nodes) or discontinuous well past node 0.
+
+// A two-node constant-velocity obstacle fill: node 0's row (block 0, paired
+// with x_sol row 1) and node 1's row (block 1, paired with x_sol row 2) hold
+// positions one dt apart; the reconstructed current-time position is
+// 2*block0 - block1, one more step back along the same line. Every other node
+// stays at the far sentinel (single transient obstacle, not a persistent one).
+MatrixXd makeConstantVelocityAtStart(
+  size_t np, size_t k, double ox1, double oy1, double vx, double dt, double d_safe)
+{
+  MatrixXd obs = makeObs(np, k);
+  obs(0, 0) = ox1;
+  obs(0, 1) = oy1;
+  obs(0, 2) = d_safe;
+  obs(1, 0) = ox1 + vx * dt;
+  obs(1, 1) = oy1;
+  obs(1, 2) = d_safe;
+  return obs;
+}
+
+// Placing the robot exactly where the RECONSTRUCTED current-time obstacle
+// position is produces a materially harder-to-satisfy first coupled constraint
+// than placing it at BLOCK 0's raw (one-step-ahead) position -- even though the
+// two poses differ by exactly one obstacle step, which is also the distance
+// between block 0 and the reconstructed point. Algebraically, the two
+// scenarios' low() bounds at row 0 differ by exactly (1 - gamma) * (obs_h_prev
+// difference), a fixed 0.45 here, independent of every other term (obs_h(0) and
+// w(0) are identical symbols in both and cancel in the difference): the
+// reconstructed-position case sees a clearance-violating "now" (obs_h_prev =
+// -d_safe) while the block-0-value case sees an apparent clear "now"
+// (obs_h_prev = step - d_safe > 0). If the (buggy) pre-fix behavior had instead
+// used block 0 directly as "now", the two scenarios below would swap which one
+// reports the larger slack.
+TEST(ObstacleK, FirstCoupledConstraintUsesReconstructedCurrentTimeObstacle)
+{
+  const size_t k = 1;
+  const double ox1 = 2.9;   // block 0: obstacle position one step ahead of now
+  const double vx = 9.0;    // implied obstacle speed [m/s], within kMaxObsSpeed
+  const double d_safe = 0.5;
+  // Reconstructed current-time position: 2*block0 - block1 = ox1 - vx*kDt = 2.0.
+  const double reconstructed_x = ox1 - vx * kDt;
+
+  auto run = [&](double pose_x) {
+      auto mpc = makeUnicycleMpc(k, 100.0, 0.5);   // K=1, cbf_gamma = 0.5
+      MatrixXd obs = makeConstantVelocityAtStart(kNp, k, ox1, 0.0, vx, kDt, d_safe);
+      mpc->setObs(obs);
+      mpc->setPose((VectorXd(3) << pose_x, 0.0, 0.0).finished());
+      mpc->solve();
+      return mpc;
+    };
+
+  auto mpc_at_reconstructed = run(reconstructed_x);
+  auto mpc_at_block0_value = run(ox1);
+
+  const auto status_reconstructed = mpc_at_reconstructed->qp_info.status;
+  const auto status_block0 = mpc_at_block0_value->qp_info.status;
+  const double slack_reconstructed = mpc_at_reconstructed->getMaxObstacleSlack();
+  const double slack_block0 = mpc_at_block0_value->getMaxObstacleSlack();
+  RecordProperty("qp_status_at_reconstructed_position", static_cast<int>(status_reconstructed));
+  RecordProperty("qp_status_at_block0_value", static_cast<int>(status_block0));
+  RecordProperty("max_obstacle_slack_at_reconstructed_position",
+    std::to_string(slack_reconstructed));
+  RecordProperty("max_obstacle_slack_at_block0_value", std::to_string(slack_block0));
+
+  EXPECT_EQ(status_reconstructed, proxsuite::proxqp::QPSolverOutput::PROXQP_SOLVED);
+  EXPECT_EQ(status_block0, proxsuite::proxqp::QPSolverOutput::PROXQP_SOLVED);
+  // The pose sitting at block 0's raw value is the one the reconstruction
+  // reports clearance for, so it should demand no more slack than the pose
+  // sitting at the reconstructed point; a strict reversal (reconstructed
+  // scenario the harder one) would indicate block 0 is being used as "now".
+  EXPECT_GE(slack_block0 + 1e-9, slack_reconstructed);
+}
+
+// Finite-difference Jacobian check of the coupled constraint's gradient columns
+// (node >= 1, where they are written -- node 0's are inert because x(0) is
+// pinned, per the comment at proxqp.cpp). setC() writes -( 1 - gamma) * grad h_k
+// into the position columns of the previous node; this compares that analytic
+// coefficient against a central finite difference of the closed-form clearance
+// h_k(x) = ||x - o|| - d_safe the code implements, at the same operating point.
+TEST(ObstacleK, CoupledConstraintGradientMatchesFiniteDifference)
+{
+  const size_t k = 1;
+  const double gamma = 0.5;
+  const double d_safe = 0.5;
+  const double eps = 1e-6;
+
+  auto mpc = makeUnicycleMpc(k, 100.0, gamma);
+  // Real obstacle data at node 0 (block 0, prev-side for node 1) and node 1
+  // (block 1, own side for node 1), so node 1's coupled row's gradient columns
+  // are written (node >= 1) against a non-reconstructed, ordinary prev slot.
+  const double ox = 2.5;
+  const double oy = 0.3;
+  MatrixXd obs = makeConstantVelocityAtStart(kNp, k, ox, oy, 3.0, kDt, d_safe);
+  auto solver = mpc->getSolver();
+  solver->setObs(obs);
+
+  MatrixXd x = MatrixXd::Zero(kNp + 1, 3);
+  x(0, 0) = 0.0; x(0, 1) = 0.0; x(0, 2) = 0.0;
+  x(1, 0) = 1.7; x(1, 1) = 0.6; x(1, 2) = 0.1;   // node 1's own position
+  x(2, 0) = 2.6; x(2, 1) = 0.5; x(2, 2) = 0.2;
+  solver->setC(x);
+
+  const MatrixXd & C = solver->getC();
+  const std::vector<size_t> & ineq_idx = solver->getIneqIdx();
+  const size_t obs_start = ineq_idx[ineq_idx.size() - 3];
+  const size_t row = obs_start + 1;   // node 1's row (slot 1 of Np*K, K=1)
+  const size_t col_prev = 3;          // position block of node 1 (x_start=0, n=3)
+
+  const double gx_code = C(row, col_prev);
+  const double gy_code = C(row, col_prev + 1);
+
+  // h_prev(x) = ||x(0:2) - o|| - d_safe, at the SAME obstacle block 0's setObs()
+  // resolves node 1's prev side to (ordinary, non-reconstructed since node >= 1).
+  auto h_prev = [&](double px, double py) {return std::hypot(px - ox, py - oy) - d_safe;};
+  const double fd_gx =
+    (h_prev(x(1, 0) + eps, x(1, 1)) - h_prev(x(1, 0) - eps, x(1, 1))) / (2.0 * eps);
+  const double fd_gy =
+    (h_prev(x(1, 0), x(1, 1) + eps) - h_prev(x(1, 0), x(1, 1) - eps)) / (2.0 * eps);
+  const double gain = -(1.0 - gamma);
+
+  EXPECT_NEAR(gx_code, gain * fd_gx, 1e-6);
+  EXPECT_NEAR(gy_code, gain * fd_gy, 1e-6);
+}
