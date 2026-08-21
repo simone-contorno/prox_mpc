@@ -190,19 +190,34 @@ The controller owns the reaction so the policy stays decoupled from the engine.
 
 On a non-converged cycle the controller does **not** command a hard zero, which
 would be an instantaneous, dynamically infeasible stop.
-Instead it decelerates toward zero at the robot's deceleration limit, read as the
-magnitude of the model's control-rate (`du`) bounds for the speed and yaw
-channels, $a_\text{dec} = \lvert a_\text{min} \rvert$, so over one step
+Instead it ramps the model's own controls toward zero under the model's own
+control-rate (`du`) bounds, respecting each bound's sign asymmetry, and maps
+the ramped controls through the model's `toTwist()` - the same seam the
+accepted command path uses, rather than writing `angular.z` directly.
+This matters because the bicycle's second control is a steering rate, not a
+body yaw rate: `du[1]` bounds `delta_dot` (a steering acceleration, not a yaw
+acceleration), so only a control-space ramp maps correctly for that model,
+while the unicycle's second control already *is* a body yaw rate and the two
+forms coincide for it.
 
-$$
-v_\text{cmd} = \max\!\big(0,\; v_\text{prev} - a_\text{dec}\, \Delta t\big),
-$$
+The speed channel ramps down from the velocity the `controller_server`
+measured for this cycle (RPP/MPPI style), so the brake tracks the robot's
+actual speed rather than a stale command; a non-finite measurement (NaN or
+$\pm\infty$) yields exactly zero, so an infinite measured velocity can never be
+ramped into the published command.
+The remaining channels have no measurement and ramp from their last commanded
+value.
+Each step advances by `brake_period_s` when the operator set a positive value,
+otherwise by the measured inter-cycle period, clamped between the configured
+`dt` and twice `dt` so a server running slower than `dt` still brakes at the
+model's declared rate while a stale measurement cannot collapse the ramp into
+one step.
+A model that declares a steering state has its belief decayed toward zero at
+its own declared steering-rate bound on every rejected cycle, rather than
+frozen at the last accepted value, so the next solve does not linearize about
+an angle a downstream twist-to-steering converter has already moved the wheels
+away from under the braking command.
 
-and the yaw rate is ramped toward zero the same way (respecting its sign).
-$v_\text{prev}$ is the velocity the `controller_server` measured for this cycle,
-not the previous command, so the ramp starts from the robot's actual speed; a
-non-finite measurement (NaN or $\pm\infty$) yields exactly zero, so an infinite
-measured velocity can never be ramped into the published command.
 Because a zero deceleration limit would leave the ramp stuck at the current
 velocity forever, a model that declares no `du` bound for either channel (or no
 `u[0]` bound for the speed cap) fails `configure` with a
