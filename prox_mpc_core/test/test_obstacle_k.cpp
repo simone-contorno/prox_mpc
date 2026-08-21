@@ -548,6 +548,43 @@ TEST(ObstacleK, FirstCoupledConstraintUsesReconstructedCurrentTimeObstacle)
   EXPECT_NEAR(expected_low - block0_as_now_low, (1.0 - cbf_gamma) * std::abs(vx) * kDt, 1e-12);
 }
 
+// An implied inter-block step no obstacle could have travelled in one dt is
+// treated as noise, not motion: above kMaxObsSpeed the backward extrapolation
+// is skipped and the first block is used as the current-time position. The
+// fallback is silent, so the assembled bound is the only place it is
+// observable. Same closed-form reading as the case above, with the implied
+// speed raised past the bound: 20 m/s over dt = 0.1 s implies a 2 m step
+// against a kMaxObsSpeed * dt ceiling of 1 m.
+TEST(ObstacleK, ImplausibleObstacleStepFallsBackToTheFirstBlock)
+{
+  const size_t k = 1;
+  const double ox1 = 2.9;
+  const double vx = -20.0;     // implied speed past kMaxObsSpeed = 10.0 m/s
+  const double d_safe = 0.5;
+  const double cbf_gamma = 0.5;
+
+  auto mpc = makeUnicycleMpc(k, 100.0, cbf_gamma);
+  auto solver = mpc->getSolver();
+  solver->setObs(makeConstantVelocityAtStart(kNp, k, ox1, 0.0, vx, kDt, d_safe));
+
+  const MatrixXd x = MatrixXd::Zero(kNp + 1, 3);
+  solver->setC(x);
+  solver->setd(x, MatrixXd::Zero(kNc, 2), VectorXd::Zero(2), VectorXd::Zero(kNp * k));
+
+  const std::vector<size_t> & ineq_idx = solver->getIneqIdx();
+  const size_t obs_start = ineq_idx[ineq_idx.size() - 3];
+  const double h = ox1 - d_safe;
+  // Block 0 used unchanged as "now", so both sides read the same position.
+  const double expected_low = (1.0 - cbf_gamma) * (ox1 - d_safe) - h;
+  EXPECT_NEAR(solver->getLow()(static_cast<Eigen::Index>(obs_start)), expected_low, 1e-12);
+
+  // What the extrapolation would have produced had the guard not fired, kept
+  // here so a widened bound shows up as a failure rather than as no change.
+  const double extrapolated = ox1 - vx * kDt;
+  const double unguarded_low = (1.0 - cbf_gamma) * (extrapolated - d_safe) - h;
+  EXPECT_GT(std::abs(unguarded_low - expected_low), 1.0);
+}
+
 // Finite-difference Jacobian check of the coupled constraint's gradient columns
 // (node >= 1, where they are written -- node 0's are inert because x(0) is
 // pinned, per the comment at proxqp.cpp). setC() writes -( 1 - gamma) * grad h_k

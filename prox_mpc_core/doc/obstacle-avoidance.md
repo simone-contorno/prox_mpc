@@ -215,8 +215,23 @@ fill each node already carries a different, tracked position for the same
 slot. Node $k = 0$ is the fixed current pose, for which the obstacle matrix
 carries no dedicated block; its position is reconstructed by extrapolating the
 first two blocks backward, $o_0 = 2\,o(\text{block }0) - o(\text{block }1)$,
-exact for both the static and the constant-velocity fill, falling back to the
-first block unchanged when the implied obstacle speed exceeds a sanity bound.
+exact for both the static and the constant-velocity fill.
+
+That extrapolation amplifies whatever error the two blocks carry, as
+$2 e_1 - e_2$, so it is applied only where the two blocks describe motion
+rather than noise.
+The test is the implied inter-block displacement: above `kMaxObsSpeed * dt`, a
+compile-time constant fixed at `10.0` m/s in `proxqp.cpp`, the step is treated
+as noise and the first block is used unchanged, which is the pre-reconstruction
+behaviour for that slot.
+The bound is a sanity limit rather than a tuning knob - nothing this controller
+plans around, tracked or scanned, closes at ten metres per second - and it is
+deliberately far above any real obstacle speed so that it never rejects genuine
+motion.
+The fallback is silent: it is a per-slot, per-cycle decision on the QP assembly
+hot path, so it emits no log line, and a tracker publishing an apparent step
+above the bound is corrected by the constraint's own conservatism rather than
+reported.
 The previous-node gradient term $n_k^\top \Delta p_k$ is written only for
 $k \ge 1$: $\Delta p_0$ is pinned to zero by the initial-state equality, so a
 node-0 gradient column could never influence the solution and would only
