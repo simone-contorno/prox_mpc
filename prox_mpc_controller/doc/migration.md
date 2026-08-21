@@ -147,7 +147,7 @@ will differ from 1.0.0.
 
 ## Object layout
 
-`ProxMpcController` gains two protected methods and eleven protected members,
+`ProxMpcController` gains two protected methods and eighteen protected members,
 which changes `sizeof(ProxMpcController)`. The pluginlib load path is unaffected,
 because the class is allocated and freed inside the same library. A downstream
 package that links the exported target and derives from or holds
