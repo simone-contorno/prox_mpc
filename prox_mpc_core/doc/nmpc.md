@@ -181,17 +181,37 @@ w \mathrel{+}= \Delta w,
 $$
 
 The retry count is bounded by `max_iter_sqp` (100 by default) and, when set, by
-the `max_solve_time` wall-clock budget, so a failing sub-problem cannot overrun
-the control cycle. Because the loop terminates on the first converged QP rather
-than on an increment-norm test, it is a real-time-iteration scheme: each cycle
-contributes one linearization, and a nonlinear model refines its linearization
-across successive control cycles through the warm start rather than within a
-single call.
+the `max_solve_time` wall-clock budget.
+The budget is tested only between SQP sub-problem solves, never while one is in
+flight, so it cannot interrupt a slow QP and does not bound worst-case cycle
+latency in either direction: a loop that exceeds it simply stops early with
+whatever status the last QP returned, which is `PROXQP_SOLVED` when that QP
+itself converged.
+The bound that genuinely holds every cycle is the iteration caps, not the
+wall-clock budget.
+Because the loop terminates on the first converged QP **sub-problem** rather
+than on a nonlinear increment-norm, KKT, or merit-function test, the nominal
+cycle described above - one linearize-solve-update pass - is a real-time-
+iteration scheme: each such cycle contributes one linearization, and a
+nonlinear model refines its linearization across successive control cycles
+through the warm start rather than within a single call.
+`max_iter_sqp = 1` makes that scheme unconditional, independent of
+`max_solve_time`: exactly one QP sub-problem per cycle, whether or not it
+converges.
 
 ### Convergence and failure reporting
 
-After the loop, `qp_info.status` equals `PROXQP_SOLVED` only when the SQP
-converged; `sqp_iter` and `qp_iter_ext` report the iteration counts.
+After the loop, `qp_info.status` equals `PROXQP_SOLVED` when the last QP
+**sub-problem** converged - a statement about that one convex QP, not about
+nonlinear convergence of the original problem.
+No nonlinear residual, KKT, merit-function, or increment-norm test exists
+anywhere in the loop, so `PROXQP_SOLVED` is the only convergence signal the
+caller can observe.
+It is also what `prox_mpc_msgs/SolverDiagnostics`'s `converged` field is
+derived from, gated further by the controller's own finiteness and
+command-acceptance checks before publication (see
+[`prox_mpc_controller/doc/architecture.md`](../../prox_mpc_controller/doc/architecture.md)).
+`sqp_iter` and `qp_iter_ext` report the iteration counts.
 On non-convergence `MPC::solve` takes **no safety action**: it returns the last
 (non-converged) iterate, keeps the previous command as the warm-start reference,
 and leaves the fallback to the caller.

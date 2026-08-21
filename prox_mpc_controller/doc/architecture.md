@@ -241,10 +241,11 @@ and fail the lifecycle transition.
 | `max_int_iter_qp` | int | 1500 | ProxQP internal-iteration cap. Must be `>= 1`; a lower value fails `configure()`. |
 | `max_ext_iter_qp` | int | 10000 | ProxQP external-iteration cap. Must be `>= 1`; a lower value fails `configure()`. |
 | `max_iter_sqp` | int | 100 | SQP-iteration cap per cycle. Must be `>= 1`; a lower value fails `configure()`. The caps reach the core as `size_t`, so a negative value would wrap to an effectively unbounded loop, and ProxQP rejects a zero cap outright, so both are fatal rather than clamped. |
-| `max_solve_time` | double | 0.0 | Wall-clock budget in seconds for the whole SQP loop; 0.0 disables it (the iteration caps are then the only bound). On timeout the solve reports non-convergence and the cycle brakes. Floored at 0.0. |
+| `max_solve_time` | double | 0.0 | Wall-clock budget in seconds for the whole SQP loop; 0.0 disables it (the iteration caps are then the only bound). Tested only between SQP sub-problem solves, so it cannot interrupt one already in flight and does not bound worst-case cycle latency in either direction; a loop that exceeds it stops with whatever status the last QP returned, which is `PROXQP_SOLVED` when that QP itself converged. The bound that genuinely holds every cycle is the iteration caps (`max_iter_sqp = 1` gives a bounded real-time iteration). Floored at 0.0. |
 | `qp_type` | bool | false | QP backend: false = sparse, true = dense. |
 | `guess` | bool | true | ProxQP initial-guess strategy: equality-constrained (`true`) or none (`false`). The QP is not seeded with the previous increment; see [nmpc.md](../../prox_mpc_core/doc/nmpc.md). |
 | `max_solver_failures` | int | 3 | Consecutive non-converged solves before escalating to a recovery. |
+| `brake_period_s` | double | 0.0 | Step [s] the deceleration ramp advances by on a braking cycle. 0.0 measures the inter-cycle period instead (clamped between `dt` and twice `dt`, so a slow server still brakes at the model's declared rate and a stale measurement cannot collapse the ramp into one step); a positive value overrides the measurement and is used as-is. |
 
 `max_solve_time` defaults to `0.0` (disabled) in
 [config/prox_mpc_controller.yaml](../config/prox_mpc_controller.yaml), so the
