@@ -169,7 +169,9 @@ What the stack supports today, stated plainly rather than left implicit.
   own pose orientations into reverse travel and truncates the reference at the
   first direction change rather than following every cusp in the plan - the
   same bounded strategy `regulated_pure_pursuit_controller` uses.
-  Past the plan end, the terminal heading holds the final segment's tangent.
+  Past the plan end the reference pose is the goal pose, orientation included,
+  when the goal checker publishes a yaw tolerance it enforces; without one it
+  holds the final segment's tangent.
 - **Model state layout.** Any `prox_mpc::Model` that enables obstacle avoidance
   must carry its planar position at state columns 0 and 1: the
   obstacle-constraint assembly in `prox_mpc_core` reads those two columns
@@ -200,11 +202,21 @@ What the stack supports today, stated plainly rather than left implicit.
 - **Footprint-veto backstop.** The endpoint footprint veto (see
   [Cross-cutting conventions](#cross-cutting-conventions) below and
   [prox-mpc.md](prox-mpc.md#4-prox_mpc_controller---the-nav2-plugin)) checks
-  the rasterised footprint perimeter at one predicted pose; it is a useful
-  backstop only when costmap inflation is sized to the robot's real footprint
-  and the local costmap's unknown-space tracking matches the deployment, since
-  the in-loop keep-out half-planes - not the veto - are what cover a lethal
-  cell the veto's own masking may miss.
+  the rasterised footprint perimeter at one predicted pose, and applies
+  upstream Nav2's own collision policy: unknown space is not a collision when
+  the costmap tracks it, and everything else is judged at `LETHAL_OBSTACLE`.
+  Nav2's doc comment describes `footprintCostAtPose` as returning the maximum
+  cost under the footprint, which would let an adjoining unknown cell (255)
+  mask a lethal one (254). Measured against the installed `nav2_costmap_2d`
+  (1.3.12+) it does not: a footprint spanning both reports the lethal cost and
+  the veto still fires, which the regression test
+  `FootprintVetoStillFiresWhenLethalAdjoinsUnknown` pins so a future Nav2
+  release that reintroduces the masking shows up as a failure rather than a
+  silent divergence. It is still only a backstop - it checks one predicted
+  pose, so it is useful only when costmap inflation is sized to the robot's
+  real footprint and the local costmap's unknown-space tracking matches the
+  deployment, and the in-loop keep-out half-planes are what constrain every
+  node of the horizon.
 - **`prox_mpc_core/Bicycle`.** A deprecated alias for `BicycleFrontAxle` that
   warns once per construction; removed in a future major release, whose exact
   number is fixed against the landed diff rather than pre-announced (see
