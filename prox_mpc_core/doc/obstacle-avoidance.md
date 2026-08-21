@@ -268,9 +268,10 @@ coupling on whatever positions it is handed.
 Two fills exist on the controller side, both writing the same `setObs` contract:
 
 - **static (costmap)** - the default. For each node the controller scans the
-  local costmap around the robot's *reference* position and emits the nearest
-  occupied cells. The obstacle position varies across nodes only because the robot
-  moves, so the term constrains the robot against where obstacles are *now*.
+  local costmap around the robot's *nominal predicted* position for that node
+  and emits the nearest occupied cells. The obstacle position varies across
+  nodes only because the robot moves, so the term constrains the robot against
+  where obstacles are *now*.
 - **predictive (tracked obstacles)** - opt-in. A dynamic track is propagated
   along its tracker-sampled predicted trajectory (the IMM CV+CTRV forward
   prediction), or a constant-velocity ray $o_{k,j} = p_j + v_j\,\Delta t_k$ as the
@@ -324,8 +325,14 @@ ProxMPC is.
 
 ## Numerical guard
 
-When the predicted position coincides with the obstacle, $\lVert p_k - o \rVert$
-is zero and the normal $n = (p_k - o) / \lVert p_k - o \rVert$ is undefined.
-The norm is therefore floored at a small constant before the division, which
-avoids injecting `NaN` into the QP at the cost of an arbitrary (but bounded)
-normal direction in that degenerate instant.
+When the predicted position coincides with, or nearly coincides with, the
+obstacle, $\lVert p_k - o \rVert$ is at or near zero and the normal
+$n = (p_k - o) / \lVert p_k - o \rVert$ carries no reliable escape direction:
+dividing by a merely-floored norm would still emit a near-zero or non-unit
+vector, silently down-scaling the constraint row instead of fixing it.
+Below the same small-norm threshold the code therefore substitutes a
+deterministic unit fallback direction ($n = (1, 0)$) rather than dividing at
+all. The constraint row still carries a full-magnitude, if arbitrary, escape
+direction in that degenerate instant, and the slack is what actually resists a
+collision until the robot's own motion breaks the coincidence and a real
+gradient returns.
