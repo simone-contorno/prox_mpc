@@ -73,6 +73,7 @@ public:
   /* Accessors for the assembled inequality system (valid after a solve()). */
   const MatrixXd & getC() const {return C;}
   const std::vector<size_t> & getIneqIdx() const {return ineq_idx;}
+  const VectorXd & getLow() const {return low;}
   size_t getWStart() const {return w_start;}
   size_t getNDvars() const {return n_dvars;}
   size_t getMaxObs() const {return max_obs;}

@@ -498,57 +498,54 @@ MatrixXd makeConstantVelocityAtStart(
   return obs;
 }
 
-// Placing the robot exactly where the RECONSTRUCTED current-time obstacle
-// position is produces a materially harder-to-satisfy first coupled constraint
-// than placing it at BLOCK 0's raw (one-step-ahead) position -- even though the
-// two poses differ by exactly one obstacle step, which is also the distance
-// between block 0 and the reconstructed point. Algebraically, the two
-// scenarios' low() bounds at row 0 differ by exactly (1 - gamma) * (obs_h_prev
-// difference), a fixed 0.45 here, independent of every other term (obs_h(0) and
-// w(0) are identical symbols in both and cancel in the difference): the
-// reconstructed-position case sees a clearance-violating "now" (obs_h_prev =
-// -d_safe) while the block-0-value case sees an apparent clear "now"
-// (obs_h_prev = step - d_safe > 0). If the (buggy) pre-fix behavior had instead
-// used block 0 directly as "now", the two scenarios below would swap which one
-// reports the larger slack.
+// The first coupled row is bounded against the obstacle's position NOW, which
+// the matrix carries no block for and which is recovered as
+// 2 * block0 - block1. The bound is read straight out of the assembled system
+// rather than inferred from the solution: the coupled row is absorbed by its
+// slack at any shipped slack weight, so no closed-loop quantity moves and an
+// ordering between two scenarios' slacks is satisfied whether the
+// reconstruction runs or not.
+//
+// setC() and setd() are called directly on a chosen iterate so every term of
+// low(row 0) = (1 - gamma) * h_prev(0) - h(0) - w(0) is closed-form:
+//   h(0)      = ||x(1) - block0|| - d_safe            (node 0 constrains x(1))
+//   h_prev(0) = ||x(0) - (2 * block0 - block1)|| - d_safe
+//   w(0)      = 0
+// With the robot at the origin, a head-on obstacle closing at 0.5 m/s and
+// gamma = 0.5, that is -1.175. Bounding against block0 as though it were the
+// current position - which is what happens without the reconstruction - gives
+// -1.200 instead: the reconstruction is worth exactly
+// (1 - gamma) * v_obs * dt = +0.025 of clearance floor here.
 TEST(ObstacleK, FirstCoupledConstraintUsesReconstructedCurrentTimeObstacle)
 {
   const size_t k = 1;
-  const double ox1 = 2.9;   // block 0: obstacle position one step ahead of now
-  const double vx = 9.0;    // implied obstacle speed [m/s], within kMaxObsSpeed
+  const double ox1 = 2.9;      // block 0: obstacle position one step ahead of now
+  const double vx = -0.5;      // closing head-on [m/s], well within kMaxObsSpeed
   const double d_safe = 0.5;
-  // Reconstructed current-time position: 2*block0 - block1 = ox1 - vx*kDt = 2.0.
-  const double reconstructed_x = ox1 - vx * kDt;
+  const double cbf_gamma = 0.5;
 
-  auto run = [&](double pose_x) {
-      auto mpc = makeUnicycleMpc(k, 100.0, 0.5);   // K=1, cbf_gamma = 0.5
-      MatrixXd obs = makeConstantVelocityAtStart(kNp, k, ox1, 0.0, vx, kDt, d_safe);
-      mpc->setObs(obs);
-      mpc->setPose((VectorXd(3) << pose_x, 0.0, 0.0).finished());
-      mpc->solve();
-      return mpc;
-    };
+  auto mpc = makeUnicycleMpc(k, 100.0, cbf_gamma);
+  auto solver = mpc->getSolver();
+  solver->setObs(makeConstantVelocityAtStart(kNp, k, ox1, 0.0, vx, kDt, d_safe));
 
-  auto mpc_at_reconstructed = run(reconstructed_x);
-  auto mpc_at_block0_value = run(ox1);
+  // Robot at the origin, and node 1 there too: the iterate is what makes every
+  // term closed-form, not a solution.
+  const MatrixXd x = MatrixXd::Zero(kNp + 1, 3);
+  solver->setC(x);
+  solver->setd(x, MatrixXd::Zero(kNc, 2), VectorXd::Zero(2), VectorXd::Zero(kNp * k));
 
-  const auto status_reconstructed = mpc_at_reconstructed->qp_info.status;
-  const auto status_block0 = mpc_at_block0_value->qp_info.status;
-  const double slack_reconstructed = mpc_at_reconstructed->getMaxObstacleSlack();
-  const double slack_block0 = mpc_at_block0_value->getMaxObstacleSlack();
-  RecordProperty("qp_status_at_reconstructed_position", static_cast<int>(status_reconstructed));
-  RecordProperty("qp_status_at_block0_value", static_cast<int>(status_block0));
-  RecordProperty("max_obstacle_slack_at_reconstructed_position",
-    std::to_string(slack_reconstructed));
-  RecordProperty("max_obstacle_slack_at_block0_value", std::to_string(slack_block0));
+  const std::vector<size_t> & ineq_idx = solver->getIneqIdx();
+  const size_t obs_start = ineq_idx[ineq_idx.size() - 3];
+  const double reconstructed_x = ox1 - vx * kDt;   // 2 * block0 - block1
+  const double h = ox1 - d_safe;
+  const double h_prev = reconstructed_x - d_safe;
+  const double expected_low = (1.0 - cbf_gamma) * h_prev - h;
 
-  EXPECT_EQ(status_reconstructed, proxsuite::proxqp::QPSolverOutput::PROXQP_SOLVED);
-  EXPECT_EQ(status_block0, proxsuite::proxqp::QPSolverOutput::PROXQP_SOLVED);
-  // The pose sitting at block 0's raw value is the one the reconstruction
-  // reports clearance for, so it should demand no more slack than the pose
-  // sitting at the reconstructed point; a strict reversal (reconstructed
-  // scenario the harder one) would indicate block 0 is being used as "now".
-  EXPECT_GE(slack_block0 + 1e-9, slack_reconstructed);
+  EXPECT_NEAR(solver->getLow()(static_cast<Eigen::Index>(obs_start)), expected_low, 1e-12);
+  // The same row bounded against block0 as "now"; the two differ by the
+  // reconstruction's whole worth.
+  const double block0_as_now_low = (1.0 - cbf_gamma) * (ox1 - d_safe) - h;
+  EXPECT_NEAR(expected_low - block0_as_now_low, (1.0 - cbf_gamma) * std::abs(vx) * kDt, 1e-12);
 }
 
 // Finite-difference Jacobian check of the coupled constraint's gradient columns
