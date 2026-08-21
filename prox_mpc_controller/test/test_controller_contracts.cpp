@@ -515,6 +515,34 @@ TEST_F(ControllerContractsTest, ReadModelMappingDefaultMappingLetsBareModelDrive
   EXPECT_NEAR(c->refOffsetY(), 0.0, kTol);
 }
 
+// The state-cost weights are placed through the declared mapping rather than at
+// state columns 0 and 1. PermutedPlanarMapping orders its state [theta, x, y],
+// so q_pos belongs on columns 1 and 2 and q_theta on column 0; indexing by
+// position instead weights the heading as a position and the y position as a
+// heading, which configure() accepts without a diagnostic because the model is
+// otherwise legal (its obstacle avoidance is off, which is what lets a
+// permuted position through readModelMapping() at all).
+TEST_F(ControllerContractsTest, StateWeightsFollowTheDeclaredPlanarMapping)
+{
+  auto c = makeConfigured(
+  {
+    rclcpp::Parameter(
+      "FollowPath.model_plugin", std::string("prox_mpc_test_models/PermutedPlanarMapping")),
+    rclcpp::Parameter("FollowPath.q_pos", 10.0),
+    rclcpp::Parameter("FollowPath.q_theta", 1.0),
+  });
+  ASSERT_EQ(c->idxYaw(), 0u);
+  ASSERT_EQ(c->idxX(), 1u);
+  ASSERT_EQ(c->idxY(), 2u);
+
+  const MatrixXd Q = c->mpc()->getQ();
+  ASSERT_EQ(Q.rows(), 3);
+  ASSERT_EQ(Q.cols(), 3);
+  EXPECT_NEAR(Q(0, 0), 1.0, kTol);    // yaw carries q_theta
+  EXPECT_NEAR(Q(1, 1), 10.0, kTol);   // x carries q_pos
+  EXPECT_NEAR(Q(2, 2), 10.0, kTol);   // y carries q_pos
+}
+
 // A full pluginlib-loaded control cycle against a model with no
 // getPlanarMapping() override is already covered by
 // test_prox_mpc_controller.cpp's ConfigureLoadsModelAndSizesMpc and

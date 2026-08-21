@@ -33,4 +33,17 @@
       four Twist components a planar consumer never reads. Test fixture only.
     </description>
   </class>
+  <class
+    name="prox_mpc_test_models/PermutedPlanarMapping"
+    type="prox_mpc_test_models::PermutedPlanarMappingModel"
+    base_class_type="prox_mpc::Model">
+    <description>
+      Fixture model whose state vector is ordered [theta, x, y] instead of
+      [x, y, theta], so its declared planar mapping is idx_yaw = 0, idx_x = 1,
+      idx_y = 2. Obstacle avoidance is off, which is what makes the permutation
+      legal. Used to test that the controller drives a model through its
+      declared mapping rather than through the bundled state ordering. Test
+      fixture only.
+    </description>
+  </class>
 </library>

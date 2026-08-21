@@ -452,10 +452,16 @@ void ProxMpcController::configure(
     desired_linear_vel_ = v_max_;
   }
 
-  /* Cost weights sized to the model (matches the demo assembly). */
+  /* Cost weights sized to the model (matches the demo assembly), placed through
+   * the model's own declared mapping rather than at state columns 0 and 1: a
+   * model that carries its position elsewhere is legal whenever the in-loop
+   * obstacle term is off, and indexing by position would then weight a heading
+   * as a position and a position as a heading with no diagnostic. Every state
+   * the mapping does not name - a steering angle, say - keeps q_theta. */
   VectorXd q_diag = VectorXd::Constant(n_, q_theta);
-  q_diag(0) = q_pos;
-  q_diag(1) = q_pos;
+  q_diag(idx_x_) = q_pos;
+  q_diag(idx_y_) = q_pos;
+  q_diag(idx_yaw_) = q_theta;
   const MatrixXd Q = q_diag.asDiagonal();
   const MatrixXd S = s_factor * Q;
   const MatrixXd R = r_weight * MatrixXd::Identity(m_, m_);
