@@ -19,10 +19,12 @@
 
 #include <prox_mpc/mpc.hpp>
 #include <prox_mpc/models/bicycle.hpp>
+#include <prox_mpc/models/unicycle.hpp>
 
 using prox_mpc::Bicycle;
 using prox_mpc::MPC;
 using prox_mpc::Model;
+using prox_mpc::Unicycle;
 
 namespace
 {
@@ -264,8 +266,9 @@ TEST(MoveBlocking, NcEqualsOneWarmStartDoesNotCrash)
   EXPECT_TRUE(u.allFinite());
 }
 
-// MPC::setNc rejects Nc > Np. Np may not be known yet when setNc runs (it
-// defaults to 0), so the comparison is skipped until setNp establishes it.
+// Nc > Np is rejected whichever setter runs second. Either horizon may still
+// be at its unset sentinel (0) when the first one runs, so that call defers the
+// comparison rather than accepting the pair; the second call makes it.
 TEST(MoveBlocking, SetNcRejectsNcGreaterThanNp)
 {
   MPC mpc;
@@ -275,8 +278,29 @@ TEST(MoveBlocking, SetNcRejectsNcGreaterThanNp)
   EXPECT_NO_THROW(mpc.setNc(1));
 
   MPC mpc2;
-  EXPECT_NO_THROW(mpc2.setNc(10));   // Np unknown yet: not rejected
+  EXPECT_NO_THROW(mpc2.setNc(10));   // Np unknown yet: deferred
+  EXPECT_THROW(mpc2.setNp(5), std::invalid_argument);
   EXPECT_NO_THROW(mpc2.setNp(20));
+}
+
+// The pair is checked once more at init(), which is what closes the setters'
+// remaining gap: MPC derives publicly from ProbDim, so Np and Nc are public
+// data members a caller can assign past the setters entirely. init() is the
+// last point that sizes anything from them.
+TEST(MoveBlocking, InitRejectsNcGreaterThanNp)
+{
+  MPC mpc;
+  mpc.setNp(10);
+  mpc.setNc(10);
+  mpc.setdt(0.1);
+  mpc.Nc = 20;   // straight past setNc, which would have rejected it
+  EXPECT_THROW(mpc.init(std::make_shared<Unicycle>()), std::invalid_argument);
+
+  MPC ok;
+  ok.setNp(10);
+  ok.setNc(10);
+  ok.setdt(0.1);
+  EXPECT_NO_THROW(ok.init(std::make_shared<Unicycle>()));
 }
 
 // setdt() must reject a non-finite step in addition to a non-positive one: a

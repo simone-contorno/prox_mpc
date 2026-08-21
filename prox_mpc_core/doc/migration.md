@@ -13,6 +13,7 @@ diff and is not stated here.
 | `prox_mpc::MPC` gains `solveCandidate()`, `commitCandidate()`, `getCandidateFinite()`, `setU0()` and candidate members | yes | **no** | n/a |
 | `MPC::init()` rejects a nonsymmetric or indefinite weight matrix | yes | yes | n/a |
 | `MPC::setGoalX` / `setGoalU` reject an undersized matrix | yes | yes | n/a |
+| `MPC::setNp` and `MPC::init()` reject `Nc > Np` | yes | yes | n/a |
 | Structural `MPC` setters reject a post-`init()` call | yes | yes | n/a |
 | `Model::updateIneq` rejects an index the model declares no bound for | yes | yes | n/a |
 | The bicycle splits into two plugins; `prox_mpc_core/Bicycle` becomes a deprecated alias | yes | yes | n/a |
@@ -91,7 +92,7 @@ is anchored on the command the robot actually received.
 
 ## Configuration-time validation now throws
 
-Four inputs that 1.0.0 accepted silently are now rejected.
+Five inputs that 1.0.0 accepted silently are now rejected.
 
 - `setGoalX` and `setGoalU` throw `std::invalid_argument` for a matrix with too
   few rows for the configured horizon, and for a wrong column count once
@@ -105,6 +106,11 @@ Four inputs that 1.0.0 accepted silently are now rejected.
   `std::logic_error` when called after `init()`. 1.0.0 returned quietly while
   mutating only their own members, leaving the buffers and the QP object sized
   for the previous configuration.
+- `setNp` throws `std::invalid_argument` for a prediction horizon shorter than
+  an already-set control horizon, and `init()` throws it for a pair that reached
+  it unchecked. 1.0.0 compared the two inside `setNc` alone, and only once `Np`
+  was already known, so `setNc` before `setNp` - and `setNc` with no `setNp` at
+  all - sized a QP with more control nodes than prediction nodes.
 - `Model::updateIneq` throws `std::invalid_argument` when the model declares no
   existing bound for the `var` and index it is given. 1.0.0 fell through its
   four search branches and returned having changed nothing, which made the call

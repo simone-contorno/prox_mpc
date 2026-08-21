@@ -92,6 +92,13 @@ void MPC::init(std::shared_ptr<Model> model)
   requireSymmetricPSD(R, "R");
   requireSymmetricPSD(W, "W");
 
+  /* Last chance to catch the horizon bound: the setters skip their comparison
+   * while the other horizon is still at its unset sentinel, and Np and Nc are
+   * public ProbDim members a caller can assign past the setters entirely. */
+  if (Nc > Np) {
+    throw std::invalid_argument("MPC::init: Nc must be <= Np");
+  }
+
   x = MatrixXd::Zero(Np + 1, n);
   u = MatrixXd::Zero(Nc, m);
   const bool obstacle_active = model->getObsFlag() == true && max_obs > 0;
@@ -368,6 +375,10 @@ void MPC::setNp(size_t Np)
 {
   rejectAfterInit(initialized, "setNp");
   if (Np == 0) {throw std::invalid_argument("MPC::setNp: Np must be > 0");}
+  // The Nc <= Np bound holds whichever setter runs second, so it is mirrored
+  // here: checking it in setNc alone let the caller reach it by ordering.
+  // Nc may not be set yet (0 is its unset sentinel, as in setNc below).
+  if (Nc > 0 && Nc > Np) {throw std::invalid_argument("MPC::setNp: Np must be >= Nc");}
   this->Np = Np;
   if (T > 0.0) {this->dt = T / Np;}
 }
