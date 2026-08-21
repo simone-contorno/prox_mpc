@@ -14,6 +14,7 @@ diff and is not stated here.
 | `MPC::init()` rejects a nonsymmetric or indefinite weight matrix | yes | yes | n/a |
 | `MPC::setGoalX` / `setGoalU` reject an undersized matrix | yes | yes | n/a |
 | Structural `MPC` setters reject a post-`init()` call | yes | yes | n/a |
+| `Model::updateIneq` rejects an index the model declares no bound for | yes | yes | n/a |
 | The bicycle splits into two plugins; `prox_mpc_core/Bicycle` becomes a deprecated alias | yes | yes | n/a |
 | `prox_mpc::Bicycle`'s emitted twist is corrected | yes | yes | n/a |
 | The coupled obstacle constraint carries its previous-node gradient | yes | yes | n/a |
