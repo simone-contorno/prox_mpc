@@ -631,6 +631,17 @@ void ProxMpcController::readModelBounds(prox_mpc::Model & model, const std::stri
   v_min_ = required_bound(
     model, model_plugin, "u", idx_v_, 1, "linear",
     "the speed cap would collapse to zero and the controller would never move.");
+  /* A declared bound is not the same as a usable one: required_bound only
+   * throws when the entry is absent, so a model declaring an upper speed bound
+   * of zero (or a non-finite one, which every comparison below passes) reaches
+   * here, clamps the cruise speed to zero and never moves - the exact outcome
+   * the missing-bound message says it prevents. */
+  if (!(v_max_ > 0.0)) {
+    throw nav2_core::ControllerException(
+            "ProxMpcController: model '" + model_plugin + "' declares an upper 'u' bound of " +
+            std::to_string(v_max_) + " for the linear control; the speed cap would collapse "
+            "to zero and the controller would never move.");
+  }
   max_linear_vel_ = v_max_;
   fallback_ramp_lin_ = std::abs(
     required_bound(

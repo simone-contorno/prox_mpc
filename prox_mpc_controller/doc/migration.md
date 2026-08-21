@@ -82,6 +82,12 @@ wheelbase or with a lateral reference offset, and - when `max_obstacles > 0` - a
 position mapped away from state columns 0 and 1, which is where the solver's
 keep-out rows read it.
 
+It also rejects a model whose declared upper speed bound is zero or non-finite.
+1.0.0 required the bound to be present but not to be usable, so a model
+declaring `setIneq("u", 0, 0.0, 0.0)` configured cleanly, had its cruise speed
+clamped to zero and never moved - the outcome the missing-bound message already
+said it prevented.
+
 A custom `prox_mpc::Model` that follows the previous implicit convention passes
 unchanged, except that one carrying a steering angle must now declare its
 wheelbase. See `prox_mpc_core/doc/migration.md`.

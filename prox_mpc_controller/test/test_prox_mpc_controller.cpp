@@ -154,6 +154,27 @@ public:
   void updateB() override {}
 };
 
+// A model that declares the speed bound but pins it shut. required_bound() only
+// rejects an absent entry, so this one is present and useless: v_max would be
+// zero and the cruise speed clamped to it.
+class ZeroSpeedBoundModel : public prox_mpc::Model
+{
+public:
+  ZeroSpeedBoundModel()
+  {
+    setName("zero_speed_bound");
+    setN(3);
+    setM(2);
+    setIneq("u", 0, 0.0, 0.0);
+    setIneq("u", 1, -1.0, 1.0);
+    setIneq("du", 0, -0.5, 0.5);
+    setIneq("du", 1, -0.5, 0.5);
+  }
+  void updatec(double, VectorXd) override {}
+  void updateA(double) override {}
+  void updateB() override {}
+};
+
 // The mirror case: control-rate bounds but no bound on the speed channel, which
 // would leave v_max (and hence the cruise-speed clamp) at zero.
 class NoUBoundModel : public prox_mpc::Model
@@ -658,6 +679,23 @@ TEST_F(ProxMpcControllerTest, MissingModelBoundIsFatal)
   // model's own bounds.
   auto configured = makeConfigured();
   EXPECT_NEAR(configured->vMax(), kModelVMax, kTol);
+}
+
+// A declared speed bound of zero is as fatal as an absent one, and for the same
+// reason: the cruise speed is clamped to it and the robot never moves. The
+// message names the model and the bound it read.
+TEST_F(ProxMpcControllerTest, ZeroSpeedBoundIsFatal)
+{
+  auto c = makeUnconfigured();
+  ZeroSpeedBoundModel zero;
+  try {
+    c->readModelBounds(zero, "test/ZeroSpeedBound");
+    FAIL() << "a model whose speed bound is zero must not configure";
+  } catch (const nav2_core::ControllerException & ex) {
+    const std::string what(ex.what());
+    EXPECT_NE(what.find("'u'"), std::string::npos) << what;
+    EXPECT_NE(what.find("test/ZeroSpeedBound"), std::string::npos) << what;
+  }
 }
 
 // A model with one control declares no second control-rate bound, and must not
