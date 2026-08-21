@@ -11,9 +11,11 @@ diff and is not stated here.
 | --- | --- | --- | --- |
 | `model_plugin` defaults to `prox_mpc_core/Unicycle` | yes | yes | yes |
 | New `allow_reversing` parameter, default `false` | yes | yes | yes |
+| New `brake_period_s` parameter, default `0.0` | yes | yes | yes |
 | `ProxMpcController` gains `readModelMapping()` and cached mapping members | yes | **no** | yes |
 | The model contract is validated at `configure()` and rejects what cannot be driven | yes | yes | yes |
 | The in-loop keep-out is centred on `base_link` | yes | yes | yes |
+| The deceleration ramp runs in control space, through the model's `toTwist()` | yes | yes | yes |
 | `SolverDiagnostics.converged` reports the applied command, not the QP status | yes | yes | **yes, layout and hash unchanged** |
 | A rejected cycle no longer advances the solver's retained state | yes | yes | yes |
 | Terminal-heading reference past the plan end | yes | yes | yes |
@@ -183,5 +185,5 @@ it moved onto the solver's own nominal trajectory, and `a_dec_lin_`/`a_dec_ang_`
 become `fallback_ramp_lin_`/`fallback_ramp_ang_`, which is what they hold: the
 rates the last-resort twist ramp steps by, not a linear/angular acceleration
 pair. A derived controller that overrode or called either must be updated, which
-it must be rebuilt for in any case. One protected method, `keepOutShift`, is
-added.
+it must be rebuilt for in any case. Two protected methods, `readModelMapping`
+and `keepOutShift`, are added.
