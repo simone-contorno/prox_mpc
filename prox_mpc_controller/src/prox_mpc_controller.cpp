@@ -734,6 +734,12 @@ geometry_msgs::msg::TwistStamped ProxMpcController::computeVelocityCommands(
   const geometry_msgs::msg::Twist & velocity,
   nav2_core::GoalChecker * goal_checker)
 {
+  /* Close the previous cycle's timing measurement here, before any gate can
+   * return or throw, so the deceleration ramp below and the telemetry at the end
+   * read one and the same inter-cycle period and no path out of the cycle leaves
+   * the reference point stale for the next one. */
+  const double cycle_period_ms = markCycleStart();
+
   /* Apply a speed limit requested since the last cycle. setSpeedLimit() runs on
    * the node's executor thread while this method runs on the action server's own
    * thread, so the model's inequality map is mutated here, where nothing else
@@ -769,18 +775,18 @@ geometry_msgs::msg::TwistStamped ProxMpcController::computeVelocityCommands(
    * zero through brake_toward. */
   auto make_brake = [&]() -> geometry_msgs::msg::TwistStamped {
       /* Step with brake_period_s_ when the operator set one, otherwise with the
-       * inter-cycle period the plugin already measures for its telemetry rather
-       * than the configured step, so a server running slower than dt_ still
-       * brakes at the model's declared rate; the measurement is clamped below at
-       * dt_ so the ramp is never slower than the configured one, and above so a
-       * stale reading cannot turn one step into an abrupt stop. The ramp
-       * saturates at zero either way, so an over-large step shortens the stop
-       * rather than reversing or overshooting it. */
+       * inter-cycle period this cycle measured for its telemetry rather than the
+       * configured step, so a server running slower than dt_ still brakes at the
+       * model's declared rate; the measurement is clamped below at dt_ so the
+       * ramp is never slower than the configured one, and above so a stale
+       * reading cannot turn one step into an abrupt stop. The first cycle of a
+       * task has no measurement (NaN) and falls back to dt_. The ramp saturates
+       * at zero either way, so an over-large step shortens the stop rather than
+       * reversing or overshooting it. */
       double period = brake_period_s_;
       if (period <= 0.0) {
-        const double measured_period = have_last_cycle_ ?
-          std::chrono::duration<double>(
-          std::chrono::steady_clock::now() - last_cycle_wall_).count() : dt_;
+        const double measured_period =
+          std::isfinite(cycle_period_ms) ? 1e-3 * cycle_period_ms : dt_;
         period = std::clamp(measured_period, dt_, kMaxBrakePeriodFactor * dt_);
       }
 
@@ -1204,7 +1210,8 @@ geometry_msgs::msg::TwistStamped ProxMpcController::computeVelocityCommands(
    * cycle publishes before returning or throwing, including the escalation. */
   bool converged = false;
   auto publish_cycle = [&]() {
-      publishDiagnostics(cmd.header.stamp, solve_ms, converged, num_active_obs);
+      publishDiagnostics(
+        cmd.header.stamp, solve_ms, cycle_period_ms, converged, num_active_obs);
     };
 
   if (!solved) {
@@ -1905,9 +1912,7 @@ void ProxMpcController::publishPredictedObstacleMarkers(const rclcpp::Time & now
   marker_pub_->publish(arr);
 }
 
-void ProxMpcController::publishDiagnostics(
-  const rclcpp::Time & stamp, double solve_ms, bool converged,
-  std::uint16_t num_active_obstacles)
+double ProxMpcController::markCycleStart()
 {
   const auto t_now = std::chrono::steady_clock::now();
   double period_ms = std::numeric_limits<double>::quiet_NaN();
@@ -1916,7 +1921,13 @@ void ProxMpcController::publishDiagnostics(
   }
   last_cycle_wall_ = t_now;
   have_last_cycle_ = true;
+  return period_ms;
+}
 
+void ProxMpcController::publishDiagnostics(
+  const rclcpp::Time & stamp, double solve_ms, double period_ms, bool converged,
+  std::uint16_t num_active_obstacles)
+{
   /* Only-when-subscribed: zero cost in the production default. */
   if (!diag_pub_ || diag_pub_->get_subscription_count() == 0) {return;}
 

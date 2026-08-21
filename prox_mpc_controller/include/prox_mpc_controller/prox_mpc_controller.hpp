@@ -180,15 +180,25 @@ protected:
   /// debug topic has a subscriber (no-op otherwise).
   void publishPredictedObstacleMarkers(const rclcpp::Time & now);
 
+  /// Close the previous control cycle's timing measurement and open this one's,
+  /// returning the inter-cycle wall period [ms] (NaN when there is no previous
+  /// cycle). Called once, at the top of computeVelocityCommands(), so every path
+  /// out of the cycle - including the ones that brake or throw after the solve -
+  /// reads the same measurement, and none of them leaves the reference point
+  /// stale for the next cycle.
+  double markCycleStart();
+
   /// Fill and publish one SolverDiagnostics for this control cycle, only when the
   /// publisher exists and the diagnostics topic has a subscriber (zero cost
   /// otherwise). `solve_ms` is the wall time measured around the solve;
+  /// `period_ms` is this cycle's inter-cycle period as markCycleStart() measured
+  /// it, so the telemetry and the deceleration ramp report the same number;
   /// `converged` reports whether the cycle's command was accepted and applied,
   /// which is what the message's own field documents - the QP's own outcome stays
   /// separately visible in `status`; `num_active_obstacles` is the count of
   /// filled, non-sentinel obstacle slots at the current node.
   void publishDiagnostics(
-    const rclcpp::Time & stamp, double solve_ms, bool converged,
+    const rclcpp::Time & stamp, double solve_ms, double period_ms, bool converged,
     std::uint16_t num_active_obstacles);
 
   rclcpp_lifecycle::LifecycleNode::WeakPtr node_;
@@ -369,8 +379,9 @@ protected:
   bool cancelling_{false};
   std::size_t plan_index_{0};
 
-  /// Inter-cycle wall clock for the control_period_ms diagnostics field; reset
-  /// between tasks so the first cycle of a task reports NaN rather than a stale gap.
+  /// Inter-cycle wall clock, read and advanced by markCycleStart() at the top of
+  /// every control cycle; reset between tasks so the first cycle of a task
+  /// reports NaN rather than a stale gap.
   std::chrono::steady_clock::time_point last_cycle_wall_;
   bool have_last_cycle_{false};
 };

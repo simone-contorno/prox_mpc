@@ -2115,11 +2115,13 @@ TEST_F(ProxMpcControllerTest, SolverFailureNeutralizesNonFiniteMeasuredVelocity)
 }
 
 // The default (0.0) brake_period_s steps the ramp with the measured
-// inter-cycle period, floored at dt_ = 0.1 s so a fast solver-failure cycle
-// (the elapsed time since the diagnostics timestamp was last reset, here
-// microseconds) never brakes faster than the configured design.
-// AsymmetricBounds' asymmetric du[0] (-2.0, +0.5) makes the resulting step
-// size, not just its sign, an observable proxy for which period was used.
+// inter-cycle period, floored at dt_ = 0.1 s so two back-to-back cycles (a
+// gap of microseconds) never brake faster than the configured design. The
+// first cycle of a task has no previous cycle to measure against and falls
+// back to dt_, which is the same step, so the second cycle is the one that
+// exercises the floor. AsymmetricBounds' asymmetric du[0] (-2.0, +0.5) makes
+// the resulting step size, not just its sign, an observable proxy for which
+// period was used.
 TEST_F(ProxMpcControllerTest, BrakeMeasuredPeriodFloorsAtConfiguredDt)
 {
   auto c = makeConfigured(
@@ -2136,19 +2138,53 @@ TEST_F(ProxMpcControllerTest, BrakeMeasuredPeriodFloorsAtConfiguredDt)
 
   geometry_msgs::msg::Twist measured;
   measured.linear.x = 1.0;
+  const auto first = c->computeVelocityCommands(makePose(0.0, 0.0, 0.0), measured, nullptr);
+  ASSERT_NE(c->mpc()->qp_info.status, proxsuite::proxqp::QPSolverOutput::PROXQP_SOLVED);
+  EXPECT_NEAR(first.twist.linear.x, 1.0 - 2.0 * 0.1, 1e-6);   // no measurement: dt_ fallback
   const auto cmd = c->computeVelocityCommands(makePose(0.0, 0.0, 0.0), measured, nullptr);
   ASSERT_NE(c->mpc()->qp_info.status, proxsuite::proxqp::QPSolverOutput::PROXQP_SOLVED);
   EXPECT_NEAR(cmd.twist.linear.x, 1.0 - 2.0 * 0.1, 1e-6);   // floor: |du_low| * dt_ = 2.0 * 0.1
 }
 
+// The brake period is measured once at the top of the cycle, so a braking path
+// taken after the solve reads the real gap since the previous cycle rather
+// than the near-zero one left by a reset that already ran. Both cycles here
+// take the solver-failure path, which brakes past the diagnostics publication:
+// the deliberate stall between them makes the ramp step the capped 2 * dt_
+// instead of the floored dt_ a dead measurement would produce.
+TEST_F(ProxMpcControllerTest, BrakeMeasuredPeriodAppliesOnThePostSolveFailurePath)
+{
+  auto c = makeConfigured(
+  {
+    rclcpp::Parameter(
+      "FollowPath.model_plugin", std::string("prox_mpc_test_models/AsymmetricBounds")),
+    rclcpp::Parameter("FollowPath.max_int_iter_qp", 1),
+    rclcpp::Parameter("FollowPath.max_ext_iter_qp", 1),
+    rclcpp::Parameter("FollowPath.max_iter_sqp", 1),
+    rclcpp::Parameter("FollowPath.max_solver_failures", 10),
+  });
+  c->activate();
+  c->setPlan(makeStraightPlan(31, 0.2));
+
+  geometry_msgs::msg::Twist measured;
+  measured.linear.x = 1.0;
+  c->computeVelocityCommands(makePose(0.0, 0.0, 0.0), measured, nullptr);
+  ASSERT_NE(c->mpc()->qp_info.status, proxsuite::proxqp::QPSolverOutput::PROXQP_SOLVED);
+
+  std::this_thread::sleep_for(std::chrono::milliseconds(300));   // far past 2 * dt_ = 0.2 s
+
+  const auto cmd = c->computeVelocityCommands(makePose(0.0, 0.0, 0.0), measured, nullptr);
+  ASSERT_NE(c->mpc()->qp_info.status, proxsuite::proxqp::QPSolverOutput::PROXQP_SOLVED);
+  // Capped at 2 * dt_: step = 2.0 * 0.2 = 0.4. A dead measurement would floor
+  // the step at 2.0 * 0.1 = 0.2 and leave 0.8 here.
+  EXPECT_NEAR(cmd.twist.linear.x, 1.0 - 2.0 * 0.2, 1e-6);
+}
+
 // The measured period is capped at kMaxBrakePeriodFactor * dt_ = 0.2 s so a
-// real stall does not collapse one ramp step into an abrupt stop. The
-// non-finite-pose fail path is used deliberately: it calls make_brake()
-// before this cycle's own diagnostics timestamp reset runs, so the elapsed
-// time it measures is the real gap since the previous (converged) cycle,
-// which the deliberate sleep below controls; the solver-failure path used by
-// the floor test above cannot show this, because publishDiagnostics() resets
-// the timestamp earlier in that same cycle, before make_brake() reads it.
+// real stall does not collapse one ramp step into an abrupt stop. This case
+// takes the non-finite-pose fail path, which brakes before the solve, and its
+// sibling above takes the solver-failure path, which brakes after it: the
+// period is measured once at the top of the cycle, so both see the same gap.
 TEST_F(ProxMpcControllerTest, BrakeMeasuredPeriodCapsAtTwiceConfiguredDt)
 {
   auto c = makeConfigured(
@@ -2157,9 +2193,8 @@ TEST_F(ProxMpcControllerTest, BrakeMeasuredPeriodCapsAtTwiceConfiguredDt)
   c->activate();
   c->setPlan(makeStraightPlan(31, 0.2));
 
-  // A normal converged cycle, so publishDiagnostics() records this cycle's
-  // wall-clock time as the reference point the next cycle's stall is measured
-  // against.
+  // A normal converged cycle, so this cycle's start is recorded as the
+  // reference point the next cycle's stall is measured against.
   const auto ok = c->computeVelocityCommands(
     makePose(0.0, 0.0, 0.0), geometry_msgs::msg::Twist(), nullptr);
   ASSERT_TRUE(std::isfinite(ok.twist.linear.x));
