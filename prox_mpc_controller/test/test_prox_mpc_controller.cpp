@@ -510,9 +510,11 @@ TEST_F(ProxMpcControllerTest, ConfigureThrowsOnNonFiniteDt)
 // A non-finite value at a clamped parameter site (bare "<"/">" comparisons pass
 // NaN through every range check) falls back to the parameter's declared
 // default, for every parameter configure() guards this way. One row per
-// clamp_low/clamp_range call site; each row reads back the result through
-// whichever accessor observes where that configure()-local variable ends up (a
-// stored member, or the MPC weight matrix it seeds).
+// clamp_low/clamp_range call site, plus desired_linear_vel, which is guarded
+// in place because its ceiling is the model's own declared speed bound rather
+// than a literal; each row reads back the result through whichever accessor
+// observes where that configure()-local variable ends up (a stored member, or
+// the MPC weight matrix it seeds).
 TEST_F(ProxMpcControllerTest, ConfigureUsesDefaultForNonFiniteClampedParameter)
 {
   const double nan = std::numeric_limits<double>::quiet_NaN();
@@ -540,6 +542,7 @@ TEST_F(ProxMpcControllerTest, ConfigureUsesDefaultForNonFiniteClampedParameter)
       [](const auto & c) {return c->predictionUncertaintyGrowth();}},
     {"max_dynamic_obstacle_radius", 0.0,
       [](const auto & c) {return c->maxDynamicObstacleRadius();}},
+    {"desired_linear_vel", 1.0, [](const auto & c) {return c->desiredLinearVel();}},
   };
   for (const auto & row : rows) {
     SCOPED_TRACE(row.param);

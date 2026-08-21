@@ -444,7 +444,18 @@ void ProxMpcController::configure(
       "%.3f), so the reference stays forward-only.", model_plugin.c_str(), idx_v_, v_min_);
   }
 
-  /* Cruise speed must sit within the model's speed bound. */
+  /* Cruise speed must be finite and sit within the model's speed bound. The
+   * finiteness check comes first because the bound comparison below, like every
+   * bare "<"/">", is false for NaN: a non-finite cruise speed would pass it,
+   * poison the reference and turn every cycle into a non-finite solve, a brake
+   * and eventually a recovery, with nothing said at configure(). */
+  if (!std::isfinite(desired_linear_vel_)) {
+    const double default_desired_linear_vel = 1.0;
+    RCLCPP_WARN(
+      logger_, "desired_linear_vel is not finite; using default %.3f.",
+      default_desired_linear_vel);
+    desired_linear_vel_ = default_desired_linear_vel;
+  }
   if (desired_linear_vel_ > v_max_) {
     RCLCPP_WARN(
       logger_, "desired_linear_vel %.3f exceeds model v_max %.3f; clamping.",
