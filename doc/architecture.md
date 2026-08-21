@@ -19,6 +19,7 @@ together.
 - [Runtime: standalone simulation](#runtime-standalone-simulation)
 - [Runtime: Nav2 + Gazebo](#runtime-nav2--gazebo)
 - [Runtime: predictive (dynamic) obstacle avoidance](#runtime-predictive-dynamic-obstacle-avoidance)
+- [Operating envelope](#operating-envelope)
 - [Cross-cutting conventions](#cross-cutting-conventions)
 - [License](#license)
 
@@ -155,14 +156,69 @@ costmap global frame).
 With predictions off, stale, or missing, the controller falls back to the
 costmap-only fill, so the feature is a clean enable/disable switch.
 
+## Operating envelope
+
+What the stack supports today, stated plainly rather than left implicit.
+
+- **Direction of travel.** The reference is forward-only by default: multi-pose
+  plan orientations collapse into a reconstructed path tangent, and the
+  reference speed is non-negative.
+  `allow_reversing` (controller parameter, default `false`) follows the plan's
+  own pose orientations into reverse travel and truncates the reference at the
+  first direction change rather than following every cusp in the plan - the
+  same bounded strategy `regulated_pure_pursuit_controller` uses.
+  Past the plan end, the terminal heading holds the final segment's tangent.
+- **Model state layout.** Any `prox_mpc::Model` that enables obstacle avoidance
+  must carry its planar position at state columns 0 and 1: the
+  obstacle-constraint assembly in `prox_mpc_core` reads those two columns
+  directly rather than through a declared mapping (see
+  [prox_mpc_core/doc/architecture.md](../prox_mpc_core/doc/architecture.md)).
+- **Weight matrices.** `MPC::init()` requires `Q`, `S`, `R` and `W` to be
+  finite, symmetric, and positive semidefinite, and throws otherwise; a direct
+  `prox_mpc_core` consumer does not have to enforce this itself.
+- **Steering state.** The bicycle plugins' steering angle is a virtual state,
+  advanced internally from the previous solve and never measured from the
+  plant.
+  The controller's sole output is a `geometry_msgs/msg/Twist`, as
+  `nav2_core::Controller` requires; a physically steered platform needs a
+  Twist-to-steering (Ackermann) converter supplied downstream by the
+  integrator - ProxMPC ships none.
+- **`cbf_gamma` range.** The parameter stays public over `(0, 1]`. Below `1.0`
+  the coupled obstacle constraint is guarded against a sentinel-value blow-up
+  in the core and against cross-node obstacle-slot churn in the controller's
+  costmap fill, both within one control cycle; nothing yet holds a slot stable
+  across cycles (see
+  [prox_mpc_core/doc/obstacle-avoidance.md](../prox_mpc_core/doc/obstacle-avoidance.md)).
+- **Obstacle-slot capacity.** `max_obstacles` (`K`) defaults to `1` and is the
+  tuning knob for a cluttered field. At the shipped horizon (`Np = Nc = 20`),
+  raising it to 2 costs +16% decision variables and +33% inequality rows in the
+  QP; raising it to 4 costs +49% and +100%.
+- **Control-horizon bound.** `Nc` must not exceed `Np`; `MPC::setNc` rejects a
+  larger value.
+- **Footprint-veto backstop.** The endpoint footprint veto (see
+  [Cross-cutting conventions](#cross-cutting-conventions) below and
+  [prox-mpc.md](prox-mpc.md#4-prox_mpc_controller---the-nav2-plugin)) checks
+  the rasterised footprint perimeter at one predicted pose; it is a useful
+  backstop only when costmap inflation is sized to the robot's real footprint
+  and the local costmap's unknown-space tracking matches the deployment, since
+  the in-loop keep-out half-planes - not the veto - are what cover a lethal
+  cell the veto's own masking may miss.
+- **`prox_mpc_core/Bicycle`.** A deprecated alias for `BicycleFrontAxle` that
+  warns once per construction; removed in a future major release, whose exact
+  number is fixed against the landed diff rather than pre-announced (see
+  [prox_mpc_core/doc/migration.md](../prox_mpc_core/doc/migration.md)).
+
 ## Cross-cutting conventions
 
 - **Frames.** REP-103 conventions; the tracker estimates velocity in a fixed,
   non-rotating frame (for example `odom`), and the controller transforms plans and
   obstacles into the costmap global frame via `tf2`.
 - **Safety split.** The engine keeps a fast convex disc constraint inside the
-  optimization; the controller adds an exact polygon-footprint veto as the
-  conservative backstop, and decelerates within the model's limits on any fault.
+  optimization; the controller adds an outline-only, single-endpoint footprint
+  veto as a backstop - not a guarantee - and decelerates within the model's
+  limits on any fault. The veto is effective only when costmap inflation is
+  sized to the robot's real footprint and the local costmap's unknown-space
+  tracking matches the deployment.
 - **Types.** All MPC quantities are `double`; ROS parameters are `double` / `int`
   / `bool` / `string` only.
 - **License.** Apache-2.0 across the workspace, with a short SPDX header per file.
