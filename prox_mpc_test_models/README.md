@@ -8,6 +8,9 @@ These are fault-injection models that exercise controller fail-safe paths the bu
 They are registered against the same `prox_mpc::Model` base as the core models, so [prox_mpc_controller](../prox_mpc_controller) loads them through its ordinary `pluginlib` path during testing - no test-only seam in production code.
 
 > **Not for production use.** This package exists only to drive tests.
+> Its plugin and class names are not a stable interface: a fixture may be
+> renamed, replaced, or removed without notice, unlike the released
+> `prox_mpc_core` models it is registered alongside.
 
 ## Table of Contents
 

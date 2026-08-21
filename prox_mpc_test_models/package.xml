@@ -6,7 +6,8 @@
   <description>Test-fixture prox_mpc::Model plugins for the ProxMPC stack. These
   models exercise controller paths the bundled production models cannot reach
   (for example a non-finite command, or an asymmetric bound). Not for
-  production use.</description>
+  production use. Fixture class names are not a stable interface and may
+  change without notice.</description>
   <maintainer email="simone.contorno@outlook.it">Simone Contorno</maintainer>
   <license>Apache-2.0</license>
   <url type="repository">https://github.com/simone-contorno/prox_mpc</url>
