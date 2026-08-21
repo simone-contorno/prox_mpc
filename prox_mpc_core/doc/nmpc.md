@@ -39,8 +39,14 @@ three hooks (`updateA`, `updateB`, `updatec`):
 - `updatec(dt, x_next)` fills the residual $c_k$ of the Euler step,
   $c_k = x_k - x_{k+1} + \Delta t\, f(x_k, u_k)$.
 
-For the kinematic bicycle with state $x = [p_x, p_y, \theta, \delta]^\top$ and
-input $u = [v, \dot{\delta}]^\top$ (wheelbase $L$), the residual is
+`prox_mpc_core` ships two internally-consistent bicycle plugins that differ in
+which point of the vehicle the state $(p_x, p_y)$ refers to.
+
+For `prox_mpc_core/BicycleFrontAxle`, with state
+$x = [p_x, p_y, \theta, \delta]^\top$ and input $u = [v, \dot{\delta}]^\top$
+(wheelbase $L$), $(p_x, p_y)$ is the **front-axle** centre and $v$ is the
+front-wheel speed, so the front wheel travels along $\theta + \delta$ and the
+residual is
 
 $$
 c_k =
@@ -53,11 +59,24 @@ x_k^{(3)} - x_{k+1}^{(3)} + \Delta t\, \dot{\delta}_k
 $$
 
 and $A_k$, $B_k$ are its analytic Jacobians.
-The yaw-rate term uses $v_k \sin(\delta_k)/L$ by design, not the textbook
-$v_k \tan(\delta_k)/L$: this is a deliberate modeling choice, applied consistently
-across `updatec`, `updateA`, `updateB`, and `toTwist`, so it is not a typo - the
-two agree for small steering angles and the analytic Jacobians match the $\sin$
-form exactly.
+With the position propagated as $v \cos(\theta + \delta)$,
+$v \sin(\theta + \delta)$, the yaw-rate term $v_k \sin(\delta_k)/L$ is the
+**exact** front-axle yaw rate of that same parameterization, not a small-angle
+approximation of anything: the front wheel's own heading is $\theta + \delta$,
+and $L$ is the distance from $(p_x, p_y)$ back to the point the yaw pivots
+about.
+
+`prox_mpc_core/BicycleRearAxle` instead references $(p_x, p_y)$ to the
+**rear-axle** centre, so $v$ is the rear-axle (body) speed, the rear axle
+travels along $\theta$ alone, and the residual uses $v_k \cos(\theta_k)$,
+$v_k \sin(\theta_k)$, and the textbook $v_k \tan(\delta_k)/L$ - exact for that
+parameterization by the same reasoning, with $\sin$ and $\tan$ swapped because
+the reference point moved from the front axle to the rear.
+
+Both plugins are internally consistent end to end: `getPlanarMapping()`
+declares which physical point $(p_x, p_y)$ refers to (`ref_offset_x = L` for
+the front axle, `0` for the rear axle), and `toTwist()` reports the resulting
+`base_link` twist for that same point rather than mixing conventions.
 A purely linear model returns constant $A$, $B$ and a trivial residual; the SQP
 then converges in a single QP solve.
 
