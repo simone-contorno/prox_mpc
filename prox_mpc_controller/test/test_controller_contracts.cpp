@@ -300,13 +300,13 @@ private:
 };
 }  // namespace
 
-class Wave3ControllerTest : public ::testing::Test
+class ControllerContractsTest : public ::testing::Test
 {
 protected:
   void SetUp() override
   {
     rclcpp::NodeOptions cm_opts;
-    cm_opts.arguments({"--ros-args", "-r", "__node:=prox_mpc_wave3_costmap"});
+    cm_opts.arguments({"--ros-args", "-r", "__node:=prox_mpc_contracts_costmap"});
     cm_opts.parameter_overrides(
     {
       rclcpp::Parameter("global_frame", std::string("map")),
@@ -340,7 +340,7 @@ protected:
     rclcpp::NodeOptions opts;
     opts.parameter_overrides(overrides);
     auto node = std::make_shared<rclcpp_lifecycle::LifecycleNode>(
-      "prox_mpc_wave3_controller_" + std::to_string(node_counter_++), opts);
+      "prox_mpc_contracts_controller_" + std::to_string(node_counter_++), opts);
     nodes_.push_back(node);
     return node;
   }
@@ -405,7 +405,7 @@ protected:
 // set far above the plan's desired speed, so the accepted cycle's command is
 // bound-saturated at the deceleration limit if (and only if) it is really
 // anchored on the applied brake.
-TEST_F(Wave3ControllerTest, VetoedCandidateDoesNotAnchorNextCycleRateConstraint)
+TEST_F(ControllerContractsTest, VetoedCandidateDoesNotAnchorNextCycleRateConstraint)
 {
   auto c = makeRunning({rclcpp::Parameter("FollowPath.max_obstacles", 0)});
 
@@ -450,7 +450,7 @@ void callReadModelMapping(
   c->readModelMapping(model, name);
 }
 
-TEST_F(Wave3ControllerTest, ReadModelMappingRejectsFewerThanThreeStates)
+TEST_F(ControllerContractsTest, ReadModelMappingRejectsFewerThanThreeStates)
 {
   auto c = makeUnconfigured();
   TwoStateModel model;
@@ -463,7 +463,7 @@ TEST_F(Wave3ControllerTest, ReadModelMappingRejectsFewerThanThreeStates)
 // rather than a test here, since there is no way to build the input this
 // branch guards against.
 
-TEST_F(Wave3ControllerTest, ReadModelMappingRejectsDuplicatePlanarIndices)
+TEST_F(ControllerContractsTest, ReadModelMappingRejectsDuplicatePlanarIndices)
 {
   auto c = makeUnconfigured();
   DuplicatePlanarIndexModel model;
@@ -472,7 +472,7 @@ TEST_F(Wave3ControllerTest, ReadModelMappingRejectsDuplicatePlanarIndices)
     nav2_core::ControllerException);
 }
 
-TEST_F(Wave3ControllerTest, ReadModelMappingRejectsSteeringWithoutWheelbase)
+TEST_F(ControllerContractsTest, ReadModelMappingRejectsSteeringWithoutWheelbase)
 {
   auto c = makeUnconfigured();
   SteeringNoWheelbaseModel model;
@@ -481,7 +481,7 @@ TEST_F(Wave3ControllerTest, ReadModelMappingRejectsSteeringWithoutWheelbase)
     nav2_core::ControllerException);
 }
 
-TEST_F(Wave3ControllerTest, ReadModelMappingRejectsSteeringWithLateralOffset)
+TEST_F(ControllerContractsTest, ReadModelMappingRejectsSteeringWithLateralOffset)
 {
   auto c = makeUnconfigured();
   SteeringLateralOffsetModel model;
@@ -490,7 +490,7 @@ TEST_F(Wave3ControllerTest, ReadModelMappingRejectsSteeringWithLateralOffset)
     nav2_core::ControllerException);
 }
 
-TEST_F(Wave3ControllerTest, ReadModelMappingRejectsObstacleModelMappedAwayFromColumnsZeroOne)
+TEST_F(ControllerContractsTest, ReadModelMappingRejectsObstacleModelMappedAwayFromColumnsZeroOne)
 {
   auto c = makeConfigured({rclcpp::Parameter("FollowPath.max_obstacles", 1)});
   ObstacleModelWrongColumns model;
@@ -503,7 +503,7 @@ TEST_F(Wave3ControllerTest, ReadModelMappingRejectsObstacleModelMappedAwayFromCo
 // reproduces the pre-hook convention this controller assumed, so
 // readModelMapping() accepts it and derives exactly that convention (no
 // steering channel is inferred for a model with three states or fewer).
-TEST_F(Wave3ControllerTest, ReadModelMappingDefaultMappingLetsBareModelDrive)
+TEST_F(ControllerContractsTest, ReadModelMappingDefaultMappingLetsBareModelDrive)
 {
   auto c = makeUnconfigured();
   BareThreeStateDrivableModel model;
@@ -534,7 +534,7 @@ TEST_F(Wave3ControllerTest, ReadModelMappingDefaultMappingLetsBareModelDrive)
 // transforms it by the model's declared offset. The state fed to the solver
 // is read back through MPC::getPose() (public), so no white-box access is
 // needed for this half.
-TEST_F(Wave3ControllerTest, ReferenceOffsetIsExplicitlyTransformedNotMixed)
+TEST_F(ControllerContractsTest, ReferenceOffsetIsExplicitlyTransformedNotMixed)
 {
   auto front = makeRunning(
     {rclcpp::Parameter("FollowPath.model_plugin", std::string(kFrontAxlePlugin)),
@@ -567,7 +567,7 @@ TEST_F(Wave3ControllerTest, ReferenceOffsetIsExplicitlyTransformedNotMixed)
 // keep-out is meant to protect) into the model's reference-point frame (where
 // the solver constrains it). Before the first solve the nominal trajectory is
 // all-zero, so the shift is the offset itself rotated by yaw = 0.
-TEST_F(Wave3ControllerTest, KeepOutShiftCarriesFrontAxleOffsetBeforeFirstSolve)
+TEST_F(ControllerContractsTest, KeepOutShiftCarriesFrontAxleOffsetBeforeFirstSolve)
 {
   auto front = makeConfigured(
     {rclcpp::Parameter("FollowPath.model_plugin", std::string(kFrontAxlePlugin)),
@@ -599,7 +599,7 @@ TEST_F(Wave3ControllerTest, KeepOutShiftCarriesFrontAxleOffsetBeforeFirstSolve)
 // is centred on base_link (the shift), and the veto transforms the predicted
 // pose back to base_link before the check (computeVelocityCommands). This
 // checks the disc half directly against the shift derived above.
-TEST_F(Wave3ControllerTest, FillStaticObstaclesWritesCellShiftedToSolverFrame)
+TEST_F(ControllerContractsTest, FillStaticObstaclesWritesCellShiftedToSolverFrame)
 {
   auto front = makeConfigured(
     {rclcpp::Parameter("FollowPath.model_plugin", std::string(kFrontAxlePlugin)),
@@ -633,7 +633,7 @@ TEST_F(Wave3ControllerTest, FillStaticObstaclesWritesCellShiftedToSolverFrame)
 // base_link footprint vetoes for BOTH a front-axle and a rear-axle model, even
 // though the two solve in different reference frames -- they protect the same
 // physical point.
-TEST_F(Wave3ControllerTest, FootprintVetoFiresIdenticallyForFrontAndRearAxleModels)
+TEST_F(ControllerContractsTest, FootprintVetoFiresIdenticallyForFrontAndRearAxleModels)
 {
   fillCost(-0.6, -0.6, 0.6, 0.6, nav2_costmap_2d::LETHAL_OBSTACLE);
 
@@ -646,7 +646,7 @@ TEST_F(Wave3ControllerTest, FootprintVetoFiresIdenticallyForFrontAndRearAxleMode
   EXPECT_EQ(front->failureCount(), 0);                // veto is not a solver failure
 }
 
-TEST_F(Wave3ControllerTest, FootprintVetoFiresForRearAxleModelAtSamePoint)
+TEST_F(ControllerContractsTest, FootprintVetoFiresForRearAxleModelAtSamePoint)
 {
   fillCost(-0.6, -0.6, 0.6, 0.6, nav2_costmap_2d::LETHAL_OBSTACLE);
 
@@ -662,7 +662,7 @@ TEST_F(Wave3ControllerTest, FootprintVetoFiresForRearAxleModelAtSamePoint)
 // --- Item 6 (command-validation half): a non-finite Twist component OTHER --
 // --- than linear.x is caught, not published unchecked -----------------------
 
-TEST_F(Wave3ControllerTest, NonFiniteOtherAxesTwistRampsThenEscalates)
+TEST_F(ControllerContractsTest, NonFiniteOtherAxesTwistRampsThenEscalates)
 {
   auto c = makeRunning(
   {
@@ -741,7 +741,7 @@ private:
 
 // publish_diagnostics defaulting false publishes nothing, even with an active
 // subscriber -- the publisher itself is never created.
-TEST_F(Wave3ControllerTest, DiagnosticsPublisherOffPublishesNothing)
+TEST_F(ControllerContractsTest, DiagnosticsPublisherOffPublishesNothing)
 {
   auto c = makeRunning({rclcpp::Parameter("FollowPath.max_obstacles", 0)});
   DiagnosticsCollector collector(node_, "FollowPath/diagnostics");
@@ -758,7 +758,7 @@ TEST_F(Wave3ControllerTest, DiagnosticsPublisherOffPublishesNothing)
 
 // publish_diagnostics true publishes exactly one message per control cycle,
 // once a subscriber is connected.
-TEST_F(Wave3ControllerTest, DiagnosticsPublisherOnPublishesOncePerCycle)
+TEST_F(ControllerContractsTest, DiagnosticsPublisherOnPublishesOncePerCycle)
 {
   auto c = makeRunning(
     {rclcpp::Parameter("FollowPath.max_obstacles", 0),
@@ -785,7 +785,7 @@ TEST_F(Wave3ControllerTest, DiagnosticsPublisherOnPublishesOncePerCycle)
 // 0 with obstacle avoidance off, control_period_ms is NaN on the first cycle
 // of a task and a finite gap on the next, and deadline_missed follows
 // solve_time_ms against the 1000*dt budget.
-TEST_F(Wave3ControllerTest, DiagnosticsFieldsMatchMessageContractOnAcceptedCycle)
+TEST_F(ControllerContractsTest, DiagnosticsFieldsMatchMessageContractOnAcceptedCycle)
 {
   auto c = makeRunning(
     {rclcpp::Parameter("FollowPath.max_obstacles", 0),
@@ -827,7 +827,7 @@ TEST_F(Wave3ControllerTest, DiagnosticsFieldsMatchMessageContractOnAcceptedCycle
 // STATUS_SOLVED, since the candidate itself converged) with converged ==
 // false, because the command was never applied -- the contradiction
 // DECISIONS.md's node 7 fixed.
-TEST_F(Wave3ControllerTest, DiagnosticsReportsSolvedButNotConvergedOnFootprintVeto)
+TEST_F(ControllerContractsTest, DiagnosticsReportsSolvedButNotConvergedOnFootprintVeto)
 {
   auto c = makeRunning(
     {rclcpp::Parameter("FollowPath.max_obstacles", 0),
@@ -849,7 +849,7 @@ TEST_F(Wave3ControllerTest, DiagnosticsReportsSolvedButNotConvergedOnFootprintVe
 // A non-finite-toTwist cycle reports the same shape: the QP itself converged
 // (status == STATUS_SOLVED) but converged == false, because toTwist()'s
 // output failed the finiteness gate.
-TEST_F(Wave3ControllerTest, DiagnosticsReportsSolvedButNotConvergedOnNonFiniteToTwist)
+TEST_F(ControllerContractsTest, DiagnosticsReportsSolvedButNotConvergedOnNonFiniteToTwist)
 {
   auto c = makeRunning(
     {rclcpp::Parameter(
@@ -875,7 +875,7 @@ TEST_F(Wave3ControllerTest, DiagnosticsReportsSolvedButNotConvergedOnNonFiniteTo
 // test_prox_mpc_controller.cpp use plans where the two agree, so none of them
 // can tell terminal-yaw tracking from tangent-holding. mpc()->getGoalX() (a
 // public MPC accessor) is the state reference actually handed to the solver.
-TEST_F(Wave3ControllerTest, TerminalYawTracksGoalOrientationDivergentFromTangent)
+TEST_F(ControllerContractsTest, TerminalYawTracksGoalOrientationDivergentFromTangent)
 {
   auto c = makeConfigured({rclcpp::Parameter("FollowPath.max_obstacles", 0)});
   c->activate();
@@ -897,7 +897,7 @@ TEST_F(Wave3ControllerTest, TerminalYawTracksGoalOrientationDivergentFromTangent
 // Without a published yaw tolerance, the reference instead holds the final
 // segment's tangent (yaw = 0 here), exactly as it did before terminal-yaw
 // tracking existed -- the other half of the same branch.
-TEST_F(Wave3ControllerTest, NoYawToleranceHoldsFinalSegmentTangent)
+TEST_F(ControllerContractsTest, NoYawToleranceHoldsFinalSegmentTangent)
 {
   auto c = makeConfigured({rclcpp::Parameter("FollowPath.max_obstacles", 0)});
   c->activate();
@@ -917,7 +917,7 @@ TEST_F(Wave3ControllerTest, NoYawToleranceHoldsFinalSegmentTangent)
 // segment tangent points +x, so with allow_reversing the reference speed
 // becomes negative (dir = -1); with it off (the default) the reference stays
 // forward-only, unaffected by pose orientation.
-TEST_F(Wave3ControllerTest, AllowReversingSignsTheReferenceSpeedNegative)
+TEST_F(ControllerContractsTest, AllowReversingSignsTheReferenceSpeedNegative)
 {
   nav_msgs::msg::Path plan = makeStraightPlan(11, 0.2);
   for (auto & p : plan.poses) {
@@ -934,7 +934,7 @@ TEST_F(Wave3ControllerTest, AllowReversingSignsTheReferenceSpeedNegative)
   EXPECT_LT(c->mpc()->getGoalU()(0, static_cast<Eigen::Index>(c->idxV())), 0.0);
 }
 
-TEST_F(Wave3ControllerTest, ReversingOffKeepsForwardOnlyReferenceDespiteOrientation)
+TEST_F(ControllerContractsTest, ReversingOffKeepsForwardOnlyReferenceDespiteOrientation)
 {
   nav_msgs::msg::Path plan = makeStraightPlan(11, 0.2);
   for (auto & p : plan.poses) {
@@ -955,7 +955,7 @@ TEST_F(Wave3ControllerTest, ReversingOffKeepsForwardOnlyReferenceDespiteOrientat
 // SAME pose orientation throughout (yaw = 0), so the tangent (not the
 // orientation) is what flips. The reference must hold at the cusp (x ~ 1.0)
 // rather than continue past it back toward x=0 within one horizon.
-TEST_F(Wave3ControllerTest, DirectionChangeCuspTruncatesTheReference)
+TEST_F(ControllerContractsTest, DirectionChangeCuspTruncatesTheReference)
 {
   nav_msgs::msg::Path plan;
   plan.header.frame_id = "map";
@@ -991,7 +991,7 @@ TEST_F(Wave3ControllerTest, DirectionChangeCuspTruncatesTheReference)
 // --- Item 14 (controller-level): the released Bicycle name still loads and --
 // --- resolves to the front-axle plugin --------------------------------------
 
-TEST_F(Wave3ControllerTest, DeprecatedBicycleNameResolvesToFrontAxlePhysics)
+TEST_F(ControllerContractsTest, DeprecatedBicycleNameResolvesToFrontAxlePhysics)
 {
   auto c = makeConfigured(
     {rclcpp::Parameter("FollowPath.model_plugin", std::string("prox_mpc_core/Bicycle"))});
