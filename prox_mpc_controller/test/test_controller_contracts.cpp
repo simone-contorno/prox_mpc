@@ -431,7 +431,7 @@ TEST_F(ControllerContractsTest, VetoedCandidateDoesNotAnchorNextCycleRateConstra
 }
 
 // --- Model/Nav2 adapter contract (Model::getPlanarMapping()) ----------------
-// --- items 5 and 6, plus the "a model declaring nothing still drives" pin ---
+// --- and the "a model declaring nothing still drives" pin -------------------
 //
 // readModelMapping() reads the controller's OWN cached n_/m_ (populated by
 // configure() from model_->getN()/getM() immediately before it is called,
