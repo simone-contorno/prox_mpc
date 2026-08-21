@@ -874,6 +874,40 @@ TEST_F(ControllerContractsTest, DiagnosticsReportsSolvedButNotConvergedOnFootpri
   EXPECT_FALSE(d.converged);
 }
 
+// The footprint-veto escalation publishes before it throws, on the same terms
+// as the solver-failure escalation. A cycle that ends the task with
+// NoValidControl is still a control cycle, and the diagnostics record of why it
+// ended is the last message on the topic; publishing after the escalation test
+// would leave that cycle unrecorded.
+TEST_F(ControllerContractsTest, DiagnosticsPublishedOnTheEscalatingVetoCycle)
+{
+  auto c = makeRunning(
+    {rclcpp::Parameter("FollowPath.max_obstacles", 0),
+      rclcpp::Parameter("FollowPath.max_solver_failures", 1),
+      rclcpp::Parameter("FollowPath.publish_diagnostics", true)});
+  DiagnosticsCollector collector(node_, "FollowPath/diagnostics");
+  fillCost(-0.6, -0.6, 0.6, 0.6, nav2_costmap_2d::LETHAL_OBSTACLE);
+
+  // The first veto sits inside the budget and brakes.
+  ASSERT_EQ(
+    collector.runCycleAndCollect(
+      [&]() {
+        c->computeVelocityCommands(makePose(0.0, 0.0, 0.0), geometry_msgs::msg::Twist(),
+        nullptr);
+      }), 1u);
+
+  // The second exceeds it and ends the task, and is recorded all the same.
+  const std::size_t delivered = collector.runCycleAndCollect(
+    [&]() {
+      EXPECT_THROW(
+        c->computeVelocityCommands(makePose(0.0, 0.0, 0.0), geometry_msgs::msg::Twist(),
+        nullptr),
+        nav2_core::NoValidControl);
+    });
+  EXPECT_EQ(delivered, 1u);
+  EXPECT_FALSE(collector.received().back().converged);
+}
+
 // A non-finite-toTwist cycle reports the same shape: the QP itself converged
 // (status == STATUS_SOLVED) but converged == false, because toTwist()'s
 // output failed the finiteness gate.

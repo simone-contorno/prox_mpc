@@ -1298,6 +1298,11 @@ geometry_msgs::msg::TwistStamped ProxMpcController::computeVelocityCommands(
          * forever. The veto counter is kept separate from the solver-failure
          * budget, so a single veto still does not trip recovery. */
         veto_count_++;
+        /* Published before the escalation test, not after it: the cycle that
+         * ends the task is still a control cycle, and the record of why it
+         * ended is the last message on the topic. The solver-failure
+         * escalation publishes on the same terms. */
+        publish_cycle();
         if (veto_count_ > max_solver_failures_) {
           throw nav2_core::NoValidControl(
                   "ProxMpcController: footprint veto persisted beyond the budget");
@@ -1306,7 +1311,6 @@ geometry_msgs::msg::TwistStamped ProxMpcController::computeVelocityCommands(
           logger_, *clock_, 2000,
           "ProxMpcController: footprint check vetoed the command; decelerating "
           "(veto %d/%d).", veto_count_, max_solver_failures_);
-        publish_cycle();
         return make_brake();
       }
     } else {
