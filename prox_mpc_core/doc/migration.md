@@ -90,7 +90,7 @@ is anchored on the command the robot actually received.
 
 ## Configuration-time validation now throws
 
-Three inputs that 1.0.0 accepted silently are now rejected.
+Four inputs that 1.0.0 accepted silently are now rejected.
 
 - `setGoalX` and `setGoalU` throw `std::invalid_argument` for a matrix with too
   few rows for the configured horizon, and for a wrong column count once
@@ -104,10 +104,21 @@ Three inputs that 1.0.0 accepted silently are now rejected.
   `std::logic_error` when called after `init()`. 1.0.0 returned quietly while
   mutating only their own members, leaving the buffers and the QP object sized
   for the previous configuration.
+- `Model::updateIneq` throws `std::invalid_argument` when the model declares no
+  existing bound for the `var` and index it is given. 1.0.0 fell through its
+  four search branches and returned having changed nothing, which made the call
+  safe to issue without first establishing that the bound exists - the pattern
+  the bundled controller's own `applySpeedLimit` uses, calling `updateIneq` on
+  the model's speed control with no preceding existence check. A caller that
+  relied on the no-op must now declare the bound with `setIneq` first, or read
+  `getIneq(var)` and skip the update when the index is absent.
 
 Call the structural setters before `init()`, size the goal matrices to the
-horizon, and pass symmetric positive-semidefinite weights. The bundled Nav2
-plugin already did all three, so a stack that uses it sees no change.
+horizon, pass symmetric positive-semidefinite weights, and update only a bound
+the model already declares. The bundled Nav2 plugin already did all four: it
+rejects a model that declares no bound on its speed control at `configure()`,
+before any speed limit can reach `updateIneq`. A stack that uses it sees no
+change.
 
 ## The bicycle model
 
