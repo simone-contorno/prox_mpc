@@ -123,13 +123,21 @@ away from a command the robot never received. No configuration changes.
 
 ## New behaviour behind parameters
 
-| Parameter | Type | Default | Meaning |
-| --- | --- | --- | --- |
-| `allow_reversing` | bool | `false` | Follow the plan's own pose orientations into reverse travel, signing the reference speed and truncating the reference at the first direction change. |
+| Parameter | Type | Default | Units | Meaning |
+| --- | --- | --- | --- | --- |
+| `allow_reversing` | bool | `false` | - | Follow the plan's own pose orientations into reverse travel, signing the reference speed and truncating the reference at the first direction change. |
+| `brake_period_s` | double | `0.0` | s | Step the deceleration ramp advances by on a braking cycle. `0.0` measures the inter-cycle period instead and clamps it into `[dt, 2 * dt]`; a positive value overrides the measurement and is used as-is. |
 
-The default reproduces the previous forward-only reference. With it on, a model
-that declares no reverse travel keeps the forward-only reference and logs a
-warning at `configure()`.
+`allow_reversing`'s default reproduces the previous forward-only reference. With
+it on, a model that declares no reverse travel keeps the forward-only reference
+and logs a warning at `configure()`.
+
+`brake_period_s`'s default of `0.0` reproduces 1.0.0's ramp on a
+`controller_server` running at `dt`, which stepped by the configured `dt`
+unconditionally. On a server running slower than `dt` the measured period is
+used instead, so the ramp still decelerates at the rate the model declares
+rather than at a fraction of it. Set a positive value to make the ramp
+independent of scheduling jitter.
 
 The terminal-heading reference is not behind a parameter. Past the plan end the
 reference pose is now the goal pose rather than the final segment's tangent,

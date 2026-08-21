@@ -38,6 +38,11 @@ controller_server:
       # reference at the first direction change.
       allow_reversing: false
 
+      # Step the deceleration ramp advances by on a braking cycle. 0 measures the
+      # inter-cycle period instead and clamps it into [dt, 2*dt]; a positive
+      # value overrides the measurement and is used as-is.
+      brake_period_s: 0.0   # [s]
+
       # Cost weights (assembled as in the demo).
       q_pos: 10.0
       q_theta: 1.0
