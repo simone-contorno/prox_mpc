@@ -9,7 +9,7 @@ diff and is not stated here.
 
 | Change | Source compatible | ABI compatible | Wire compatible |
 | --- | --- | --- | --- |
-| `prox_mpc::Model` gains a non-pure virtual `getPlanarMapping()` | yes | **no** | n/a |
+| `prox_mpc::Model` gains non-pure virtuals `getPlanarMapping()` and `fromTwist()` | yes | **no** | n/a |
 | `prox_mpc::MPC` gains `solveCandidate()`, `commitCandidate()`, `getCandidateFinite()`, `setU0()` and candidate members | yes | **no** | n/a |
 | `MPC::init()` rejects a nonsymmetric or indefinite weight matrix | yes | yes | n/a |
 | `MPC::setGoalX` / `setGoalU` reject an undersized matrix | yes | yes | n/a |
@@ -24,14 +24,17 @@ Nothing in this package touches a message, so nothing here is a wire event.
 
 ## Every `Model` plugin must be rebuilt
 
-`prox_mpc::Model` gains one virtual member, `getPlanarMapping()`, appended after
-`toTwist()` so it takes the last vtable slot.
+`prox_mpc::Model` gains two virtual members, `getPlanarMapping()` and
+`fromTwist()`, appended after `toTwist()` in that order so they take the last two
+vtable slots and every earlier slot keeps its index.
 
 A plugin that is recompiled against the new header needs no edit: the base class
-supplies a default that reproduces the convention the controller assumed before
-the hook existed - state `[x, y, yaw, (delta)]`, control `[v, ...]`, the state
-referenced to `base_link`, and a steering angle at state index 3 for any model
-with more than three states.
+supplies a default for each. `getPlanarMapping()` reproduces the convention the
+controller assumed before the hook existed - state `[x, y, yaw, (delta)]`,
+control `[v, ...]`, the state referenced to `base_link`, and a steering angle at
+state index 3 for any model with more than three states. `fromTwist()` is the
+inverse of the default `toTwist()`: `linear.x` into control 0, `angular.z` into
+control 1, every further control left non-finite to mark it undetermined.
 
 A plugin `.so` built against 1.0.0 and **not** rebuilt dispatches through a stale
 vtable. There is no build-time signal for this and no runtime warning; the
@@ -64,6 +67,35 @@ prox_mpc::PlanarMapping getPlanarMapping() const override
 may move its belief about the steering angle. The default reproduces the previous
 inference - control index 1 for a model with more than three states and more than
 one control - so a model that declares nothing behaves exactly as it did.
+
+### Inverting the twist mapping
+
+Override `fromTwist()` when the model overrides `toTwist()` and its controls are
+still recoverable from a body twist, so the two mappings agree. A consumer that
+has a measured twist and needs the control that produced it - a deceleration
+ramp seeding itself from the robot's actual velocity, for instance - reads this
+hook; without an override it would read the base class default, which is the
+inverse of a mapping the model does not use.
+
+`BicycleFrontAxle` overrides it, because control 0 is a front-wheel speed rather
+than the `base_link` speed `toTwist()` emits:
+
+```cpp
+VectorXd fromTwist(const geometry_msgs::msg::Twist & twist) const override
+{
+  VectorXd u = VectorXd::Constant(2, std::numeric_limits<double>::quiet_NaN());
+  const double wheel_arc = twist.angular.z * this->params(0);
+  const double speed = std::sqrt(twist.linear.x * twist.linear.x + wheel_arc * wheel_arc);
+  u(0) = (twist.linear.x < 0.0) ? -speed : speed;
+  return u;
+}
+```
+
+The inverse is taken from both twist components rather than by dividing
+`linear.x` by `cos(delta)`, which vanishes at that model's own `+/- pi/2`
+steering bound. Control 1 is left non-finite: a twist shows the steering angle's
+effect, not the rate the angle is changing at, so the caller keeps whatever
+value it already holds for that channel.
 
 ## `MPC` gains candidate state
 

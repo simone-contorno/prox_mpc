@@ -4,6 +4,7 @@
 #ifndef PROX_MPC__MODEL_HPP_
 #define PROX_MPC__MODEL_HPP_
 
+#include <limits>
 #include <map>
 #include <string>
 #include <vector>
@@ -124,6 +125,32 @@ public:
       if (this->m > 1) {mapping.idx_steer_rate = 1;}
     }
     return mapping;
+  }
+
+  /*!
+   * Map a body Twist back to a control vector: the inverse of toTwist() for the
+   * channels a twist can determine, and a non-finite entry for every channel it
+   * cannot. A planar twist carries two usable degrees of freedom, so a model
+   * with more controls than that - or one whose control is a rate the twist
+   * does not observe, a steering rate for instance - leaves those channels
+   * undetermined and the caller decides what to do with them.
+   *
+   * The default is the inverse of the default toTwist(): linear.x into control
+   * 0 and angular.z into control 1, with every further channel undetermined. A
+   * model that overrides toTwist() and whose controls are still recoverable
+   * from a twist overrides this as well, or the two mappings disagree.
+   *
+   * Appended last on purpose: it takes the final vtable slot, so an existing
+   * plugin keeps the layout it was compiled against for every earlier virtual.
+   * @param twist body twist.
+   */
+  virtual VectorXd fromTwist(const geometry_msgs::msg::Twist & twist) const
+  {
+    VectorXd u = VectorXd::Constant(
+      static_cast<Eigen::Index>(this->m), std::numeric_limits<double>::quiet_NaN());
+    if (u.size() > 0) {u(0) = twist.linear.x;}
+    if (u.size() > 1) {u(1) = twist.angular.z;}
+    return u;
   }
 
   /* Get */

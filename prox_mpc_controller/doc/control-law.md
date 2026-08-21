@@ -202,9 +202,13 @@ forms coincide for it.
 
 The speed channel ramps down from the velocity the `controller_server`
 measured for this cycle (RPP/MPPI style), so the brake tracks the robot's
-actual speed rather than a stale command; a non-finite measurement (NaN or
-$\pm\infty$) yields exactly zero, so an infinite measured velocity can never be
-ramped into the published command.
+actual speed rather than a stale command.
+The measurement is a `base_link` twist and the channel is a model control, so it
+is carried across by the model's own `fromTwist()` inverse rather than written
+in directly: for a front-axle-referenced model that control is a front-wheel
+speed, which only the linear and angular components together determine.
+A non-finite measurement (NaN or $\pm\infty$) yields exactly zero, so an
+infinite measured velocity can never be ramped into the published command.
 The remaining channels have no measurement and ramp from their last commanded
 value.
 Each step advances by `brake_period_s` when the operator set a positive value,

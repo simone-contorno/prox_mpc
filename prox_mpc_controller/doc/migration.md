@@ -102,9 +102,15 @@ result through `Model::toTwist()`. That is the only form that is correct for a
 model whose second control is not a body yaw rate: the bicycle's is a steering
 rate, so a twist-space ramp had no meaning for it.
 
-The speed channel still starts from the measured velocity. Every other control
-has no measurement and starts from the last commanded control value instead. For
-a unicycle, whose second control *is* a body yaw rate, that moves where
+The speed channel still starts from the measured velocity, carried into the
+model's own control units through `Model::fromTwist()` rather than by writing
+`linear.x` into it: for `prox_mpc_core/BicycleFrontAxle` that channel is a
+front-wheel speed, and a `base_link` speed placed there is projected by
+`cos(delta)` a second time on the way out. The unicycle and
+`prox_mpc_core/BicycleRearAxle` both carry the `base_link` speed in that channel
+already, so the number they start from is unchanged. Every other control has no
+measurement and starts from the last commanded control value instead. For a
+unicycle, whose second control *is* a body yaw rate, that moves where
 `angular.z` braking begins - from the measured yaw rate to the last commanded
 one.
 

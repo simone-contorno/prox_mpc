@@ -809,9 +809,22 @@ geometry_msgs::msg::TwistStamped ProxMpcController::computeVelocityCommands(
           brake_toward(steering_state_, steer_rate_low_, steer_rate_upp_, period);
       }
 
+      /* Seed the speed channel from the measurement, through the model's own
+       * inverse of the twist mapping rather than by writing the base_link speed
+       * straight into it: for a front-axle-referenced model that channel is a
+       * front-wheel speed, and a base-frame number placed there is projected by
+       * cos(delta) a second time on the way out, which turns a ramp step into a
+       * step change at large steering angles. A model whose inverse leaves the
+       * channel undetermined seeds a non-finite value, which the ramp takes to
+       * zero - the conservative outcome here, and the one a non-finite
+       * measurement already produces. Every other channel keeps its last
+       * commanded value: a twist carries two degrees of freedom and measures no
+       * more, so there is nothing else to seed them from. */
       VectorXd u_brake = last_cmd_u_;
-      if (u_brake.size() > static_cast<Eigen::Index>(idx_v_)) {
-        u_brake(static_cast<Eigen::Index>(idx_v_)) = velocity.linear.x;
+      const VectorXd u_measured = model_->fromTwist(velocity);
+      const auto speed_idx = static_cast<Eigen::Index>(idx_v_);
+      if (u_brake.size() > speed_idx && u_measured.size() > speed_idx) {
+        u_brake(speed_idx) = u_measured(speed_idx);
       }
       for (Eigen::Index j = 0; j < u_brake.size(); ++j) {
         u_brake(j) = brake_toward(

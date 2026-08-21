@@ -4,6 +4,8 @@
 #ifndef PROX_MPC__MODELS__BICYCLE_FRONT_AXLE_HPP_
 #define PROX_MPC__MODELS__BICYCLE_FRONT_AXLE_HPP_
 
+#include <cmath>
+#include <limits>
 #include <map>
 #include <stdexcept>
 #include <string>
@@ -116,6 +118,26 @@ public:
     twist.linear.x = u(0) * cos(this->x(3));                     // base_link speed
     twist.angular.z = u(0) * sin(this->x(3)) / this->params(0);  // omega = v sin(delta)/L
     return twist;
+  }
+
+  /*!
+   * Recover the front-wheel speed from a base_link twist. toTwist() emits
+   * linear.x = v cos(delta) and angular.z = v sin(delta) / L, so
+   * v = sign(linear.x) sqrt(linear.x^2 + (angular.z L)^2) inverts the pair
+   * without dividing by cos(delta), which vanishes at this model's own
+   * +/- pi/2 steering bound. The projection carries no direction at
+   * linear.x == 0, where the sign is taken as forward.
+   *
+   * The steering rate is left undetermined: a twist shows the steering angle's
+   * effect, not the rate the angle is changing at.
+   */
+  VectorXd fromTwist(const geometry_msgs::msg::Twist & twist) const override
+  {
+    VectorXd u = VectorXd::Constant(2, std::numeric_limits<double>::quiet_NaN());
+    const double wheel_arc = twist.angular.z * this->params(0);
+    const double speed = std::sqrt(twist.linear.x * twist.linear.x + wheel_arc * wheel_arc);
+    u(0) = (twist.linear.x < 0.0) ? -speed : speed;
+    return u;
   }
 
   void updatec(double dt, VectorXd x_next) override

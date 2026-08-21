@@ -1314,13 +1314,16 @@ TEST_F(ProxMpcControllerTest, ComputeSolverFailureRampsThenEscalates)
   });
   c->activate();
   c->setPlan(makeStraightPlan(31, 0.2));
-  c->steeringState() = 0.2;   // non-zero steering belief for the decay to move
+  const double delta0 = 0.2;
+  c->steeringState() = delta0;   // non-zero steering belief for the decay to move
 
-  // The brake ramps from the server-measured velocity, so supply a non-zero
-  // measured twist (angular negative to exercise the opposite-sign brake step).
+  // The brake ramps from the server-measured velocity, carried into the model's
+  // own control units, so the measurement is the base_link twist this model
+  // emits for a front-wheel speed of 0.30 at the current steering angle.
+  const double v_front = 0.30;
   geometry_msgs::msg::Twist measured;
-  measured.linear.x = 0.30;
-  measured.angular.z = -0.30;
+  measured.linear.x = v_front * std::cos(delta0);
+  measured.angular.z = v_front * std::sin(delta0) / kBicycleWheelbase;
 
   const auto cmd = c->computeVelocityCommands(makePose(0.0, 0.0, 0.0), measured, nullptr);
 
@@ -1334,8 +1337,8 @@ TEST_F(ProxMpcControllerTest, ComputeSolverFailureRampsThenEscalates)
   // 0.2 - 1.0 * 0.1 = 0.1 rad. The front-axle model's twist is the base_link one,
   // so linear.x is v cos(delta) rather than the front-wheel speed v, and
   // angular.z is v sin(delta) / L rather than a ramp of the measured yaw rate.
-  const double expected_delta = 0.2 - kSteerRateBound * 0.1;
-  const double expected_v = 0.30 - kModelDecel * 0.1;
+  const double expected_delta = delta0 - kSteerRateBound * 0.1;
+  const double expected_v = v_front - kModelDecel * 0.1;
   EXPECT_NEAR(cmd.twist.linear.x, expected_v * std::cos(expected_delta), 1e-9);
   EXPECT_NEAR(
     cmd.twist.angular.z, expected_v * std::sin(expected_delta) / kBicycleWheelbase, 1e-9);
@@ -2303,7 +2306,15 @@ TEST_F(ProxMpcControllerTest, BrakePreservesAsymmetricDecelerationBoundsPerDirec
 // the base_link twist - rather than a twist-space ramp of the measured yaw rate,
 // and a pinned brake_period_s steps both the speed ramp and the steering decay by
 // the same pinned amount rather than the measured period
-// BrakeMeasuredPeriodClampedToConfiguredRange exercises.
+// BrakeMeasuredPeriodCapsAtTwiceConfiguredDt exercises.
+//
+// The speed channel of this model is the front-wheel speed, so the ramp starts
+// from the speed the model's own inverse recovers from the measured base_link
+// twist, not from that twist's linear.x: the measurement below is exactly what
+// the model emits for a front-wheel speed of 1.0 at the current steering angle,
+// and the ramp is expected to start from 1.0. Seeding the channel with
+// linear.x instead would start it at 1.0 * cos(0.5) and project it a second
+// time on the way out.
 TEST_F(ProxMpcControllerTest, BicycleBrakeMapsThroughToTwistWithPinnedPeriod)
 {
   auto c = makeConfigured(
@@ -2317,18 +2328,57 @@ TEST_F(ProxMpcControllerTest, BicycleBrakeMapsThroughToTwistWithPinnedPeriod)
   });
   c->activate();
   c->setPlan(makeStraightPlan(31, 0.2));
-  c->steeringState() = 0.5;
+  const double delta0 = 0.5;
+  c->steeringState() = delta0;
 
+  const double v_front = 1.0;
   geometry_msgs::msg::Twist measured;
-  measured.linear.x = 1.0;
+  measured.linear.x = v_front * std::cos(delta0);
+  measured.angular.z = v_front * std::sin(delta0) / kBicycleWheelbase;
   const auto cmd = c->computeVelocityCommands(makePose(0.0, 0.0, 0.0), measured, nullptr);
   ASSERT_NE(c->mpc()->qp_info.status, proxsuite::proxqp::QPSolverOutput::PROXQP_SOLVED);
 
-  const double expected_v = 1.0 - kModelDecel * 0.2;             // du[0] bound, pinned period
-  const double expected_delta = 0.5 - kSteerRateBound * 0.2;     // u[1] bound, pinned period
+  const double expected_v = v_front - kModelDecel * 0.2;         // du[0] bound, pinned period
+  const double expected_delta = delta0 - kSteerRateBound * 0.2;  // u[1] bound, pinned period
   EXPECT_NEAR(cmd.twist.linear.x, expected_v * std::cos(expected_delta), 1e-9);
   EXPECT_NEAR(
     cmd.twist.angular.z, expected_v * std::sin(expected_delta) / kBicycleWheelbase, 1e-9);
+}
+
+// The rear-axle model's speed control is already the base_link speed, so its
+// brake starts from the measured linear.x exactly as it did before the speed
+// channel was seeded through the model's inverse: the base class inverse reads
+// linear.x straight out. Its steering rate is not observable in a twist, so
+// that channel still decays from the steering belief at the model's own rate
+// bound and the emitted yaw rate is v tan(delta) / L.
+TEST_F(ProxMpcControllerTest, RearAxleBrakeSeedsFromMeasuredBaseLinkSpeed)
+{
+  auto c = makeConfigured(
+  {
+    rclcpp::Parameter(
+      "FollowPath.model_plugin", std::string("prox_mpc_core/BicycleRearAxle")),
+    rclcpp::Parameter("FollowPath.brake_period_s", 0.2),
+    rclcpp::Parameter("FollowPath.max_int_iter_qp", 1),
+    rclcpp::Parameter("FollowPath.max_ext_iter_qp", 1),
+    rclcpp::Parameter("FollowPath.max_iter_sqp", 1),
+    rclcpp::Parameter("FollowPath.max_solver_failures", 10),
+  });
+  c->activate();
+  c->setPlan(makeStraightPlan(31, 0.2));
+  const double delta0 = 0.5;
+  c->steeringState() = delta0;
+
+  geometry_msgs::msg::Twist measured;
+  measured.linear.x = 1.0;
+  measured.angular.z = 1.0 * std::tan(delta0) / kBicycleWheelbase;
+  const auto cmd = c->computeVelocityCommands(makePose(0.0, 0.0, 0.0), measured, nullptr);
+  ASSERT_NE(c->mpc()->qp_info.status, proxsuite::proxqp::QPSolverOutput::PROXQP_SOLVED);
+
+  const double expected_v = 1.0 - kModelDecel * 0.2;
+  const double expected_delta = delta0 - kSteerRateBound * 0.2;
+  EXPECT_NEAR(cmd.twist.linear.x, expected_v, 1e-9);
+  EXPECT_NEAR(
+    cmd.twist.angular.z, expected_v * std::tan(expected_delta) / kBicycleWheelbase, 1e-9);
 }
 
 // Structurally invalid horizon sizing (np or nc < 1, or dt <= 0) fails configure

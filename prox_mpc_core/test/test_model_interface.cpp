@@ -4,7 +4,7 @@
 
 // Tests for the Model interface using the bundled models: name, dimensions,
 // declared bounds, the analytic forward-Euler residual and Jacobians, and the
-// configure() and toTwist() hooks.
+// configure(), toTwist() and fromTwist() hooks.
 
 #include <cmath>
 #include <map>
@@ -12,6 +12,8 @@
 #include <string>
 
 #include <gtest/gtest.h>
+
+#include <geometry_msgs/msg/twist.hpp>
 
 #include <prox_mpc/model.hpp>
 #include <prox_mpc/models/bicycle.hpp>
@@ -299,6 +301,63 @@ TEST(ModelInterface, ToTwistSemantics)
   auto tw_b = bicycle.toTwist(ub);
   EXPECT_NEAR(tw_b.linear.x, tw_f.linear.x, kTol);
   EXPECT_NEAR(tw_b.angular.z, tw_f.angular.z, kTol);
+}
+
+// fromTwist recovers the control a twist was produced from, for the channels a
+// twist determines. The unicycle and the rear-axle model both carry the
+// base_link speed in control 0, so the base class default reads it straight
+// out; the front-axle model carries a front-wheel speed there, which only the
+// (linear.x, angular.z) pair together determines, and its override says so. No
+// twist observes a steering rate, so the front-axle override leaves control 1
+// undetermined for the caller to fill from somewhere else.
+TEST(ModelInterface, FromTwistInvertsToTwist)
+{
+  Unicycle uni;
+  geometry_msgs::msg::Twist tw;
+  tw.linear.x = 0.7;
+  tw.angular.z = 0.3;
+  const VectorXd u_uni = uni.fromTwist(tw);
+  ASSERT_EQ(u_uni.size(), 2);
+  EXPECT_NEAR(u_uni(0), 0.7, kTol);
+  EXPECT_NEAR(u_uni(1), 0.3, kTol);
+
+  const double delta = 0.2;
+  VectorXd xb(4);
+  xb << 0.0, 0.0, 0.0, delta;
+  VectorXd ub(2);
+  ub << 0.7, 0.1;                 // [v, delta_dot]
+
+  BicycleFrontAxle front;
+  front.setX(xb);
+  const VectorXd u_front = front.fromTwist(front.toTwist(ub));
+  ASSERT_EQ(u_front.size(), 2);
+  EXPECT_NEAR(u_front(0), 0.7, kTol);        // the front-wheel speed, not its projection
+  EXPECT_FALSE(std::isfinite(u_front(1)));   // delta_dot is not observable in a twist
+
+  BicycleRearAxle rear;
+  rear.setX(xb);
+  const VectorXd u_rear = rear.fromTwist(rear.toTwist(ub));
+  ASSERT_EQ(u_rear.size(), 2);
+  EXPECT_NEAR(u_rear(0), 0.7, kTol);         // control 0 is already the base_link speed
+}
+
+// The front-axle inverse is singularity-free at the model's own +/- pi/2
+// steering bound, where cos(delta) is zero and the projection carries no
+// direction, and it recovers the sign of a reversing speed.
+TEST(ModelInterface, FrontAxleFromTwistHandlesFullLockAndReverse)
+{
+  BicycleFrontAxle front;
+  VectorXd xb(4);
+  xb << 0.0, 0.0, 0.0, M_PI / 2;
+  front.setX(xb);
+  VectorXd ub(2);
+  ub << 0.7, 0.0;
+  EXPECT_NEAR(front.fromTwist(front.toTwist(ub))(0), 0.7, 1e-9);
+
+  xb(3) = -0.4;
+  front.setX(xb);
+  ub(0) = -0.9;
+  EXPECT_NEAR(front.fromTwist(front.toTwist(ub))(0), -0.9, kTol);
 }
 
 // --- BicycleRearAxle: identity, bounds, residual and Jacobians --------------
