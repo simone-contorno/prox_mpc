@@ -522,8 +522,8 @@ TEST_F(ControllerContractsTest, ReadModelMappingDefaultMappingLetsBareModelDrive
 // override, so every one of that suite's Unicycle-model cycles already
 // exercises the default mapping end to end.
 
-// --- Item 5: the reference-point offset is explicitly transformed, never ----
-// --- silently mixed between a front- and rear-axle-referenced model --------
+// --- The reference-point offset is explicitly transformed, never ------------
+// --- silently mixed between a front- and rear-axle-referenced model ---------
 //
 // A Nav2 plan is always a base_link-referenced trajectory (there is no such
 // thing as a "front-axle plan"); what item 5 asks is whether the controller
@@ -657,8 +657,8 @@ TEST_F(ControllerContractsTest, FootprintVetoFiresForRearAxleModelAtSamePoint)
   EXPECT_EQ(rear->failureCount(), 0);
 }
 
-// --- Item 6 (command-validation half): a non-finite Twist component OTHER --
-// --- than linear.x is caught, not published unchecked -----------------------
+// --- Command validation: a non-finite Twist component OTHER than ------------
+// --- linear.x is caught, not published unchecked ----------------------------
 
 TEST_F(ControllerContractsTest, NonFiniteOtherAxesTwistRampsThenEscalates)
 {
@@ -688,8 +688,8 @@ TEST_F(ControllerContractsTest, NonFiniteOtherAxesTwistRampsThenEscalates)
     nav2_core::NoValidControl);
 }
 
-// --- Item 3: SolverDiagnostics reports the applied outcome, not the QP's ----
-// --- outcome alone; the publisher is opt-in and only-when-subscribed -------
+// --- SolverDiagnostics reports the applied outcome, not the QP's ------------
+// --- outcome alone; the publisher is opt-in and only-when-subscribed --------
 
 // A subscriber connects to the plugin's diagnostics topic and collects every
 // message delivered, spinning between control cycles so DDS discovery has a
@@ -868,7 +868,7 @@ TEST_F(ControllerContractsTest, DiagnosticsReportsSolvedButNotConvergedOnNonFini
   EXPECT_FALSE(d.converged);
 }
 
-// --- Item 11: terminal heading and travel direction --------------------------
+// --- Terminal heading and travel direction ----------------------------------
 
 // The final pose's quaternion differs from the final segment's tangent (the
 // plan runs straight along +x, but the goal pose faces +y): existing tests in
@@ -988,8 +988,8 @@ TEST_F(ControllerContractsTest, DirectionChangeCuspTruncatesTheReference)
   EXPECT_GE(c->mpc()->getGoalX()(static_cast<Eigen::Index>(np), c->idxX()), 1.0 - 0.05);
 }
 
-// --- Item 14 (controller-level): the released Bicycle name still loads and --
-// --- resolves to the front-axle plugin --------------------------------------
+// --- At the controller level, the released Bicycle name still loads ---------
+// --- and resolves to the front-axle plugin ----------------------------------
 
 TEST_F(ControllerContractsTest, DeprecatedBicycleNameResolvesToFrontAxlePhysics)
 {
