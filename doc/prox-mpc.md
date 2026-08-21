@@ -33,7 +33,8 @@ The dynamics of a real vehicle are nonlinear, so the optimal-control problem is 
 ProxMPC solves it with **Sequential Quadratic Programming (SQP)**: it linearises the dynamics around the current guess, assembles a **Quadratic Program (QP)**, and solves that QP with the [ProxQP](https://github.com/Simple-Robotics/proxsuite) solver, re-linearising and retrying only while the sub-problem fails to converge. In the nominal case that is one linearise-solve-update pass per control cycle, with the linearisation refined across cycles through the trajectory warm start ([nmpc.md](../prox_mpc_core/doc/nmpc.md)).
 A useful consequence falls out for free: if the model is already linear, the first QP is exact and the SQP converges in a single solve.
 
-Safety is split into two layers that recur throughout the stack: a **fast, convex** keep-out constraint lives *inside* the optimisation so the solver shapes a trajectory that avoids obstacles, and an **exact, conservative** check sits *outside* it as a veto, so a command that would actually collide is never issued.
+Safety is split into two layers that recur throughout the stack: a **fast, convex** keep-out constraint lives *inside* the optimisation so the solver shapes a trajectory that avoids obstacles, and an **outline-only footprint veto** sits *outside* it as a backstop on the single pose the solver predicts one step ahead.
+The veto rasterises only the footprint perimeter and reports the maximum edge cost, with no interior fill and no sweep between the current and the next commanded pose, so it is a backstop rather than a guarantee: it earns its keep only when costmap inflation is sized to the robot's real footprint and the local costmap's unknown-space tracking matches the deployment ([Section 4](#4-prox_mpc_controller---the-nav2-plugin)).
 
 The full derivation - cost function, the Euler linearisation, the KKT/QP assembly, convergence, and the obstacle constraints - is in the engine's own docs:
 
@@ -94,9 +95,9 @@ Each `computeVelocityCommands` cycle the plugin:
 1. transforms the global plan into the costmap global frame and samples a state/control reference along it by arc length (continuous, unwrapped heading; a curvature-aware steering reference for the bicycle; goal-approach easing);
 2. reduces the local costmap to the engine's obstacle triples - a clustered, windowed scan for occupied cells - and, when predictive avoidance is on, propagates tracked dynamic obstacles over the horizon and binds each to a constraint slot (hybrid fill);
 3. solves one SQP cycle, times it, and (opt-in) publishes a `SolverDiagnostics`;
-4. gates the result: a non-converged or non-finite solve, or a command that fails the **exact polygon-footprint veto**, decelerates from the measured velocity at the model's limit and escalates to a Nav2 recovery after `max_solver_failures` consecutive faults (the veto counting on its own budget).
+4. gates the result: a non-converged or non-finite solve, or a command that fails the **outline-only footprint veto**, decelerates from the measured velocity at the model's limit and escalates to a Nav2 recovery after `max_solver_failures` consecutive faults (the veto counting on its own budget).
 
-This is the two-layer safety split in practice: the in-loop disc constraint shapes the trajectory; the footprint veto is the conservative backstop.
+This is the two-layer safety split in practice: the in-loop disc constraint shapes the trajectory; the footprint veto is an outline-only backstop, not a guarantee.
 
 **How to use it.**
 Point `controller_server`'s `FollowPath` at the plugin and load its parameters; the bundled config is the single source of truth.
@@ -231,7 +232,7 @@ The model interface details are in [`prox_mpc_core/README.md`](../prox_mpc_core/
 These hold across the workspace and are documented once in the [architecture overview](architecture.md#cross-cutting-conventions):
 
 - **Frames** - REP-103 conventions; the tracker estimates velocity in a fixed, non-rotating frame and the controller transforms plans and obstacles into the costmap global frame via `tf2`.
-- **Safety split** - a fast convex disc constraint inside the optimisation, plus an exact polygon-footprint veto and a limit-respecting deceleration outside it.
+- **Safety split** - a fast convex disc constraint inside the optimisation, plus an outline-only, single-endpoint footprint veto and a limit-respecting deceleration outside it.
 - **Types** - all MPC quantities are `double`; ROS parameters are `double` / `int` / `bool` / `string` only.
 - **Build** - `Release` (`-O3 -DNDEBUG`) by default behind an `if(NOT CMAKE_BUILD_TYPE)` guard; never `-Ofast` / `-ffast-math` for the solver (it breaks the IEEE-754 semantics the convergence and finiteness guards rely on); per-board CPU tuning stays out of the source.
 - **License** - Apache-2.0 across the workspace, with a short `SPDX-License-Identifier` header per file and the full text in `LICENSE`.

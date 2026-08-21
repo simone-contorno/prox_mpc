@@ -255,17 +255,18 @@ Because both fills produce identical `(node, slot)` triples, the CBF coupling an
 the rest of this derivation are unchanged. The predictive fill is specified in the
 controller's [control-law.md](../../prox_mpc_controller/doc/control-law.md).
 
-## Footprint: disc here, exact polygon elsewhere
+## Footprint: disc here, polygon elsewhere
 
 The core treats the robot as a **disc** whose radius is folded into
 $d_\text{safe}$.
 A disc is rotation-invariant, so the half-plane needs only the position, not the
 heading, which keeps the constraint simple and convex.
-Exact polygon-footprint collision checking is intentionally **not** done in the
+Polygon-footprint collision checking is intentionally **not** done in the
 optimizer; it belongs to a separate safety layer (for example a collision monitor
 or a footprint collision checker) that can veto a command the optimizer produced.
 Separating an approximate, fast, convex avoidance term in the optimizer from an
-exact, conservative safety check is the conventional division of responsibility.
+outline-only footprint check outside it is the conventional division of
+responsibility.
 
 ## Why this is the common choice
 

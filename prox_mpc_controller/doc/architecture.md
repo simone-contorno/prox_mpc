@@ -133,15 +133,24 @@ Obstacle avoidance is split across two layers.
 The engine keeps a fast, convex, disc-based margin inside the optimization, which
 shapes the trajectory away from obstacles
 (see [obstacle avoidance](../../prox_mpc_core/doc/obstacle-avoidance.md)).
-A separate exact polygon-footprint check, evaluated on the pose one step ahead
-with `nav2_costmap_2d::FootprintCollisionChecker`, is the conservative last line
-of defense: if that pose's footprint reaches an inscribed-inflated cost, the
-command is vetoed and replaced by the deceleration ramp without consuming the
-solver-failure budget. The veto keeps its own counter and escalates to
-`nav2_core::NoValidControl` once it exceeds the same `max_solver_failures`
-budget, so a robot stuck behind a static obstacle reaches a recovery instead of
-braking forever.
-The veto is skipped when the costmap exposes fewer than three footprint points.
+A separate, outline-only footprint check, evaluated on the pose one step ahead
+with `nav2_costmap_2d::FootprintCollisionChecker`, is a backstop rather than a
+guarantee: it rasterises only the footprint perimeter and reports the maximum
+edge cost, with no interior fill and no sweep between the current and the next
+commanded pose. It vetoes the command when that pose's footprint reaches
+`LETHAL_OBSTACLE`, treating unknown space as non-colliding when the local
+costmap tracks it - matching `nav2_regulated_pure_pursuit_controller` and
+`nav2_mppi_controller`'s own collision checks rather than the stricter
+`INSCRIBED_INFLATED_OBSTACLE` threshold used before. A vetoed command is
+replaced by the deceleration ramp without consuming the solver-failure budget.
+The veto keeps its own counter and escalates to `nav2_core::NoValidControl`
+once it exceeds the same `max_solver_failures` budget, so a robot stuck behind
+a static obstacle reaches a recovery instead of braking forever.
+The veto is skipped when the costmap exposes fewer than three footprint
+points, and it is an effective backstop only when costmap inflation is sized
+to the robot's real footprint and the local costmap's unknown-space tracking
+matches the deployment: the in-loop keep-out half-planes above are what cover
+a lethal cell adjoining unknown space that the veto's own masking may miss.
 
 ## Solver-failure handling
 
