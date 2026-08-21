@@ -91,6 +91,30 @@ the published twist come from the model. All six are now checked for finiteness,
 on the accepted path and on the deceleration ramp. A model that fills only the
 two planar components is unaffected.
 
+## The deceleration ramp works in control space
+
+1.0.0's brake wrote `linear.x` and `angular.z` directly, stepping both down from
+the velocity the `controller_server` measured for that cycle. The ramp now runs
+on the model's own controls, under the model's own `du` bounds, and maps the
+result through `Model::toTwist()`. That is the only form that is correct for a
+model whose second control is not a body yaw rate: the bicycle's is a steering
+rate, so a twist-space ramp had no meaning for it.
+
+The speed channel still starts from the measured velocity. Every other control
+has no measurement and starts from the last commanded control value instead. For
+a unicycle, whose second control *is* a body yaw rate, that moves where
+`angular.z` braking begins - from the measured yaw rate to the last commanded
+one.
+
+That last-commanded vector is zeroed by `activate()` and by `reset()`. If the
+first cycle to brake after either - from a cancel, a solver failure, or a
+footprint veto - finds the robot yawing, it commands `angular.z = 0` outright
+instead of ramping down from the yaw rate the robot actually has. Later cycles
+ramp normally, because an accepted cycle records the command it applied. A
+deployment that can brake that early while already turning will see a sharper
+yaw stop than 1.0.0 gave; the linear channel is unaffected, because it still
+ramps from the measurement.
+
 ## `SolverDiagnostics.converged` means something different
 
 The message defines `converged` as a converged solve whose applied iterate is
