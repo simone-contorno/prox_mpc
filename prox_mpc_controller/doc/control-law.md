@@ -54,10 +54,23 @@ turns the short way rather than spinning the long way around.
 
 ### Bicycle steering reference
 
-For a model with a steering state ($n > 3$) the reference steering is
-pre-positioned to the per-node path curvature $\kappa_k = d\theta/ds$,
-$\delta_k^\text{ref} = \arctan(L\,\kappa_k)$, using the configured wheelbase $L$.
-A model without a steering state (the unicycle, $n = 3$) keeps the go-straight
+For a model that declares a steering state through `getPlanarMapping()`, the
+reference steering is pre-positioned from the per-node path curvature
+$\kappa_k = d\theta/ds$ and the model's declared reference-point offset $a$
+from `base_link` along the body x axis (`0` for `BicycleRearAxle`, the
+wheelbase $L$ for `BicycleFrontAxle`):
+
+$$
+\delta_k^\text{ref} = \arctan(L\,z_k), \qquad
+z_k = \frac{\kappa_k}{\sqrt{1 - (a\,\kappa_k)^2}}.
+$$
+
+At $a = 0$ (the rear axle) this reduces to the textbook rear-axle inverse
+$\delta_k^\text{ref} = \arctan(L\,\kappa_k)$; at $a = L$ (the front axle) it is
+algebraically the front-axle inverse $\delta_k^\text{ref} = \arcsin(L\,\kappa_k)$,
+expressed as an `arctan` of the offset-adjusted $z_k$ so both plugins share one
+formula.
+A model with no steering state (the unicycle, $n = 3$) keeps the go-straight
 default.
 The control reference `goal_u` carries $v_\text{ref}$ in the speed channel and
 zero elsewhere.
