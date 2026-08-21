@@ -134,10 +134,13 @@ Five inputs that 1.0.0 accepted silently are now rejected.
   finite, symmetric and positive semidefinite. 1.0.0 accepted an asymmetric or
   indefinite weight and silently solved the symmetrised problem instead.
 - `setQ`, `setR`, `setS`, `setW`, `setNp`, `setNc`, `setdt`, `setT`,
-  `setMaxIntIterQP`, `setMaxExtIterQP`, `setGuess` and `setQPtype` throw
-  `std::logic_error` when called after `init()`. 1.0.0 returned quietly while
-  mutating only their own members, leaving the buffers and the QP object sized
-  for the previous configuration.
+  `setMaxIntIterQP`, `setMaxExtIterQP`, `setGuess`, `setQPtype`, `setCbfGamma`
+  and `setMaxObs` throw `std::logic_error` when called after `init()`. 1.0.0
+  returned quietly while mutating only their own members, leaving the buffers
+  and the QP object sized for the previous configuration. `setMaxObs` sizes the
+  obstacle matrix and the QP's slot count at `init()`; `setCbfGamma` reaches the
+  solver only through `configProxQP()`, which `init()` runs once, so a later
+  call changed the `MPC` member and nothing the solver reads.
 - `setNp` throws `std::invalid_argument` for a prediction horizon shorter than
   an already-set control horizon, and `init()` throws it for a pair that reached
   it unchecked. 1.0.0 compared the two inside `setNc` alone, and only once `Np`

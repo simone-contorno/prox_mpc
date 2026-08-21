@@ -526,6 +526,10 @@ void MPC::setQPtype(bool qp_type)
  */
 void MPC::setCbfGamma(double cbf_gamma)
 {
+  // Pre-init only, like every other setter the QP is configured from: the rate
+  // reaches the solver through configProxQP(), which init() runs once, so a
+  // later call would change this object's own member and nothing else.
+  rejectAfterInit(initialized, "setCbfGamma");
   // Validated here as well as in ProxQP so a bad value fails at configuration
   // time rather than on the first init().
   if (!(cbf_gamma > 0.0 && cbf_gamma <= 1.0)) {
@@ -539,7 +543,11 @@ void MPC::setCbfGamma(double cbf_gamma)
  * Must be set before init()/configProxQP() so the QP is sized once for K.
  * @param max_obs capacity K.
  */
-void MPC::setMaxObs(size_t max_obs) {this->max_obs = max_obs;}
+void MPC::setMaxObs(size_t max_obs)
+{
+  rejectAfterInit(initialized, "setMaxObs");
+  this->max_obs = max_obs;
+}
 
 /* Get the obstacle-slot capacity K per predicted node. */
 size_t MPC::getMaxObs() {return max_obs;}

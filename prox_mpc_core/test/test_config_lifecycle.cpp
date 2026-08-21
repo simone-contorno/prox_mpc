@@ -38,11 +38,12 @@ std::shared_ptr<MPC> makeInitialized()
 
 // --- Structural setters reject a post-init() call ----------------------------
 //
-// migration.md enumerates the ten setters this covers: setQ, setR, setS, setW,
-// setNp, setNc, setMaxIntIterQP, setMaxExtIterQP, setGuess and setQPtype. Each
-// throws std::logic_error rather than mutating a member the sized buffers and
-// the QP object no longer agree with (decision: reject after init, not the
-// pruned validated-rebuild alternative).
+// Every setter whose value the sized buffers or the QP object are built from:
+// setQ, setR, setS, setW, setNp, setNc, setdt, setT, setMaxIntIterQP,
+// setMaxExtIterQP, setGuess, setQPtype, setCbfGamma and setMaxObs. Each throws
+// std::logic_error rather than mutating a member the sized buffers and the QP
+// object no longer agree with (decision: reject after init, not the pruned
+// validated-rebuild alternative).
 
 TEST(ConfigLifecycle, SetQRejectsAfterInit)
 {
@@ -114,6 +115,23 @@ TEST(ConfigLifecycle, SetQPtypeRejectsAfterInit)
 {
   auto mpc = makeInitialized();
   EXPECT_THROW(mpc->setQPtype(true), std::logic_error);
+}
+
+// The CBF rate reaches the solver only through configProxQP(), which init()
+// runs once, so a post-init() call used to be accepted and then have no effect
+// on the QP it appears to configure.
+TEST(ConfigLifecycle, SetCbfGammaRejectsAfterInit)
+{
+  auto mpc = makeInitialized();
+  EXPECT_THROW(mpc->setCbfGamma(0.5), std::logic_error);
+}
+
+// The obstacle-slot capacity is as structural as the horizon: init() sizes the
+// obstacle matrix and the QP's own slot count from it.
+TEST(ConfigLifecycle, SetMaxObsRejectsAfterInit)
+{
+  auto mpc = makeInitialized();
+  EXPECT_THROW(mpc->setMaxObs(4), std::logic_error);
 }
 
 // The exception names both the class and the setter, so a caller reading the
