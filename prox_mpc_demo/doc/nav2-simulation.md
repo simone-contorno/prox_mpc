@@ -301,10 +301,13 @@ What it changes from the baseline (the rest of the stack is identical):
 - `max_obstacles: 4`, `cbf_gamma: 1.0` - the in-loop NMPC obstacle term runs
   alongside Nav2, with four slots so the box and the adjacent wall cells are all
   captured. `cbf_gamma: 1.0` is the pointwise keep-out, which is what this config
-  targets: the open-world single-obstacle and dynamic cells. A dense obstacle field
-  is the case that may instead want a lower gamma, where the discrete-time CBF
-  coupling (`cbf_gamma < 1`) lets the safety margin decay gradually rather than
-  binding at every node.
+  targets: the open-world single-obstacle and dynamic cells. A dense obstacle
+  field is a case the discrete-time CBF coupling (`cbf_gamma < 1`) is meant for
+  - decaying the safety margin gradually rather than binding at every node -
+  but its effect at the shipped slack weight has not yet been benchmarked (see
+  [control-law.md](../../prox_mpc_controller/doc/control-law.md#discrete-time-control-barrier-coupling)),
+  so treat a lower gamma as a tunable option to measure, not a settled
+  recommendation for this scenario.
 - `predict_obstacles: true`, `max_dynamic_obstacles: 2` - a confirmed *moving*
   track is propagated over the horizon along its tracker-sampled predicted
   trajectory (a constant-velocity ray when no samples are provided) and bound to a

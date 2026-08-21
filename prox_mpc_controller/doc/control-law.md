@@ -209,11 +209,23 @@ solver-failure budget, though a veto persisting beyond that same budget raises
 The engine's per-node half-plane is the $\gamma = 1$ case of a discrete-time
 control-barrier-function constraint $h(x_{k+1}) \ge (1 - \gamma)\, h(x_k)$, which
 couples consecutive nodes for smoother avoidance.
-The coupling requires the **same** obstacle at nodes $k$ and $k+1$, which the
-predictive fill provides by binding each tracked obstacle to a fixed slot across
-the horizon.
-`cbf_gamma` exposes $\gamma$: 1.0 is the pointwise constraint, and a value below 1
-lets the safety margin decay gradually, which makes a dense obstacle field viable
-where the pointwise term would stall the robot (see the verified predictive
-configuration in
-[../../prox_mpc_demo/doc/nav2-simulation.md](../../prox_mpc_demo/doc/nav2-simulation.md)).
+The coupling requires the **same** obstacle at nodes $k$ and $k+1$. Both the
+predictive fill and the costmap (static) fill provide this: the predictive
+fill binds each tracked obstacle to a fixed slot across the horizon, and the
+costmap fill now binds each scanned object to a fixed slot across every node
+it appears at, rather than re-selecting nearest candidates independently per
+node (see [obstacle avoidance](../../prox_mpc_core/doc/obstacle-avoidance.md)
+for the core-side guard this pairs with).
+That stability holds only *within* one control cycle; nothing yet holds a slot
+to the same object *across* cycles, so a `cbf_gamma` below 1 can still couple
+different physical objects at a cycle boundary when two candidates are close
+in rank.
+
+`cbf_gamma` exposes $\gamma$: 1.0 is the pointwise constraint, and a value
+below 1 lets the safety margin decay gradually instead of binding at every
+node. The coupling is enforced through the slack penalty like every other
+obstacle row, not as a hard barrier, so whether a given `cbf_gamma` measurably
+changes a trajectory at the shipped `w_weight` has not yet been benchmarked;
+treat it as a tunable option protected by the core-side guard and the
+within-cycle slot stability above, not as a settled recommendation for dense
+fields.
