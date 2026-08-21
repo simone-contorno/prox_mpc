@@ -188,33 +188,61 @@ Instead of demanding absolute safety at every node, this only requires the safet
 margin to **decay no faster than the rate $\gamma$**, which stays feasible while
 the robot advances and removes the stay-put local optimum. With $\gamma = 1$ it
 reduces exactly to the pointwise constraint $h(p_{k+1}) \ge 0$, so the parameter
-default preserves the original behavior bit-for-bit.
+default preserves the original behavior bit-for-bit - the coupling below is
+skipped altogether at that default rather than merely evaluating to zero, so it
+adds nothing to the assembled QP's sparsity pattern.
 
-In increment form, with the slack and the previous-node signed distance $h(p_k)$
-held constant per SQP iteration (only the constrained node $k+1$ is linearized;
-the re-linearization across iterations recovers the exact value):
+Both sides of the coupling depend on a position, so both are linearized to
+first order about the current SQP iterate. In increment form, with the slack
+held constant per SQP iteration:
 
 $$
-n^\top \Delta p_{k+1} + \Delta w \ge (1 - \gamma)\, h(p_k) - h(p_{k+1}) - w.
+n_{k+1}^\top \Delta p_{k+1} - (1 - \gamma)\, n_k^\top \Delta p_k + \Delta w
+\ge (1 - \gamma)\, h(p_k) - h(p_{k+1}) - w.
 $$
 
 ```text
 setC : obs_h_prev = ||p_k - o_k|| - d_safe   (signed distance at the previous node)
+       C(row, p_k)  += -(1 - cbf_gamma) * n_k   (previous-node gradient block, node >= 1)
 setd : low(row) = (1 - cbf_gamma) * obs_h_prev - obs_h - w
 ```
 
-Here $o_k$ is the obstacle position **at the previous node's time**: with a static
-fill $o_k = o_{k+1}$, but with the predictive (moving) fill each node carries a
-different obstacle position, so $h(p_k)$ uses the previous node's obstacle slot
-(`obs[slot - max_obs]`). Node $k = 0$ is the fixed current pose, so it reuses the
-node-1 obstacle. Only the constrained node's gradient $n^\top \Delta p_{k+1}$ enters
-$C$; the previous node's signed distance is held constant per SQP iteration, which is
-exact at convergence.
+Here $o_k$ is the obstacle position **at the previous node's time**: with a
+static (costmap) fill $o_k = o_{k+1}$ for every slot, because the controller
+binds each scanned object to a fixed slot across every node it appears at
+rather than re-selecting independently per node; with the predictive (moving)
+fill each node already carries a different, tracked position for the same
+slot. Node $k = 0$ is the fixed current pose, for which the obstacle matrix
+carries no dedicated block; its position is reconstructed by extrapolating the
+first two blocks backward, $o_0 = 2\,o(\text{block }0) - o(\text{block }1)$,
+exact for both the static and the constant-velocity fill, falling back to the
+first block unchanged when the implied obstacle speed exceeds a sanity bound.
+The previous-node gradient term $n_k^\top \Delta p_k$ is written only for
+$k \ge 1$: $\Delta p_0$ is pinned to zero by the initial-state equality, so a
+node-0 gradient column could never influence the solution and would only
+enlarge the constraint matrix's sparsity pattern for no benefit.
+Below `1.0` the core also guards against a degenerate pairing: if either
+node's obstacle slot holds the unused-slot far sentinel, the previous-node
+terms (value and gradient alike) are left at zero and the row falls back to
+the plain pointwise constraint for that node, rather than comparing a real
+obstacle against an out-of-range placeholder.
+
+Because the SQP loop exits as soon as one QP sub-problem reports `SOLVED` (see
+[nmpc.md](nmpc.md)), a control cycle typically performs exactly one linearize
+step rather than iterating within the cycle: the coupling above is first-order
+exact in both nodes' positions **at the current iterate**, and that iterate is
+refined cycle to cycle through the warm start rather than by re-linearizing
+within one call.
 
 The rate $\gamma$ is the `cbf_gamma` parameter, forwarded from the controller
 through `MPC::setCbfGamma`. This lets the predictive NMPC obstacle term run
 alongside Nav2's planner/costmaps: Nav2 replans the global path while the MPC
 predicts the robot against per-node obstacles over the horizon.
+The coupling is enforced through the slack penalty like every other obstacle
+row, not as a hard barrier: at the shipped `w_weight`, whether a value of
+`cbf_gamma` below `1.0` measurably changes a trajectory has not yet been
+benchmarked (see [control-law.md](../../prox_mpc_controller/doc/control-law.md)
+for the controller-side guidance this implies).
 
 ## Bounded capacity and the far sentinel
 
