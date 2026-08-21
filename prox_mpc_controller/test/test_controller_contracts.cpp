@@ -390,7 +390,7 @@ protected:
   int node_counter_{0};
 };
 
-// --- A rejected candidate does not anchor the next cycle's rate constraint ---
+// --- A rejected candidate does not anchor the next cycle's rate constraint --
 //
 // The vetoed-candidate half of the transactional solve. In 1.0.0 a
 // solved-but-vetoed candidate still advanced MPC's retained u0
@@ -526,7 +526,7 @@ TEST_F(ControllerContractsTest, ReadModelMappingDefaultMappingLetsBareModelDrive
 // --- silently mixed between a front- and rear-axle-referenced model ---------
 //
 // A Nav2 plan is always a base_link-referenced trajectory (there is no such
-// thing as a "front-axle plan"); what item 5 asks is whether the controller
+// thing as a "front-axle plan"); the question is whether the controller
 // silently treats that trajectory as the model's own state (correct only for
 // a model referenced to base_link, i.e. the rear axle) or explicitly
 // transforms it by the model's declared offset. The state fed to the solver
