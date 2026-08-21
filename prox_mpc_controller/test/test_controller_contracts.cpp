@@ -2,17 +2,16 @@
 // SPDX-License-Identifier: Apache-2.0
 
 
-// Contract tests for the Wave 3 controller-facing changes: the transactional
-// solve/commit wiring at the plugin boundary (item 2), SolverDiagnostics'
-// gate-aware `converged` field and its publisher (item 3), the model/Nav2
-// adapter contract (Model::getPlanarMapping(), read by readModelMapping() --
-// items 5 and 6), and terminal-heading/reverse-travel tracking (item 11).
+// Contract tests for the controller's Nav2-facing behaviour: the transactional
+// solve/commit wiring at the plugin boundary, SolverDiagnostics' gate-aware
+// `converged` field and its publisher, the model/Nav2 adapter contract
+// (Model::getPlanarMapping(), read by readModelMapping()), and
+// terminal-heading/reverse-travel tracking.
 //
 // This is a separate binary from test_prox_mpc_controller.cpp (which already
 // covers configure(), the fail-safe branches, and the costmap/predictive
 // obstacle fill in depth) rather than an addition to it, so the file can be
-// built and run in isolation for the red-then-green demonstration without
-// disturbing that suite's own coverage.
+// built and run in isolation without disturbing that suite's own coverage.
 
 #include <array>
 #include <chrono>
@@ -391,12 +390,11 @@ protected:
   int node_counter_{0};
 };
 
-// --- Item 2: a rejected candidate does not anchor the next cycle's rate ------
-// --- constraint --------------------------------------------------------------
+// --- A rejected candidate does not anchor the next cycle's rate constraint ---
 //
-// The vetoed-candidate half of RB-1: before the transactional solve/commit
-// pair, a solved-but-vetoed candidate still advanced MPC's retained u0
-// (mpc.cpp:148-150, pre-Wave-3), so the next cycle's du rate constraint was
+// The vetoed-candidate half of the transactional solve. In 1.0.0 a
+// solved-but-vetoed candidate still advanced MPC's retained u0
+// (mpc.cpp:148-150 at that release), so the next cycle's du rate constraint was
 // anchored on a command the robot never received. make_brake()'s own twist
 // output is sourced directly from the measured velocity argument (not from
 // u0), so it cannot show this by itself; what can is whether the SOLVER's own
@@ -825,8 +823,10 @@ TEST_F(ControllerContractsTest, DiagnosticsFieldsMatchMessageContractOnAcceptedC
 
 // A footprint-vetoed cycle reports the QP's own outcome (status ==
 // STATUS_SOLVED, since the candidate itself converged) with converged ==
-// false, because the command was never applied -- the contradiction
-// DECISIONS.md's node 7 fixed.
+// false, because the command was never applied. In 1.0.0 converged was set
+// from the QP status alone and published before the gates, so a vetoed and
+// braked cycle was recorded as converged, contradicting the released message's
+// own definition of the field.
 TEST_F(ControllerContractsTest, DiagnosticsReportsSolvedButNotConvergedOnFootprintVeto)
 {
   auto c = makeRunning(

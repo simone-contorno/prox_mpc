@@ -670,8 +670,8 @@ TEST_F(ProxMpcControllerTest, SingleControlModelReadsBounds)
 }
 
 // robot_radius below the costmap footprint's circumscribed radius is
-// warn-and-continue (DECISIONS.md's chosen option): configure() must not
-// throw, and robot_radius must not be silently overwritten to match the
+// warn-and-continue rather than fatal: configure() must not throw, and
+// robot_radius must not be silently overwritten to match the
 // footprint -- an operator running a deliberately tighter disc keeps it. The
 // fixture's default square footprint (half-extent 0.5 m, padded to 0.51 m)
 // and default robot_radius (0.5 m) already trigger this case; the warning
@@ -1227,9 +1227,9 @@ TEST_F(ProxMpcControllerTest, ComputeSkipsDuplicateLeadingPlanPointForHeading)
 // A sparse (coarsely spaced) plan is projected onto its true nearest segment
 // point, not snapped to whichever vertex happens to be nearest: at the default
 // 0.05 m costmap resolution, an 8 m vertex spacing is far too coarse for
-// vertex snapping and true segment projection to agree. The pre-Wave-2 code
-// compared distance to vertices only, so it could jump the tracked progress
-// straight to the far end of a long segment.
+// vertex snapping and true segment projection to agree. 1.0.0 compared
+// distance to vertices only, so it could jump the tracked progress straight to
+// the far end of a long segment.
 TEST_F(ProxMpcControllerTest, PlanProjectionSparsePlanUsesTrueSegmentPoint)
 {
   auto c = makeConfigured();
@@ -1482,19 +1482,17 @@ TEST_F(ProxMpcControllerTest, FootprintVetoIgnoresUnknownWhenCostmapTracksUnknow
   EXPECT_GT(cmd.twist.linear.x, 0.0);            // no veto: command passes through
 }
 
-// The controller's veto comment (prox_mpc_controller.cpp, the footprint-veto
-// block) and DECISIONS.md's node 9 refinement both describe an inherited
-// upstream masking property: footprintCostAtPose takes the maximum cost under
-// the footprint's perimeter, and since NO_INFORMATION (255) is numerically
-// larger than LETHAL_OBSTACLE (254), a footprint spanning both was expected to
-// read NO_INFORMATION and be reported clear. Measured directly against this
-// nav2_costmap_2d release, that does not reproduce: lineCost does not let an
-// unmeasured cell out-rank a lethal one on the same edge, in either traversal
-// order, so a footprint spanning both is reported at LETHAL_OBSTACLE and still
-// vetoes. This test pins the actually observed behaviour (see the stage
-// report's findings for the discrepancy) rather than the documented-but-
-// unverified one, so a future nav2 release that reintroduces the masking shows
-// up as a failing test here instead of a silent divergence.
+// Nav2's own doc comment for footprintCostAtPose describes an inherited
+// upstream masking property: it takes the maximum cost under the footprint's
+// perimeter, and since NO_INFORMATION (255) is numerically larger than
+// LETHAL_OBSTACLE (254), a footprint spanning both would read NO_INFORMATION
+// and be reported clear. Measured directly against this nav2_costmap_2d
+// release, that does not reproduce: lineCost does not let an unmeasured cell
+// out-rank a lethal one on the same edge, in either traversal order, so a
+// footprint spanning both is reported at LETHAL_OBSTACLE and still vetoes.
+// This test pins the actually observed behaviour rather than the
+// documented-but-unverified one, so a future nav2 release that reintroduces
+// the masking shows up as a failing test here instead of a silent divergence.
 TEST_F(ProxMpcControllerTest, FootprintVetoStillFiresWhenLethalAdjoinsUnknown)
 {
   auto c = makeConfigured({rclcpp::Parameter("FollowPath.max_obstacles", 0)});
@@ -1741,8 +1739,8 @@ TEST_F(ProxMpcControllerTest, ReduceCostmapClustersAndSentinels)
 }
 
 // A static obstacle near the MPC's nominal predicted state, but well outside a
-// reference-centered scan window, is picked up: the pre-Wave-2 code centered
-// the search on reference(node+1), so a lethal cell beyond d_safe +
+// reference-centered scan window, is picked up: 1.0.0 centered the search on
+// reference(node+1), so a lethal cell beyond d_safe +
 // obstacle_cluster_radius of the plan reference position never entered the
 // window at all, no matter how close it was to where the solver actually
 // predicted the robot would be.

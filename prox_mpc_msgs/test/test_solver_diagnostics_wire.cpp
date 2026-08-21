@@ -2,14 +2,12 @@
 // SPDX-License-Identifier: Apache-2.0
 
 
-// Migration pin for prox_mpc_msgs (Wave 3 added the message; no field was
-// added, removed, reordered or retyped by Wave 3 itself, but nothing pinned
-// the wire contract before this). Pins field names, C++ types, declaration
-// order and zero-initialized defaults for SolverDiagnostics.msg, and the
-// STATUS_* constant values, so a later removal, rename, reorder or retype
-// fails the suite rather than silently changing the wire contract a
-// benchmark script or a recorded bag depends on. RELEASE_IMPACT.md section
-// 1.4 records the full 14-field, 7-constant contract this pins.
+// SolverDiagnostics.msg shipped in prox_mpc_msgs 1.0.0, so its layout is
+// already installed on users' machines; this file pins that wire contract,
+// which nothing did before. It fixes field names, C++ types, declaration order
+// and zero-initialized defaults for all 14 fields, and the values of the 7
+// STATUS_* constants, so a later removal, rename, reorder or retype fails the
+// suite rather than silently breaking a benchmark script or a recorded bag.
 //
 // Field order is checked through the rosidl introspection typesupport
 // (declaration-order member list), not merely by naming every field: naming
@@ -44,7 +42,7 @@ TEST(SolverDiagnosticsWire, FieldOrderMatchesReleasedContract)
     static_cast<const rosidl_typesupport_introspection_cpp::MessageMembers *>(ts->data);
   ASSERT_NE(members, nullptr);
 
-  // RELEASE_IMPACT.md section 1.4: 14 fields, in this order.
+  // The 14 fields released at 1.0.0, in their declared order.
   const std::string expected[] = {
     "header", "solve_time_ms", "qp_solve_time_ms", "status", "converged",
     "sqp_iters", "qp_iters_ext", "primal_residual", "dual_residual", "objective",
@@ -118,10 +116,11 @@ TEST(SolverDiagnosticsWire, StatusConstantsMatchReleasedValues)
   EXPECT_EQ(SolverDiagnostics::STATUS_UNKNOWN, 255);
 }
 
-// --- Obstacle / ObstacleArray: unchanged by Wave 3, pinned for completeness -
+// --- Obstacle / ObstacleArray: pinned for completeness ----------------------
 //
-// Wave 3 did not touch these two messages; included so a future change to
-// either is caught by the same suite that guards SolverDiagnostics.
+// These two messages are also released at 1.0.0 and unchanged since; included
+// so a future change to either is caught by the same suite that guards
+// SolverDiagnostics.
 
 TEST(ObstacleWire, FieldOrderMatchesReleasedContract)
 {

@@ -350,8 +350,8 @@ TEST(ObstacleK, SentinelDiscontinuityDoesNotBlowUpSlack)
 // stays at the far sentinel before it -- the (sentinel at node k, real obstacle
 // at node k+1) discontinuity fillSlot cannot express, since it writes the same
 // triple at every node. The core guard at proxqp.cpp:433-436 already lands on
-// this branch (Wave 1); this exercises it at cbf_gamma = 0.5 and records the
-// observed QP status and largest obstacle slack as a characterization.
+// this branch; this exercises it at cbf_gamma = 0.5 and records the observed QP
+// status and largest obstacle slack as a characterization.
 TEST(ObstacleK, SlotDiscontinuityAtHalfGammaStaysBounded)
 {
   const size_t k = 1;
@@ -469,7 +469,7 @@ TEST(ObstacleK, MultiObstacleAndSentinelReducesToK1)
   }
 }
 
-// --- Current-time obstacle reconstruction at node 0 (Wave 3) ----------------
+// --- Current-time obstacle reconstruction at node 0 -------------------------
 //
 // The matrix's row 0 (block 0) carries the obstacle's position one step ahead
 // (paired with x_sol row 1's time), not now, so the first coupled constraint's

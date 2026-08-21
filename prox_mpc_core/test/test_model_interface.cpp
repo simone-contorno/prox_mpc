@@ -405,8 +405,9 @@ TEST(ModelInterface, RearAxleRejectsSteerBoundBeyondCap)
 
 // --- Model::getPlanarMapping() -----------------------------------------------
 //
-// New non-pure virtual (Wave 3). Pin the bundled models' declared mappings and
-// the base class default a model that overrides nothing falls back to.
+// A non-pure virtual added after 1.0.0. Pin the bundled models' declared
+// mappings and the base class default a model that overrides nothing falls
+// back to.
 
 // Unicycle carries no steering state (n == 3), so the default mapping declares
 // none: the base class only infers a steering angle for a model with more than
