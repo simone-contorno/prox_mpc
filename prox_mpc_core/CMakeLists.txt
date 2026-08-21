@@ -134,7 +134,14 @@ if(BUILD_TESTING)
       test_utils
       test_transactional_solve
       test_config_lifecycle)
-    ament_add_gtest(${test_name} test/${test_name}.cpp)
+    # test_obstacle_k drives a long sequence of QP solves and does not fit inside
+    # CTest's 60 s default once AddressSanitizer instrumentation is linked in, so
+    # the sanitizer job reports a timeout rather than a real defect.
+    set(_test_timeout "")
+    if(test_name STREQUAL "test_obstacle_k")
+      set(_test_timeout TIMEOUT 300)
+    endif()
+    ament_add_gtest(${test_name} test/${test_name}.cpp ${_test_timeout})
     target_link_libraries(${test_name}
       ${PROJECT_NAME}
       Eigen3::Eigen

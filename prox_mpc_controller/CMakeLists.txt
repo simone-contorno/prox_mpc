@@ -125,9 +125,15 @@ if(BUILD_TESTING)
   # The wrapper unit tests bring up a LifecycleNode, a tf2 buffer, and a
   # Costmap2DROS, then drive the plugin's public interface and fail-safe
   # branches; the test owns rclcpp init/shutdown via its own main.
+  #
+  # Both binaries in this package stand up a node per case, which does not fit
+  # inside CTest's 60 s default once AddressSanitizer instrumentation is linked
+  # in; without the raised timeout the sanitizer job reports a timeout rather
+  # than a real defect.
   ament_add_gtest(test_prox_mpc_controller
     test/test_prox_mpc_controller.cpp
-    SKIP_LINKING_MAIN_LIBRARIES)
+    SKIP_LINKING_MAIN_LIBRARIES
+    TIMEOUT 300)
   target_link_libraries(test_prox_mpc_controller
     ${PROJECT_NAME}
     Eigen3::Eigen
@@ -156,7 +162,8 @@ if(BUILD_TESTING)
   # come from prox_mpc_test_models, already a <test_depend> above.
   ament_add_gtest(test_wave3_contracts
     test/test_wave3_contracts.cpp
-    SKIP_LINKING_MAIN_LIBRARIES)
+    SKIP_LINKING_MAIN_LIBRARIES
+    TIMEOUT 300)
   target_link_libraries(test_wave3_contracts
     ${PROJECT_NAME}
     Eigen3::Eigen

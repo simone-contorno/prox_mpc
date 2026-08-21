@@ -105,7 +105,21 @@ jobs:
     container:
       image: ros:jazzy-ros-base-noble
 
+    # Leak detection stays on. The only leaks the suite reports come from
+    # rosidl's one-time static type-support registration, reached through
+    # rcl_node_init when a test brings up a node, so those two frames are
+    # suppressed by name rather than the detector being switched off - a leak in
+    # this repository's own allocations still fails the job.
+    #
+    # The suppressions path goes in LSAN_OPTIONS, not ASAN_OPTIONS: ASan parses
+    # its own suppressions file against interceptor_name, interceptor_via_fun,
+    # interceptor_via_lib and odr_violation only, so a leak: entry there makes
+    # every sanitized process die with "failed to parse suppressions". It is
+    # spelled ${{ github.workspace }} because an env value is not shell-expanded,
+    # and an unreadable suppressions file is likewise fatal.
     env:
+      ASAN_OPTIONS: detect_leaks=1
+      LSAN_OPTIONS: suppressions=${{ github.workspace }}/.github/asan.supp
       UBSAN_OPTIONS: print_stacktrace=1
 
     steps:
