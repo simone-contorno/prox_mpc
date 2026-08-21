@@ -88,6 +88,16 @@ public:
       p << params.at("L");
       setParams(p);
     }
+    /* Checked before the magnitude test below, which is a bare ">" and so is
+     * false for NaN: without this a non-finite bound would pass straight into
+     * overrideBound and from there into every state-bound row of the QP. */
+    for (const char * key : {"delta_min", "delta_max"}) {
+      const auto it = params.find(key);
+      if (it != params.end() && !std::isfinite(it->second)) {
+        throw std::invalid_argument(
+                "BicycleRearAxle::configure: the steering-angle bound must be finite");
+      }
+    }
     if (steerBoundExceeded(params, "delta_min") || steerBoundExceeded(params, "delta_max")) {
       throw std::invalid_argument(
               "BicycleRearAxle::configure: the steering-angle bound must not exceed "

@@ -7,6 +7,7 @@
 // configure(), toTwist() and fromTwist() hooks.
 
 #include <cmath>
+#include <limits>
 #include <map>
 #include <stdexcept>
 #include <string>
@@ -460,6 +461,25 @@ TEST(ModelInterface, RearAxleRejectsSteerBoundBeyondCap)
   getBound(model, "x", 3, low, upp);
   EXPECT_NEAR(low, -1.0, kTol);
   EXPECT_NEAR(upp, 1.0, kTol);
+}
+
+// A non-finite steering bound is rejected too. The cap test is a bare ">",
+// which is false for NaN, so nothing but an explicit finiteness check keeps a
+// NaN out of the state-bound rows the QP is assembled from.
+TEST(ModelInterface, RearAxleRejectsNonFiniteSteerBound)
+{
+  const double nan = std::numeric_limits<double>::quiet_NaN();
+  const double inf = std::numeric_limits<double>::infinity();
+  BicycleRearAxle model;
+  EXPECT_THROW(model.configure({{"delta_max", nan}}), std::invalid_argument);
+  EXPECT_THROW(model.configure({{"delta_min", -inf}}), std::invalid_argument);
+
+  // The declared bounds are untouched by a rejected configure().
+  double low = 0.0;
+  double upp = 0.0;
+  getBound(model, "x", 3, low, upp);
+  EXPECT_NEAR(low, -BicycleRearAxle::kMaxSteerAngle, kTol);
+  EXPECT_NEAR(upp, BicycleRearAxle::kMaxSteerAngle, kTol);
 }
 
 // --- Model::getPlanarMapping() -----------------------------------------------
