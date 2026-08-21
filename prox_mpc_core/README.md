@@ -25,7 +25,7 @@ This package contains **no ROS node**: it is the reusable library that [prox_mpc
 ## Overview
 
 The core owns the SQP/QP assembly, the tracking cost, the state/control/rate constraints, the disc-based obstacle math, and the `prox_mpc::Model` vehicle interface.
-It never needs editing to gain a new vehicle model: a model is a `pluginlib` plugin loaded by name.
+It never needs editing to gain a new vehicle model that does not enable obstacle avoidance: a model is a `pluginlib` plugin loaded by name. A model that does enable obstacle avoidance additionally has to place its planar position at state columns 0 and 1, the one place the obstacle-constraint assembly reads position directly rather than through a declared mapping.
 
 See [doc/architecture.md](doc/architecture.md) for the design overview, [doc/nmpc.md](doc/nmpc.md) for the NMPC/SQP/QP math, and [doc/obstacle-avoidance.md](doc/obstacle-avoidance.md) for the obstacle constraints. [doc/migration.md](doc/migration.md) records what changed on the released surface since 1.0.0.
 
@@ -48,7 +48,7 @@ A model derives from `Model` and implements three pure virtual hooks that supply
 Two optional hooks make it loadable and usable generically: `configure(params)` sets its constants by name after construction, and `toTwist(u)` maps a control vector to a `geometry_msgs/msg/Twist`.
 
 `Model` is a `pluginlib` base type, and the bundled models are registered as `prox_mpc_core/BicycleFrontAxle`, `prox_mpc_core/BicycleRearAxle` and `prox_mpc_core/Unicycle`, with `prox_mpc_core/Bicycle` kept as a deprecated alias for the front-axle model.
-A consumer can load a model by name with a `pluginlib::ClassLoader<prox_mpc::Model>` and pass it to `MPC::init`, so adding a model requires no change to this library.
+A consumer can load a model by name with a `pluginlib::ClassLoader<prox_mpc::Model>` and pass it to `MPC::init`, so adding a model that does not enable obstacle avoidance requires no change to this library; see [Overview](#overview) for the state-layout precondition on a model that does.
 
 | Plugin name | Class | State | Control | Reference point |
 | --- | --- | --- | --- | --- |
