@@ -65,9 +65,11 @@ flowchart TD
   trk -- tracked_obstacles --> ctrl
 ```
 
-The `Model` interface is the extension seam: `prox_mpc_core` registers `Bicycle`
-and `Unicycle`, and `prox_mpc_test_models` registers a fault-injection model, all
-against the same `prox_mpc::Model` base.
+The `Model` interface is the extension seam: `prox_mpc_core` registers
+`BicycleFrontAxle`, `BicycleRearAxle` and `Unicycle` (plus `Bicycle` as a
+deprecated alias for the front-axle model), and `prox_mpc_test_models`
+registers its fault-injection models, all against the same `prox_mpc::Model`
+base.
 The controller and the demo load a model by name, so adding a vehicle model needs
 no change to the consumers.
 
@@ -109,7 +111,7 @@ flowchart TD
   subgraph cs[controller_server]
     ctrl[ProxMpcController]
     ctrl --> mpc[prox_mpc::MPC]
-    mpc --> model[Model Unicycle / Bicycle]
+    mpc --> model[Model Unicycle / BicycleFrontAxle / BicycleRearAxle]
   end
 
   nav2sense -- local costmap + footprint --> ctrl

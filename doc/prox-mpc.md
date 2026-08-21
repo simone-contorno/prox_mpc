@@ -56,7 +56,7 @@ Three classes in the `prox_mpc` namespace do the work:
 - `prox_mpc::ProxQP` - assembles the QP for one linearisation and solves it with ProxQP.
 - `prox_mpc::MPC` - the SQP driver: it holds the horizons, weights, and obstacle capacity, runs the SQP loop, and exposes the solution plus the solver telemetry (`qp_info`, `sqp_iter`, `qp_iter_ext`, and the peak obstacle slack).
 
-Because the model is loaded *by name*, adding a vehicle needs no change to the engine or its consumers - that is the extension seam the whole workspace is organised around.
+Because the model is loaded *by name*, adding a vehicle that does not enable obstacle avoidance needs no change to the engine or its consumers - that is the extension seam the whole workspace is organised around. A model that does enable obstacle avoidance must additionally place its planar position at state columns 0 and 1, the one place the engine reads position directly rather than through a declared mapping.
 
 **How to use it.**
 Construct an `MPC`, set the horizons/weights/obstacle capacity, `init()` it with a `Model`, then each cycle set the reference, pose, and obstacles and call `solve()`.
@@ -219,10 +219,10 @@ The [architecture overview](architecture.md) draws the runtime data flow for eac
 
 ## 10. Extending ProxMPC: add a vehicle model
 
-The `prox_mpc::Model` interface is the one seam you extend to support a new vehicle, and it ripples nowhere else:
+The `prox_mpc::Model` interface is the one seam you extend to support a new vehicle:
 
-1. Derive from `prox_mpc::Model` and implement `updateA`/`updateB`/`updatec` (the Euler linearisation), plus `configure(params)` and `toTwist(u)`.
-2. Register it as a `pluginlib` plugin against the `prox_mpc::Model` base (as `prox_mpc_core` does for `Bicycle`/`Unicycle` and `prox_mpc_test_models` does for its fixture).
+1. Derive from `prox_mpc::Model` and implement `updateA`/`updateB`/`updatec` (the Euler linearisation), plus `configure(params)` and `toTwist(u)`. A model that enables obstacle avoidance must place its planar position at state columns 0 and 1, since the engine's obstacle-constraint assembly reads those two columns directly.
+2. Register it as a `pluginlib` plugin against the `prox_mpc::Model` base (as `prox_mpc_core` does for `BicycleFrontAxle`/`BicycleRearAxle`/`Unicycle` and `prox_mpc_test_models` does for its fixture).
 3. Select it by name (`model_plugin`) in the controller or the demo - no consumer code changes.
 
 The model interface details are in [`prox_mpc_core/README.md`](../prox_mpc_core/README.md) and [`prox_mpc_core/doc/architecture.md`](../prox_mpc_core/doc/architecture.md); `prox_mpc_test_models` is a minimal worked example of a third-party model registered against the core base.

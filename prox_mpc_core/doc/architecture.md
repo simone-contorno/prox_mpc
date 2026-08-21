@@ -149,9 +149,13 @@ as `prox_mpc_core/BicycleFrontAxle`, `prox_mpc_core/BicycleRearAxle` and
 `prox_mpc_core/Unicycle`, with `prox_mpc_core/Bicycle` kept as a deprecated alias
 for the front-axle model.
 A consumer loads a model with a `pluginlib::ClassLoader<prox_mpc::Model>`, calls
-`configure(...)`, and passes the instance to `MPC::init(...)`. Adding a new model
-therefore requires no change to this library: a model only needs to derive from
-`Model`, implement the three Jacobian hooks, and be registered as a plugin.
+`configure(...)`, and passes the instance to `MPC::init(...)`. Adding a new
+model that does not enable obstacle avoidance therefore requires no change to
+this library: a model only needs to derive from `Model`, implement the three
+Jacobian hooks, and be registered as a plugin. A model that does enable
+obstacle avoidance (`setObsAvoid(true)`) additionally has to place its planar
+position at state columns 0 and 1, because the obstacle-constraint assembly
+reads those two columns directly rather than through a declared mapping.
 
 The residual and Jacobian formulas for the bundled models are given in
 [nmpc.md](nmpc.md).
