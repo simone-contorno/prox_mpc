@@ -125,7 +125,9 @@ if(BUILD_TESTING)
 
   # (a) model interface, (b) regression baseline, (c) custom model, (d) obstacle K,
   # (e) ROS-facing utils helpers, (f) transactional solve/commit contract,
-  # (g) post-init configuration lifecycle and goal/obstacle shape validation
+  # (g) post-init configuration lifecycle and goal/obstacle shape validation,
+  # (h) the deprecated alias's once-per-process warning, which needs a process
+  #     where nothing else has constructed the alias first
   foreach(test_name
       test_model_interface
       test_mpc_regression
@@ -133,7 +135,8 @@ if(BUILD_TESTING)
       test_obstacle_k
       test_utils
       test_transactional_solve
-      test_config_lifecycle)
+      test_config_lifecycle
+      test_deprecated_alias)
     # test_obstacle_k drives a long sequence of QP solves and does not fit inside
     # CTest's 60 s default once AddressSanitizer instrumentation is linked in, so
     # the sanitizer job reports a timeout rather than a real defect.

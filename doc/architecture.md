@@ -218,7 +218,8 @@ What the stack supports today, stated plainly rather than left implicit.
   deployment, and the in-loop keep-out half-planes are what constrain every
   node of the horizon.
 - **`prox_mpc_core/Bicycle`.** A deprecated alias for `BicycleFrontAxle` that
-  warns once per construction; removed in a future major release, whose exact
+  warns once per process, naming the replacement plugins and the two behaviours
+  that changed with the rename; removed in a future major release, whose exact
   number is fixed against the landed diff rather than pre-announced (see
   [prox_mpc_core/doc/migration.md](../prox_mpc_core/doc/migration.md)).
 

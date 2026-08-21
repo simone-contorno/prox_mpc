@@ -165,8 +165,10 @@ change.
 ## The bicycle model
 
 `prox_mpc_core/Bicycle` still resolves and still loads. It is now a deprecated
-alias for `prox_mpc_core/BicycleFrontAxle`, warns once per construction, and is
-removed in the next major release. Two things about it changed:
+alias for `prox_mpc_core/BicycleFrontAxle`, warns once per process, and is
+removed in the next major release. The warning names both changes below, so an
+operator who reads only the log still learns that the alias is not the model
+1.0.0 gave them. Two things about it changed:
 
 - `toTwist()` returns the body twist of `base_link`. Its `linear.x` is
   `v cos(delta)`, the projection of the front-wheel speed on the body axis, not
