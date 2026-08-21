@@ -3,6 +3,17 @@
 This document reports how the ProxMPC controller compares against the stock Nav2 controllers under identical, reproducible, and *fairly-tuned* conditions - on **path tracking**, **per-cycle compute and process resources**, and **obstacle avoidance**.
 It is the narrative companion to the auto-generated tables in [`prox_mpc_benchmark/README.md`](../prox_mpc_benchmark/README.md); the harness that produced every number is described in [the package guide](prox-mpc.md#8-prox_mpc_benchmark---the-measurement-harness).
 
+**Caveat.** The figures below were measured against `main` at commit `1ee2bd4`
+(tag `v1.0.0`). The remediation walk recorded in `DECISIONS.md` subsequently
+changed closed-loop behaviour or per-cycle cost in ways that touch nearly
+every cell in this document - among them the endpoint-veto threshold, the
+goal-approach taper, the obstacle-scan centring, the plan-projection method,
+the deceleration ramp, the bicycle plugin split, and the coupled-CBF gradient
+term (`DECISIONS.md`, node 15). The tables are retained as the last measured
+baseline; they are not representative of the current tree. A full campaign
+re-run on the original benchmark host is pending, and the tables are
+regenerated from it, not hand-edited, once it completes.
+
 All numbers below are measured, reproducible, and reported as `mean ± std` (population) over fixed-seed repeats - the precision signal.
 Nothing is hand-tuned to favour one controller: every controller drives the *same* plant from the *same* start to the *same* goal, at a *matched operating point* (Section 2.1), perceives obstacles through the *same* costmaps, and is measured by the *same* instrumentation - including a timing decorator that wall-clock times every controller's per-cycle compute identically.
 
