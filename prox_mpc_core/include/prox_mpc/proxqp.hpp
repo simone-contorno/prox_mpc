@@ -28,47 +28,49 @@ public:
 
   /* Initialization */
 
-  void init(std::shared_ptr<Model> model);
+  void init(std::shared_ptr<Model> new_model);
 
   /* Solving */
 
   std::tuple<MatrixXd, MatrixXd, VectorXd, proxsuite::proxqp::Info<double>> solve(
-    MatrixXd x, MatrixXd u, const VectorXd & u_prev, VectorXd w, const MatrixXd & goal_x,
-    const MatrixXd & goal_u);
+    MatrixXd x_in, MatrixXd u_in, const VectorXd & u_prev, VectorXd w_in,
+    const MatrixXd & goal_x, const MatrixXd & goal_u);
 
   /* Set */
 
   void setH();
   void setc(
-    const MatrixXd & x, const MatrixXd & u, const VectorXd & w, const MatrixXd & goal_x,
-    const MatrixXd & goal_u);
-  void setE(const MatrixXd & x, const MatrixXd & u);
-  void setb(const MatrixXd & x, const MatrixXd & u);
-  void setC(const MatrixXd & x);
-  void setd(const MatrixXd & x, const MatrixXd & u, const VectorXd & u_prev, const VectorXd & w);
+    const MatrixXd & x_in, const MatrixXd & u_in, const VectorXd & w_in,
+    const MatrixXd & goal_x, const MatrixXd & goal_u);
+  void setE(const MatrixXd & x_in, const MatrixXd & u_in);
+  void setb(const MatrixXd & x_in, const MatrixXd & u_in);
+  void setC(const MatrixXd & x_in);
+  void setd(
+    const MatrixXd & x_in, const MatrixXd & u_in, const VectorXd & u_prev,
+    const VectorXd & w_in);
 
-  void setQ(MatrixXd Q);
-  void setR(MatrixXd R);
-  void setS(MatrixXd S);
-  void setW(MatrixXd W);
-  void setNp(size_t Np);
-  void setNc(size_t Nc);
-  void setdt(double dt);
-  void setNEq(size_t n_eq);
-  void setNIneq(size_t n_ineq);
-  void setMaxInIter(size_t max_inn_iter);
-  void setMaxOutIter(size_t max_out_iter);
-  void setQPType(bool qp_type);
-  void setGuess(bool guess);
+  void setQ(MatrixXd new_Q);
+  void setR(MatrixXd new_R);
+  void setS(MatrixXd new_S);
+  void setW(MatrixXd new_W);
+  void setNp(size_t new_Np);
+  void setNc(size_t new_Nc);
+  void setdt(double new_dt);
+  void setNEq(size_t new_n_eq);
+  void setNIneq(size_t new_n_ineq);
+  void setMaxInIter(size_t new_max_inn_iter);
+  void setMaxOutIter(size_t new_max_out_iter);
+  void setQPType(bool new_qp_type);
+  void setGuess(bool new_guess);
 
   /// Initial-guess policy handed to proxsuite for each QP sub-problem.
   proxsuite::proxqp::InitialGuessStatus initialGuessPolicy() const;
-  void setCbfGamma(double cbf_gamma);
+  void setCbfGamma(double new_cbf_gamma);
 
   /* Obstacle avoidance */
 
-  void setMaxObs(size_t max_obs);
-  void setObs(MatrixXd obs);
+  void setMaxObs(size_t new_max_obs);
+  void setObs(MatrixXd new_obs);
 
   /* Accessors for the assembled inequality system (valid after a solve()). */
   const MatrixXd & getC() const {return C;}

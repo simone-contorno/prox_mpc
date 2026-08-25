@@ -38,8 +38,8 @@ Path optimPath(const MatrixXd & x, const rclcpp::Time & now)
     path.poses.push_back(pose);
   }
 
-  for (auto & pose: path.poses) {
-    pose.header.stamp = now;
+  for (auto & stamped_pose: path.poses) {
+    stamped_pose.header.stamp = now;
   }
 
   return path;

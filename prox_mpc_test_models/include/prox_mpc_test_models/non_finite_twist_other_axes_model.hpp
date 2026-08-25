@@ -49,13 +49,13 @@ public:
   /// linear.y and angular.x deliberately set non-finite -- the two components
   /// a planar Nav2 consumer never reads, so nothing downstream of the
   /// controller would ever notice unless the controller itself validates them.
-  geometry_msgs::msg::Twist toTwist(const VectorXd & u) const override
+  geometry_msgs::msg::Twist toTwist(const VectorXd & u_in) const override
   {
     geometry_msgs::msg::Twist twist;
-    twist.linear.x = u.size() > 0 ? u(0) : 0.0;
+    twist.linear.x = u_in.size() > 0 ? u_in(0) : 0.0;
     twist.linear.y = std::numeric_limits<double>::quiet_NaN();
     twist.angular.x = std::numeric_limits<double>::infinity();
-    twist.angular.z = u.size() > 1 ? u(1) : 0.0;
+    twist.angular.z = u_in.size() > 1 ? u_in(1) : 0.0;
     return twist;
   }
 

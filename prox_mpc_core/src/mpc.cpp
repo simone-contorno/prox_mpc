@@ -59,16 +59,16 @@ void requireSymmetricPSD(const MatrixXd & m, const char * name)
 
 /*!
  * Inizialize the Model Predictive Control.
- * @param model model pointer.
+ * @param new_model model pointer.
  */
-void MPC::init(std::shared_ptr<Model> model)
+void MPC::init(std::shared_ptr<Model> new_model)
 {
   /* Model */
-  this->model = model;
+  this->model = new_model;
 
   /* MPC */
-  n = model->getN();
-  m = model->getM();
+  n = new_model->getN();
+  m = new_model->getM();
 
   /* Default-initialize unset weight matrices and validate their dimensions */
   if (Q.size() == 0) {Q = MatrixXd::Identity(n, n);}
@@ -101,12 +101,13 @@ void MPC::init(std::shared_ptr<Model> model)
 
   x = MatrixXd::Zero(Np + 1, n);
   u = MatrixXd::Zero(Nc, m);
-  const bool obstacle_active = model->getObsFlag() == true && max_obs > 0;
+  const bool obstacle_active = new_model->getObsFlag() == true && max_obs > 0;
   w = VectorXd::Zero(obstacle_active == true ? Np * max_obs : 0);
   u0 = u.row(0);
 
   n_eq = 0;
-  n_ineq = model->getIneq("x").size() + model->getIneq("u").size() + model->getIneq("du").size();
+  n_ineq = new_model->getIneq("x").size() + new_model->getIneq("u").size() +
+    new_model->getIneq("du").size();
 
   /* ProxQP */
   proxqp = std::make_shared<ProxQP>();
@@ -316,120 +317,120 @@ bool MPC::getGuess() {return guess;}
 
 /*!
  * Set the states matrix.
- * @param x matrix.
+ * @param new_x matrix.
  */
-void MPC::setX(MatrixXd x) {this->x = x;}
+void MPC::setX(MatrixXd new_x) {this->x = new_x;}
 
 /*!
  * Set the previous control input the next cycle's rate constraint is anchored on.
- * @param u0 control actually applied (length m).
+ * @param new_u0 control actually applied (length m).
  */
-void MPC::setU0(VectorXd u0) {this->u0 = u0;}
+void MPC::setU0(VectorXd new_u0) {this->u0 = new_u0;}
 
 /*!
  * Set the intermediate states weight matrix. Pre-init only; init() validates it.
- * @param Q matrix.
+ * @param new_Q matrix.
  */
-void MPC::setQ(MatrixXd Q)
+void MPC::setQ(MatrixXd new_Q)
 {
   rejectAfterInit(initialized, "setQ");
-  this->Q = Q;
+  this->Q = new_Q;
 }
 
 /*!
  * Set the control input weight matrix. Pre-init only; init() validates it.
- * @param R matrix.
+ * @param new_R matrix.
  */
-void MPC::setR(MatrixXd R)
+void MPC::setR(MatrixXd new_R)
 {
   rejectAfterInit(initialized, "setR");
-  this->R = R;
+  this->R = new_R;
 }
 
 /*!
  * Set the final state weight matrix. Pre-init only; init() validates it.
- * @param S matrix.
+ * @param new_S matrix.
  */
-void MPC::setS(MatrixXd S)
+void MPC::setS(MatrixXd new_S)
 {
   rejectAfterInit(initialized, "setS");
-  this->S = S;
+  this->S = new_S;
 }
 
 /*!
  * Set the slack variables weight matrix. Pre-init only; init() validates it.
- * @param W matrix.
+ * @param new_W matrix.
  */
-void MPC::setW(MatrixXd W)
+void MPC::setW(MatrixXd new_W)
 {
   rejectAfterInit(initialized, "setW");
-  this->W = W;
+  this->W = new_W;
 }
 
 /*!
  * Set the prediction horizon.
  * If T is set, dt is automatically updated.
- * @param Np number (> 0).
+ * @param new_Np number (> 0).
  */
-void MPC::setNp(size_t Np)
+void MPC::setNp(size_t new_Np)
 {
   rejectAfterInit(initialized, "setNp");
-  if (Np == 0) {throw std::invalid_argument("MPC::setNp: Np must be > 0");}
+  if (new_Np == 0) {throw std::invalid_argument("MPC::setNp: Np must be > 0");}
   // The Nc <= Np bound holds whichever setter runs second, so it is mirrored
   // here: checking it in setNc alone let the caller reach it by ordering.
   // Nc may not be set yet (0 is its unset sentinel, as in setNc below).
-  if (Nc > 0 && Nc > Np) {throw std::invalid_argument("MPC::setNp: Np must be >= Nc");}
-  this->Np = Np;
-  if (T > 0.0) {this->dt = T / Np;}
+  if (Nc > 0 && Nc > new_Np) {throw std::invalid_argument("MPC::setNp: Np must be >= Nc");}
+  this->Np = new_Np;
+  if (T > 0.0) {this->dt = T / new_Np;}
 }
 
 /*!
  * Set the control horizon.
- * @param Nc number (> 0).
+ * @param new_Nc number (> 0).
  */
-void MPC::setNc(size_t Nc)
+void MPC::setNc(size_t new_Nc)
 {
   rejectAfterInit(initialized, "setNc");
-  if (Nc == 0) {throw std::invalid_argument("MPC::setNc: Nc must be > 0");}
+  if (new_Nc == 0) {throw std::invalid_argument("MPC::setNc: Nc must be > 0");}
   // Np may not be set yet (0 is its unset sentinel, matching setdt/setT below);
   // the comparison is skipped until it is known.
-  if (Np > 0 && Nc > Np) {throw std::invalid_argument("MPC::setNc: Nc must be <= Np");}
-  this->Nc = Nc;
+  if (Np > 0 && new_Nc > Np) {throw std::invalid_argument("MPC::setNc: Nc must be <= Np");}
+  this->Nc = new_Nc;
 }
 
 /*!
  * Set the sample time.
  * If Np is set, T is automatically updated.
- * @param dt sample time (> 0).
+ * @param new_dt sample time (> 0).
  */
-void MPC::setdt(double dt)
+void MPC::setdt(double new_dt)
 {
   rejectAfterInit(initialized, "setdt");
-  if (!std::isfinite(dt) || dt <= 0.0) {
+  if (!std::isfinite(new_dt) || new_dt <= 0.0) {
     throw std::invalid_argument("MPC::setdt: dt must be > 0");
   }
-  this->dt = dt;
-  if (Np > 0) {this->T = Np * dt;}
+  this->dt = new_dt;
+  if (Np > 0) {this->T = Np * new_dt;}
 }
 
 /*!
  * Set the prediction horizon time [s].
  * If Np is set, dt is automatically updated.
- * @param T time (> 0).
+ * @param new_T time (> 0).
  */
-void MPC::setT(double T)
+void MPC::setT(double new_T)
 {
   rejectAfterInit(initialized, "setT");
-  if (T <= 0.0) {throw std::invalid_argument("MPC::setT: T must be > 0");}
-  this->T = T;
-  if (Np > 0) {this->dt = T / Np;}
+  if (new_T <= 0.0) {throw std::invalid_argument("MPC::setT: T must be > 0");}
+  this->T = new_T;
+  if (Np > 0) {this->dt = new_T / Np;}
 }
 
 /*!
  * Set the current pose.
- * @param pose current pose.
+ * @param new_pose current pose.
  */
-void MPC::setPose(VectorXd pose) {this->pose = pose;}
+void MPC::setPose(VectorXd new_pose) {this->pose = new_pose;}
 
 /*!
  * Set the desired state goals.
@@ -437,34 +438,34 @@ void MPC::setPose(VectorXd pose) {this->pose = pose;}
  * is rejected here rather than indexed out of bounds on the control hot path,
  * where EIGEN_NO_DEBUG leaves the access unchecked. The column count is known
  * only once init() has read n from the model, so it is checked from then on.
- * @param goal_x goals ((Np + 1) x n).
+ * @param new_goal_x goals ((Np + 1) x n).
  */
-void MPC::setGoalX(MatrixXd goal_x)
+void MPC::setGoalX(MatrixXd new_goal_x)
 {
-  if (Np > 0 && goal_x.rows() < static_cast<Eigen::Index>(Np) + 1) {
+  if (Np > 0 && new_goal_x.rows() < static_cast<Eigen::Index>(Np) + 1) {
     throw std::invalid_argument("MPC::setGoalX: goal_x must have at least Np + 1 rows");
   }
-  if (n > 0 && goal_x.cols() != static_cast<Eigen::Index>(n)) {
+  if (n > 0 && new_goal_x.cols() != static_cast<Eigen::Index>(n)) {
     throw std::invalid_argument("MPC::setGoalX: goal_x must have n columns");
   }
-  this->goal_x = goal_x;
+  this->goal_x = new_goal_x;
 }
 
 /*!
  * Set the desired control goals.
  * The assembly reads rows 0..Nc-1 and every control column; same reasoning as
  * setGoalX.
- * @param goal_u goals (Nc x m).
+ * @param new_goal_u goals (Nc x m).
  */
-void MPC::setGoalU(MatrixXd goal_u)
+void MPC::setGoalU(MatrixXd new_goal_u)
 {
-  if (Nc > 0 && goal_u.rows() < static_cast<Eigen::Index>(Nc)) {
+  if (Nc > 0 && new_goal_u.rows() < static_cast<Eigen::Index>(Nc)) {
     throw std::invalid_argument("MPC::setGoalU: goal_u must have at least Nc rows");
   }
-  if (m > 0 && goal_u.cols() != static_cast<Eigen::Index>(m)) {
+  if (m > 0 && new_goal_u.cols() != static_cast<Eigen::Index>(m)) {
     throw std::invalid_argument("MPC::setGoalU: goal_u must have m columns");
   }
-  this->goal_u = goal_u;
+  this->goal_u = new_goal_u;
 }
 
 /*!
@@ -501,30 +502,30 @@ void MPC::setMaxSolveTime(double seconds) {this->max_solve_time = seconds;}
 
 /*!
  * Set if use initial guesses or not.
- * @param guess flag (default: true).
+ * @param new_guess flag (default: true).
  */
-void MPC::setGuess(bool guess)
+void MPC::setGuess(bool new_guess)
 {
   rejectAfterInit(initialized, "setGuess");
-  this->guess = guess;
+  this->guess = new_guess;
 }
 
 /*!
  * Set QP sub-problems type.
- * @param qp_type sparse (false) or dense (true) (default: false).
+ * @param new_qp_type sparse (false) or dense (true) (default: false).
  */
-void MPC::setQPtype(bool qp_type)
+void MPC::setQPtype(bool new_qp_type)
 {
   rejectAfterInit(initialized, "setQPtype");
-  this->qp_type = qp_type;
+  this->qp_type = new_qp_type;
 }
 
 /*!
  * Set the discrete-time CBF rate for the obstacle coupling (forwarded to ProxQP).
  * Must be set before init()/configProxQP().
- * @param cbf_gamma rate in (0, 1]; 1.0 reduces to the pointwise constraint.
+ * @param new_cbf_gamma rate in (0, 1]; 1.0 reduces to the pointwise constraint.
  */
-void MPC::setCbfGamma(double cbf_gamma)
+void MPC::setCbfGamma(double new_cbf_gamma)
 {
   // Pre-init only, like every other setter the QP is configured from: the rate
   // reaches the solver through configProxQP(), which init() runs once, so a
@@ -532,21 +533,21 @@ void MPC::setCbfGamma(double cbf_gamma)
   rejectAfterInit(initialized, "setCbfGamma");
   // Validated here as well as in ProxQP so a bad value fails at configuration
   // time rather than on the first init().
-  if (!(cbf_gamma > 0.0 && cbf_gamma <= 1.0)) {
+  if (!(new_cbf_gamma > 0.0 && new_cbf_gamma <= 1.0)) {
     throw std::invalid_argument("MPC::setCbfGamma: cbf_gamma must be in (0, 1]");
   }
-  this->cbf_gamma = cbf_gamma;
+  this->cbf_gamma = new_cbf_gamma;
 }
 
 /*!
  * Set the obstacle-slot capacity K per predicted node (0 disables avoidance).
  * Must be set before init()/configProxQP() so the QP is sized once for K.
- * @param max_obs capacity K.
+ * @param new_max_obs capacity K.
  */
-void MPC::setMaxObs(size_t max_obs)
+void MPC::setMaxObs(size_t new_max_obs)
 {
   rejectAfterInit(initialized, "setMaxObs");
-  this->max_obs = max_obs;
+  this->max_obs = new_max_obs;
 }
 
 /* Get the obstacle-slot capacity K per predicted node. */
@@ -557,9 +558,9 @@ double MPC::getMaxObstacleSlack() {return w.size() > 0 ? w.maxCoeff() : 0.0;}
 
 /*!
  * Set the obstacle triples for the current cycle.
- * @param obs (Np*K) x 3 matrix of [o_x, o_y, d_safe] per (node, slot); empty
+ * @param new_obs (Np*K) x 3 matrix of [o_x, o_y, d_safe] per (node, slot); empty
  *   slots should hold the far sentinel so their soft constraint is non-binding.
  */
-void MPC::setObs(MatrixXd obs) {this->obs = obs;}
+void MPC::setObs(MatrixXd new_obs) {this->obs = new_obs;}
 
 }  // namespace prox_mpc

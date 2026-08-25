@@ -51,9 +51,9 @@ public:
     setM(2);  // control: [v, delta_dot]
 
     double L = 1.6;  // wheelbase [m]
-    VectorXd params(1);
-    params << L;
-    setParams(params);
+    VectorXd init_params(1);
+    init_params << L;
+    setParams(init_params);
 
     setA(MatrixXd::Zero(getN(), getN()));
     setB(MatrixXd::Zero(getN(), getM()));
@@ -77,38 +77,40 @@ public:
    * A steering bound beyond kMaxSteerAngle is rejected rather than clamped: the
    * yaw law is unbounded there, so accepting it would poison A, B and c.
    */
-  void configure(const std::map<std::string, double> & params) override
+  void configure(const std::map<std::string, double> & config_params) override
   {
-    if (params.count("L") > 0) {
+    if (config_params.count("L") > 0) {
       // The wheelbase divides the yaw and steering Jacobians; a non-positive
       // value makes A, B and c non-finite and poisons the whole QP.
-      if (!(params.at("L") > 0.0)) {
+      if (!(config_params.at("L") > 0.0)) {
         throw std::invalid_argument("BicycleRearAxle::configure: L must be > 0");
       }
       VectorXd p(1);
-      p << params.at("L");
+      p << config_params.at("L");
       setParams(p);
     }
     /* Checked before the magnitude test below, which is a bare ">" and so is
      * false for NaN: without this a non-finite bound would pass straight into
      * overrideBound and from there into every state-bound row of the QP. */
     for (const char * key : {"delta_min", "delta_max"}) {
-      const auto it = params.find(key);
-      if (it != params.end() && !std::isfinite(it->second)) {
+      const auto it = config_params.find(key);
+      if (it != config_params.end() && !std::isfinite(it->second)) {
         throw std::invalid_argument(
                 "BicycleRearAxle::configure: the steering-angle bound must be finite");
       }
     }
-    if (steerBoundExceeded(params, "delta_min") || steerBoundExceeded(params, "delta_max")) {
+    if (steerBoundExceeded(config_params, "delta_min") ||
+      steerBoundExceeded(config_params, "delta_max"))
+    {
       throw std::invalid_argument(
               "BicycleRearAxle::configure: the steering-angle bound must not exceed "
               "1.0 rad in magnitude");
     }
-    overrideBound(params, "x", 3, "delta_min", "delta_max");
-    overrideBound(params, "u", 0, "v_min", "v_max");
-    overrideBound(params, "u", 1, "delta_rate_min", "delta_rate_max");
-    overrideBound(params, "du", 0, "a_min", "a_max");
-    overrideBound(params, "du", 1, "delta_acc_min", "delta_acc_max");
+    overrideBound(config_params, "x", 3, "delta_min", "delta_max");
+    overrideBound(config_params, "u", 0, "v_min", "v_max");
+    overrideBound(config_params, "u", 1, "delta_rate_min", "delta_rate_max");
+    overrideBound(config_params, "du", 0, "a_min", "a_max");
+    overrideBound(config_params, "du", 1, "delta_acc_min", "delta_acc_max");
   }
 
   /*!
@@ -129,11 +131,11 @@ public:
    * rear-axle speed, and the yaw rate is v tan(delta) / L. The caller must have
    * set the model state (delta at index 3) to the current state before calling.
    */
-  geometry_msgs::msg::Twist toTwist(const VectorXd & u) const override
+  geometry_msgs::msg::Twist toTwist(const VectorXd & u_in) const override
   {
     geometry_msgs::msg::Twist twist;
-    twist.linear.x = u(0);                                       // base_link speed
-    twist.angular.z = u(0) * tan(this->x(3)) / this->params(0);  // omega = v tan(delta)/L
+    twist.linear.x = u_in(0);                                       // base_link speed
+    twist.angular.z = u_in(0) * tan(this->x(3)) / this->params(0);  // omega = v tan(delta)/L
     return twist;
   }
 
@@ -149,9 +151,9 @@ public:
    */
   VectorXd fromTwist(const geometry_msgs::msg::Twist & twist) const override
   {
-    VectorXd u = VectorXd::Constant(2, std::numeric_limits<double>::quiet_NaN());
-    u(0) = twist.linear.x;
-    return u;
+    VectorXd u_out = VectorXd::Constant(2, std::numeric_limits<double>::quiet_NaN());
+    u_out(0) = twist.linear.x;
+    return u_out;
   }
 
   void updatec(double dt, VectorXd x_next) override
@@ -182,10 +184,11 @@ public:
 private:
   /* True when the params map carries `key` with a magnitude past the bound the
    * yaw law stays finite on. */
-  static bool steerBoundExceeded(const std::map<std::string, double> & params, std::string key)
+  static bool steerBoundExceeded(
+    const std::map<std::string, double> & config_params, std::string key)
   {
-    const auto it = params.find(key);
-    return it != params.end() && std::abs(it->second) > kMaxSteerAngle;
+    const auto it = config_params.find(key);
+    return it != config_params.end() && std::abs(it->second) > kMaxSteerAngle;
   }
 };
 

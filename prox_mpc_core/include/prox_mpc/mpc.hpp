@@ -26,7 +26,7 @@ public:
 
   /* Initialization */
 
-  void init(std::shared_ptr<Model> model);
+  void init(std::shared_ptr<Model> new_model);
 
   /* ProxQP configuration */
 
@@ -62,7 +62,7 @@ public:
 
   /* Set */
 
-  void setX(MatrixXd x);
+  void setX(MatrixXd new_x);
 
   /*!
    * Set the previous control input the next cycle's rate constraint is anchored
@@ -70,25 +70,25 @@ public:
    * ramp on a rejected cycle, say - sets it here so the anchor is the control
    * actually applied rather than one that was never sent.
    */
-  void setU0(VectorXd u0);
-  void setQ(MatrixXd Q);
-  void setR(MatrixXd R);
-  void setS(MatrixXd S);
-  void setW(MatrixXd W);
-  void setNp(size_t Np);
-  void setNc(size_t Nc);
-  void setdt(double dt);
-  void setT(double T);
-  void setPose(VectorXd pose);
-  void setGoalX(MatrixXd goal_x);
-  void setGoalU(MatrixXd goal_u);
+  void setU0(VectorXd new_u0);
+  void setQ(MatrixXd new_Q);
+  void setR(MatrixXd new_R);
+  void setS(MatrixXd new_S);
+  void setW(MatrixXd new_W);
+  void setNp(size_t new_Np);
+  void setNc(size_t new_Nc);
+  void setdt(double new_dt);
+  void setT(double new_T);
+  void setPose(VectorXd new_pose);
+  void setGoalX(MatrixXd new_goal_x);
+  void setGoalU(MatrixXd new_goal_u);
   void setMaxIntIterQP(size_t max_iter);
   void setMaxExtIterQP(size_t max_iter);
   void setMaxIterSQP(size_t max_iter);
   void setMaxSolveTime(double seconds);
-  void setGuess(bool guess);
-  void setQPtype(bool qp_type);
-  void setCbfGamma(double cbf_gamma);
+  void setGuess(bool new_guess);
+  void setQPtype(bool new_qp_type);
+  void setCbfGamma(double new_cbf_gamma);
 
   /* Get */
 
@@ -117,8 +117,8 @@ public:
 
   /* Obstacle avoidance */
 
-  void setMaxObs(size_t max_obs);
-  void setObs(MatrixXd obs);
+  void setMaxObs(size_t new_max_obs);
+  void setObs(MatrixXd new_obs);
 
   /* Access the underlying QP solver, exposing the assembled problem for inspection. */
   std::shared_ptr<ProxQP> getSolver() {return proxqp;}

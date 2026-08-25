@@ -43,18 +43,18 @@ public:
 
   /* Set */
 
-  void setName(std::string name);
-  void setN(size_t n);
-  void setM(size_t m);
-  void setParams(const VectorXd & params);
-  void setc(const VectorXd & c);
-  void setA(const MatrixXd & A);
-  void setB(const MatrixXd & B);
+  void setName(std::string new_name);
+  void setN(size_t new_n);
+  void setM(size_t new_m);
+  void setParams(const VectorXd & new_params);
+  void setc(const VectorXd & new_c);
+  void setA(const MatrixXd & new_A);
+  void setB(const MatrixXd & new_B);
   void setIneq(std::string var, size_t idx_vec, double low, double upp);
   void updateIneq(std::string var, size_t idx_vec, double low, double upp);
-  void setObsAvoid(bool obs_flag);
-  void setX(const VectorXd & x);
-  void setU(const VectorXd & u);
+  void setObsAvoid(bool new_obs_flag);
+  void setX(const VectorXd & new_x);
+  void setU(const VectorXd & new_u);
 
   /* Virtual set functions */
 
@@ -80,22 +80,23 @@ public:
    * the default constructor required for runtime loading, where parameters cannot
    * be passed in. The default implementation reads no keys; an overriding model
    * applies any present key and keeps its constructor value for any absent key.
-   * @param params model constants by name (e.g. "L"); absent keys keep the literal.
+   * @param config_params model constants by name (e.g. "L"); absent keys keep the literal.
    */
-  virtual void configure([[maybe_unused]] const std::map<std::string, double> & params) {}
+  virtual void configure(
+    [[maybe_unused]] const std::map<std::string, double> & config_params) {}
 
   /*!
    * Map a control vector to a body Twist message.
    * The default is the identity mapping (first control -> linear.x, second
    * control -> angular.z). Models whose control is not a body twist (for example
    * a steering rate) override this.
-   * @param u control vector (length m).
+   * @param u_in control vector (length m).
    */
-  virtual geometry_msgs::msg::Twist toTwist(const VectorXd & u) const
+  virtual geometry_msgs::msg::Twist toTwist(const VectorXd & u_in) const
   {
     geometry_msgs::msg::Twist twist;
-    if (u.size() > 0) {twist.linear.x = u(0);}
-    if (u.size() > 1) {twist.angular.z = u(1);}
+    if (u_in.size() > 0) {twist.linear.x = u_in(0);}
+    if (u_in.size() > 1) {twist.angular.z = u_in(1);}
     return twist;
   }
 
@@ -146,11 +147,11 @@ public:
    */
   virtual VectorXd fromTwist(const geometry_msgs::msg::Twist & twist) const
   {
-    VectorXd u = VectorXd::Constant(
+    VectorXd u_out = VectorXd::Constant(
       static_cast<Eigen::Index>(this->m), std::numeric_limits<double>::quiet_NaN());
-    if (u.size() > 0) {u(0) = twist.linear.x;}
-    if (u.size() > 1) {u(1) = twist.angular.z;}
-    return u;
+    if (u_out.size() > 0) {u_out(0) = twist.linear.x;}
+    if (u_out.size() > 1) {u_out(1) = twist.angular.z;}
+    return u_out;
   }
 
   /* Get */
@@ -172,14 +173,14 @@ protected:
    * Override one inequality bound from a configure() params map, keeping the
    * current (constructor) value for any side whose key is absent. The bound for
    * idx_vec must already exist (declared in the constructor via setIneq).
-   * @param params configure() params map.
+   * @param config_params configure() params map.
    * @param var "x", "u", "du" or "w".
    * @param idx_vec vector index whose bound is overridden.
    * @param key_low params key for the lower bound (kept current if absent).
    * @param key_upp params key for the upper bound (kept current if absent).
    */
   void overrideBound(
-    const std::map<std::string, double> & params, std::string var, size_t idx_vec,
+    const std::map<std::string, double> & config_params, std::string var, size_t idx_vec,
     std::string key_low, std::string key_upp);
 };
 

@@ -200,27 +200,27 @@ void ProxMpcController::configure(
   /* Parameter-validation helpers: out-of-range tuning values are clamped and
    * warned (non-fatal, to keep the controller available), matching the predictive
    * clamps; structurally invalid horizon sizing is fatal and throws below. */
-  auto clamp_low = [this](const char * name, double & v, double lo, double def) {
+  auto clamp_low = [this](const char * param_name, double & v, double lo, double def) {
       if (!std::isfinite(v)) {
-        RCLCPP_WARN(logger_, "%s is not finite; using default %.3f.", name, def);
+        RCLCPP_WARN(logger_, "%s is not finite; using default %.3f.", param_name, def);
         v = def;
         return;
       }
       if (v < lo) {
-        RCLCPP_WARN(logger_, "%s %.3f below %.3f; clamping.", name, v, lo);
+        RCLCPP_WARN(logger_, "%s %.3f below %.3f; clamping.", param_name, v, lo);
         v = lo;
       }
     };
-  auto clamp_range = [this](const char * name, double & v, double lo, double hi, double def) {
+  auto clamp_range = [this](const char * param_name, double & v, double lo, double hi, double def) {
       if (!std::isfinite(v)) {
-        RCLCPP_WARN(logger_, "%s is not finite; using default %.3f.", name, def);
+        RCLCPP_WARN(logger_, "%s is not finite; using default %.3f.", param_name, def);
         v = def;
         return;
       }
       if (v < lo || v > hi) {
         const double c = std::clamp(v, lo, hi);
         RCLCPP_WARN(
-          logger_, "%s %.3f outside [%.3f, %.3f]; clamping to %.3f.", name, v, lo, hi, c);
+          logger_, "%s %.3f outside [%.3f, %.3f]; clamping to %.3f.", param_name, v, lo, hi, c);
         v = c;
       }
     };
@@ -1216,8 +1216,8 @@ geometry_msgs::msg::TwistStamped ProxMpcController::computeVelocityCommands(
     fillObstacles(goal_x, obs, cmd.header.stamp);
     mpc_->setObs(obs);
     /* Count filled (non-sentinel) slots at the current node (rows 0..k_obs-1). */
-    for (std::size_t s = 0; s < k_obs; ++s) {
-      if (obs(static_cast<Eigen::Index>(s), 0) < 0.5 * prox_mpc::MPC::kObsFarSentinel) {
+    for (std::size_t slot = 0; slot < k_obs; ++slot) {
+      if (obs(static_cast<Eigen::Index>(slot), 0) < 0.5 * prox_mpc::MPC::kObsFarSentinel) {
         ++num_active_obs;
       }
     }

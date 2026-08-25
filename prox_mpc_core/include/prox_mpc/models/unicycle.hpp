@@ -27,9 +27,9 @@ public:
     setM(2);  // control: [v, omega]
 
     double L = 0.0;
-    VectorXd params(1);
-    params << L;
-    setParams(params);
+    VectorXd init_params(1);
+    init_params << L;
+    setParams(init_params);
 
     setA(MatrixXd::Zero(getN(), getN()));
     setB(MatrixXd::Zero(getN(), getM()));
@@ -49,12 +49,12 @@ public:
    * Keys: bound limits "v_min"/"v_max" (u[0]), "w_min"/"w_max" (u[1]),
    * "a_min"/"a_max" (du[0]), "alpha_min"/"alpha_max" (du[1]).
    */
-  void configure(const std::map<std::string, double> & params) override
+  void configure(const std::map<std::string, double> & config_params) override
   {
-    overrideBound(params, "u", 0, "v_min", "v_max");
-    overrideBound(params, "u", 1, "w_min", "w_max");
-    overrideBound(params, "du", 0, "a_min", "a_max");
-    overrideBound(params, "du", 1, "alpha_min", "alpha_max");
+    overrideBound(config_params, "u", 0, "v_min", "v_max");
+    overrideBound(config_params, "u", 1, "w_min", "w_max");
+    overrideBound(config_params, "du", 0, "a_min", "a_max");
+    overrideBound(config_params, "du", 1, "alpha_min", "alpha_max");
   }
 
   void updatec(double dt, VectorXd x_next) override

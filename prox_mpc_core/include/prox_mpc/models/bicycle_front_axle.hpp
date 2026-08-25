@@ -48,9 +48,9 @@ public:
     setM(2);  // control: [v, delta_dot]
 
     double L = 1.6;  // wheelbase [m]
-    VectorXd params(1);
-    params << L;
-    setParams(params);
+    VectorXd init_params(1);
+    init_params << L;
+    setParams(init_params);
 
     setA(MatrixXd::Zero(getN(), getN()));
     setB(MatrixXd::Zero(getN(), getM()));
@@ -72,23 +72,23 @@ public:
    * "v_min"/"v_max" (u[0]), "delta_rate_min"/"delta_rate_max" (u[1]),
    * "a_min"/"a_max" (du[0]), "delta_acc_min"/"delta_acc_max" (du[1]).
    */
-  void configure(const std::map<std::string, double> & params) override
+  void configure(const std::map<std::string, double> & config_params) override
   {
-    if (params.count("L") > 0) {
+    if (config_params.count("L") > 0) {
       // The wheelbase divides the yaw and steering Jacobians; a non-positive
       // value makes A, B and c non-finite and poisons the whole QP.
-      if (!(params.at("L") > 0.0)) {
+      if (!(config_params.at("L") > 0.0)) {
         throw std::invalid_argument("BicycleFrontAxle::configure: L must be > 0");
       }
       VectorXd p(1);
-      p << params.at("L");
+      p << config_params.at("L");
       setParams(p);
     }
-    overrideBound(params, "x", 3, "delta_min", "delta_max");
-    overrideBound(params, "u", 0, "v_min", "v_max");
-    overrideBound(params, "u", 1, "delta_rate_min", "delta_rate_max");
-    overrideBound(params, "du", 0, "a_min", "a_max");
-    overrideBound(params, "du", 1, "delta_acc_min", "delta_acc_max");
+    overrideBound(config_params, "x", 3, "delta_min", "delta_max");
+    overrideBound(config_params, "u", 0, "v_min", "v_max");
+    overrideBound(config_params, "u", 1, "delta_rate_min", "delta_rate_max");
+    overrideBound(config_params, "du", 0, "a_min", "a_max");
+    overrideBound(config_params, "du", 1, "delta_acc_min", "delta_acc_max");
   }
 
   /*!
@@ -112,11 +112,11 @@ public:
    * yaw rate is v sin(delta) / L. The caller must have set the model state
    * (delta at index 3) to the current state before calling.
    */
-  geometry_msgs::msg::Twist toTwist(const VectorXd & u) const override
+  geometry_msgs::msg::Twist toTwist(const VectorXd & u_in) const override
   {
     geometry_msgs::msg::Twist twist;
-    twist.linear.x = u(0) * cos(this->x(3));                     // base_link speed
-    twist.angular.z = u(0) * sin(this->x(3)) / this->params(0);  // omega = v sin(delta)/L
+    twist.linear.x = u_in(0) * cos(this->x(3));                     // base_link speed
+    twist.angular.z = u_in(0) * sin(this->x(3)) / this->params(0);  // omega = v sin(delta)/L
     return twist;
   }
 
@@ -133,11 +133,11 @@ public:
    */
   VectorXd fromTwist(const geometry_msgs::msg::Twist & twist) const override
   {
-    VectorXd u = VectorXd::Constant(2, std::numeric_limits<double>::quiet_NaN());
+    VectorXd u_out = VectorXd::Constant(2, std::numeric_limits<double>::quiet_NaN());
     const double wheel_arc = twist.angular.z * this->params(0);
     const double speed = std::sqrt(twist.linear.x * twist.linear.x + wheel_arc * wheel_arc);
-    u(0) = (twist.linear.x < 0.0) ? -speed : speed;
-    return u;
+    u_out(0) = (twist.linear.x < 0.0) ? -speed : speed;
+    return u_out;
   }
 
   void updatec(double dt, VectorXd x_next) override
