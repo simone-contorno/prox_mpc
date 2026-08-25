@@ -108,26 +108,31 @@ result through `Model::toTwist()`. That is the only form that is correct for a
 model whose second control is not a body yaw rate: the bicycle's is a steering
 rate, so a twist-space ramp had no meaning for it.
 
-The speed channel still starts from the measured velocity, carried into the
+Every control channel still starts from the measured velocity, carried into the
 model's own control units through `Model::fromTwist()` rather than by writing
-`linear.x` into it: for `prox_mpc_core/BicycleFrontAxle` that channel is a
-front-wheel speed, and a `base_link` speed placed there is projected by
-`cos(delta)` a second time on the way out. The unicycle and
-`prox_mpc_core/BicycleRearAxle` both carry the `base_link` speed in that channel
-already, so the number they start from is unchanged. Every other control has no
-measurement and starts from the last commanded control value instead. For a
-unicycle, whose second control *is* a body yaw rate, that moves where
-`angular.z` braking begins - from the measured yaw rate to the last commanded
-one.
+`linear.x` and `angular.z` into control slots directly: for
+`prox_mpc_core/BicycleFrontAxle` the speed control is a front-wheel speed, and a
+`base_link` speed placed there is projected by `cos(delta)` a second time on the
+way out. The unicycle and `prox_mpc_core/BicycleRearAxle` both carry the
+`base_link` speed in that channel already, so the number they start from is
+unchanged.
 
-That last-commanded vector is zeroed by `activate()` and by `reset()`. If the
-first cycle to brake after either - from a cancel, a solver failure, or a
-footprint veto - finds the robot yawing, it commands `angular.z = 0` outright
-instead of ramping down from the yaw rate the robot actually has. Later cycles
-ramp normally, because an accepted cycle records the command it applied. A
-deployment that can brake that early while already turning will see a sharper
-yaw stop than 1.0.0 gave; the linear channel is unaffected, because it still
-ramps from the measurement.
+`Model::fromTwist()` declares per channel what a body twist determines, and the
+controller seeds exactly the channels it reports as determined. Both bicycles
+report their steering rate undetermined, because a twist shows the steering
+angle's effect and not the rate it is changing at, so that control starts from
+the last commanded value. The unicycle's second control *is* a body yaw rate, so
+it is determined and starts from the measured `angular.z`, as it did in 1.0.0.
+
+A model that carries a steering angle keeps a separate belief about it, and
+`activate()` and `reset()` zero that belief along with the last-commanded
+control vector. If the first cycle to brake after either - from a cancel, a
+solver failure, or a footprint veto - finds such a robot already turning, the
+twist it emits is derived from a zero steering angle and so carries no yaw rate,
+rather than ramping down from the yaw the robot actually has. Later cycles ramp
+normally, because an accepted cycle records both the command it applied and the
+steering angle it solved for. The speed channel is unaffected throughout,
+because it starts from the measurement.
 
 ## `SolverDiagnostics.converged` means something different
 

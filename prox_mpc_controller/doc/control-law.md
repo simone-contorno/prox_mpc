@@ -200,17 +200,22 @@ acceleration), so only a control-space ramp maps correctly for that model,
 while the unicycle's second control already *is* a body yaw rate and the two
 forms coincide for it.
 
-The speed channel ramps down from the velocity the `controller_server`
+Each control channel ramps down from the velocity the `controller_server`
 measured for this cycle (RPP/MPPI style), so the brake tracks the robot's
-actual speed rather than a stale command.
-The measurement is a `base_link` twist and the channel is a model control, so it
-is carried across by the model's own `fromTwist()` inverse rather than written
-in directly: for a front-axle-referenced model that control is a front-wheel
-speed, which only the linear and angular components together determine.
-A non-finite measurement (NaN or $\pm\infty$) yields exactly zero, so an
-infinite measured velocity can never be ramped into the published command.
-The remaining channels have no measurement and ramp from their last commanded
-value.
+actual motion rather than a stale command.
+The measurement is a `base_link` twist and the channels are model controls, so
+it is carried across by the model's own `fromTwist()` inverse rather than
+written in directly: for a front-axle-referenced model the speed control is a
+front-wheel speed, which only the linear and angular components together
+determine.
+That inverse states, per channel, what a body twist determines, and the
+controller seeds exactly the channels it reports as determined; it names no
+channel of its own.
+A channel reported undetermined - a steering rate, which a twist shows the
+effect of but not the value of - keeps its last commanded value, and so does one
+whose measurement is itself non-finite (NaN or $\pm\infty$), so a broken
+velocity estimate decelerates the last command instead of entering the ramp and
+an infinite measured velocity can never reach the published command.
 Each step advances by `brake_period_s` when the operator set a positive value,
 otherwise by the measured inter-cycle period, clamped between the configured
 `dt` and twice `dt` so a server running slower than `dt` still brakes at the

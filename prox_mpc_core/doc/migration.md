@@ -77,6 +77,12 @@ ramp seeding itself from the robot's actual velocity, for instance - reads this
 hook; without an override it would read the base class default, which is the
 inverse of a mapping the model does not use.
 
+The return value is a per-channel declaration, not just a value: a finite entry
+is a measurement of that control, and a non-finite one says the twist does not
+determine it, leaving the consumer to keep whatever value it already holds.
+The bundled Nav2 plugin applies exactly that, so a channel this hook misreports
+is a channel that plugin will seed wrongly.
+
 `BicycleFrontAxle` overrides it, because control 0 is a front-wheel speed rather
 than the `base_link` speed `toTwist()` emits:
 

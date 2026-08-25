@@ -95,6 +95,7 @@ public:
   double & lastCmdV() {return last_cmd_v_;}
   double & lastCmdW() {return last_cmd_w_;}
   double & steeringState() {return steering_state_;}
+  VectorXd & lastCmdU() {return last_cmd_u_;}
   std::size_t & planIndex() {return plan_index_;}
   bool cancelling() const {return cancelling_;}
   double vMax() const {return v_max_;}
@@ -2108,6 +2109,12 @@ TEST_F(ProxMpcControllerTest, PredictDisabledIgnoresTrackedObstacles)
 // The brake ramp seeds from the server-measured velocity, not the last command:
 // a cycle-1 solver failure while the robot is moving (last command still zero)
 // still ramps down from the measured speed instead of commanding an abrupt zero.
+//
+// Both channels, not just the speed one. The unicycle's controls are [v, omega]
+// and its twist mapping is the identity, so its inverse determines both, and
+// the controller takes every channel the model reports as determined. Seeding
+// the yaw channel from the stale zero command instead would step angular.z to 0
+// in one cycle while linear.x ramped.
 TEST_F(ProxMpcControllerTest, SolverFailureBrakesFromMeasuredVelocity)
 {
   auto c = makeConfigured(
@@ -2120,14 +2127,19 @@ TEST_F(ProxMpcControllerTest, SolverFailureBrakesFromMeasuredVelocity)
   c->activate();
   c->setPlan(makeStraightPlan(31, 0.2));
   ASSERT_NEAR(c->lastCmdV(), 0.0, kTol);   // last command is zero right after activate
+  ASSERT_NEAR(c->lastCmdW(), 0.0, kTol);
 
   geometry_msgs::msg::Twist measured;
   measured.linear.x = 0.40;                // the robot is actually moving
+  measured.angular.z = -0.30;              // and turning, opposite sign to exercise both steps
   const auto cmd = c->computeVelocityCommands(makePose(0.0, 0.0, 0.0), measured, nullptr);
 
   ASSERT_NE(c->mpc()->qp_info.status, proxsuite::proxqp::QPSolverOutput::PROXQP_SOLVED);
   // Ramp from the measured 0.40, not an abrupt 0 off the stale last command.
   EXPECT_NEAR(cmd.twist.linear.x, 0.40 - kModelDecel * 0.1, 1e-6);
+  // Same for the yaw channel: du[1]'s upper bound magnitude brings a negative
+  // rate back toward zero, from the measurement rather than from the command.
+  EXPECT_NEAR(cmd.twist.angular.z, -0.30 + kModelDecel * 0.1, 1e-6);
 }
 
 // A non-finite measured velocity must never survive the brake ramp: +/-inf
@@ -2420,6 +2432,42 @@ TEST_F(ProxMpcControllerTest, RearAxleBrakeSeedsFromMeasuredBaseLinkSpeed)
   EXPECT_NEAR(cmd.twist.linear.x, expected_v, 1e-9);
   EXPECT_NEAR(
     cmd.twist.angular.z, expected_v * std::tan(expected_delta) / kBicycleWheelbase, 1e-9);
+}
+
+// Both bicycles declare their steering rate undetermined in a body twist, so
+// that channel is never seeded from the measurement however large the measured
+// yaw rate is: it decelerates from its last commanded value under the model's
+// own du[1] bound. The channel is read back directly because the emitted twist
+// derives its yaw rate from the decayed steering angle rather than from control
+// 1, so nothing on the wire distinguishes the two seeds.
+TEST_F(ProxMpcControllerTest, BicycleBrakeHoldsTheUndeterminedSteeringRate)
+{
+  for (const char * plugin : {kBicyclePlugin, "prox_mpc_core/BicycleRearAxle"}) {
+    SCOPED_TRACE(plugin);
+    auto c = makeConfigured(
+    {
+      rclcpp::Parameter("FollowPath.model_plugin", std::string(plugin)),
+      rclcpp::Parameter("FollowPath.brake_period_s", 0.2),
+      rclcpp::Parameter("FollowPath.max_int_iter_qp", 1),
+      rclcpp::Parameter("FollowPath.max_ext_iter_qp", 1),
+      rclcpp::Parameter("FollowPath.max_iter_sqp", 1),
+      rclcpp::Parameter("FollowPath.max_solver_failures", 10),
+    });
+    c->activate();
+    c->setPlan(makeStraightPlan(31, 0.2));
+    ASSERT_EQ(c->lastCmdU().size(), 2);
+    c->lastCmdU()(1) = 0.4;      // last commanded steering rate [rad/s]
+
+    geometry_msgs::msg::Twist measured;
+    measured.linear.x = 1.0;
+    measured.angular.z = 1.0;    // a body yaw rate the steering channel must not adopt
+    c->computeVelocityCommands(makePose(0.0, 0.0, 0.0), measured, nullptr);
+    ASSERT_NE(c->mpc()->qp_info.status, proxsuite::proxqp::QPSolverOutput::PROXQP_SOLVED);
+
+    // 0.4 ramped toward zero at du[1] over the pinned period, not 1.0 ramped.
+    EXPECT_NEAR(c->lastCmdU()(1), 0.4 - kModelDecel * 0.2, 1e-9);
+    c->cleanup();
+  }
 }
 
 // Structurally invalid horizon sizing (np or nc < 1, or dt <= 0) fails configure
