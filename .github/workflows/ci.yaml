@@ -210,5 +210,5 @@ jobs:
           CC=clang CXX=clang++ colcon build \
             --symlink-install \
             --cmake-args \
-              -DCMAKE_CXX_FLAGS="-Wthread-safety" \
+              -DCMAKE_CXX_FLAGS="-Wthread-safety -Werror=thread-safety" \
             --no-warn-unused-cli
