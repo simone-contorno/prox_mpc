@@ -1475,7 +1475,12 @@ void ProxMpcController::keepOutShift(
 void ProxMpcController::fillObstacles(
   const MatrixXd & reference, MatrixXd & obs, const rclcpp::Time & now)
 {
-  predicted_obstacles_.clear();
+  /* deactivate()/cleanup() clear this under the same mutex from the executor
+   * thread, so the write here (the action server's own thread) takes it too. */
+  {
+    std::lock_guard<std::mutex> lock(obstacles_mutex_);
+    predicted_obstacles_.clear();
+  }
   const std::size_t k_obs = static_cast<std::size_t>(max_obstacles_);
 
   /* Default every slot to the far sentinel so unfilled ones stay non-binding. */
@@ -1630,44 +1635,52 @@ void ProxMpcController::fillObstacles(
   std::vector<double> shift_x;
   std::vector<double> shift_y;
   keepOutShift(shift_x, shift_y);
-  predicted_obstacles_.resize(n_dyn);
-  for (std::size_t j = 0; j < n_dyn; ++j) {
-    predicted_obstacles_[j].id = dyn[j].id;
-    predicted_obstacles_[j].radius = dyn[j].radius;
-    predicted_obstacles_[j].positions.resize(np_);
-  }
-  for (std::size_t node = 0; node < np_; ++node) {
-    const double dt_k = static_cast<double>(node + 1) * dt_ + age;
+  /* Held for the whole fill: deactivate()/cleanup() can clear predicted_obstacles_
+   * from the executor thread while this (the action server's thread) is mid-fill.
+   * The loop is bounded (Np * K, both small and configure-time fixed) and does no
+   * I/O or blocking call, so the hold is on the order of the loop's own cost, not
+   * a stall - negligible against the control cycle it runs once per. */
+  {
+    std::lock_guard<std::mutex> lock(obstacles_mutex_);
+    predicted_obstacles_.resize(n_dyn);
     for (std::size_t j = 0; j < n_dyn; ++j) {
-      const DynObs & d = dyn[j];
-      // Curved prediction when the tracker published samples; otherwise the
-      // straight constant-velocity ray, unchanged.
-      double px;
-      double py;
-      if (d.samples.empty()) {
-        px = d.x + d.vx * dt_k;
-        py = d.y + d.vy * dt_k;
-      } else {
-        const std::array<double, 2> p = sample_polyline(d.x, d.y, d.samples, d.sample_dt, dt_k);
-        px = p[0];
-        py = p[1];
+      predicted_obstacles_[j].id = dyn[j].id;
+      predicted_obstacles_[j].radius = dyn[j].radius;
+      predicted_obstacles_[j].positions.resize(np_);
+    }
+    for (std::size_t node = 0; node < np_; ++node) {
+      const double dt_k = static_cast<double>(node + 1) * dt_ + age;
+      for (std::size_t j = 0; j < n_dyn; ++j) {
+        const DynObs & d = dyn[j];
+        // Curved prediction when the tracker published samples; otherwise the
+        // straight constant-velocity ray, unchanged.
+        double px;
+        double py;
+        if (d.samples.empty()) {
+          px = d.x + d.vx * dt_k;
+          py = d.y + d.vy * dt_k;
+        } else {
+          const std::array<double, 2> p = sample_polyline(d.x, d.y, d.samples, d.sample_dt, dt_k);
+          px = p[0];
+          py = p[1];
+        }
+        const double d_safe = robot_radius_ + d.radius + safety_margin_ +
+          prediction_uncertainty_growth_ * dt_k;
+        const Eigen::Index row = static_cast<Eigen::Index>(node * k_obs + j);
+        /* Written in the solver's frame: the keep-out is meant to protect
+         * base_link, and the solver constrains the model's reference point. */
+        obs(row, 0) = px + shift_x[node];
+        obs(row, 1) = py + shift_y[node];
+        obs(row, 2) = d_safe;
+        /* Exclude the obstacle's CURRENT footprint from the static scan, not its
+         * predicted one: the local costmap is a now-snapshot, so the moving object's
+         * occupied cells sit at its current position. Excluding the current footprint
+         * at every node keeps the static fill from re-adding the same object the
+         * predictive half-plane already covers (the predicted cells are not in the
+         * snapshot, so excluding them would not de-duplicate anything). */
+        exclusions[node].push_back({d.x, d.y, d.radius + obstacle_cluster_radius_});
+        predicted_obstacles_[j].positions[node] = {px, py};
       }
-      const double d_safe = robot_radius_ + d.radius + safety_margin_ +
-        prediction_uncertainty_growth_ * dt_k;
-      const Eigen::Index row = static_cast<Eigen::Index>(node * k_obs + j);
-      /* Written in the solver's frame: the keep-out is meant to protect
-       * base_link, and the solver constrains the model's reference point. */
-      obs(row, 0) = px + shift_x[node];
-      obs(row, 1) = py + shift_y[node];
-      obs(row, 2) = d_safe;
-      /* Exclude the obstacle's CURRENT footprint from the static scan, not its
-       * predicted one: the local costmap is a now-snapshot, so the moving object's
-       * occupied cells sit at its current position. Excluding the current footprint
-       * at every node keeps the static fill from re-adding the same object the
-       * predictive half-plane already covers (the predicted cells are not in the
-       * snapshot, so excluding them would not de-duplicate anything). */
-      exclusions[node].push_back({d.x, d.y, d.radius + obstacle_cluster_radius_});
-      predicted_obstacles_[j].positions[node] = {px, py};
     }
   }
 
