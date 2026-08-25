@@ -25,7 +25,7 @@ This package contains **no ROS node**: it is the reusable library that [prox_mpc
 ## Overview
 
 The core owns the SQP/QP assembly, the tracking cost, the state/control/rate constraints, the disc-based obstacle math, and the `prox_mpc::Model` vehicle interface.
-It never needs editing to gain a new vehicle model that does not enable obstacle avoidance: a model is a `pluginlib` plugin loaded by name. A model that does enable obstacle avoidance additionally has to place its planar position at state columns 0 and 1, the one place the obstacle-constraint assembly reads position directly rather than through a declared mapping.
+It never needs editing to gain a new vehicle model: a model is a `pluginlib` plugin loaded by name, and every part of the assembly that has to know where a quantity sits in the state vector - the obstacle constraints included - reads it from the model's declared planar mapping rather than from a fixed layout.
 
 See [doc/architecture.md](doc/architecture.md) for the design overview, [doc/nmpc.md](doc/nmpc.md) for the NMPC/SQP/QP math, and [doc/obstacle-avoidance.md](doc/obstacle-avoidance.md) for the obstacle constraints. [doc/migration.md](doc/migration.md) records what changed on the released surface since 1.0.0.
 

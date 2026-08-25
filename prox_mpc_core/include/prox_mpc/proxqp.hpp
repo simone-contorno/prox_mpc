@@ -145,6 +145,15 @@ private:
   /* Obstacle avoidance: linearized signed-distance half-plane, K slots per node. */
   size_t max_obs = 0;             // Capacity K of obstacle slots per predicted node (0 = disabled).
   bool obstacle_active = false;   // Cached in init(): model declares avoidance and max_obs > 0.
+
+  /* State indices the model declares its planar position at, read once from
+   * Model::getPlanarMapping() in init() and validated there. The obstacle rows
+   * are the only place the solver needs to know where the position sits, so
+   * they are cached rather than queried per row: setC() writes Np*K of them
+   * every SQP iteration. The defaults are the canonical layout every bundled
+   * model declares. */
+  size_t idx_pos_x = 0;
+  size_t idx_pos_y = 1;
   MatrixXd obs;                   // Per (node, slot) obstacle triples (Np*K) x [o_x, o_y, d_safe].
 
   // Discrete-time control-barrier-function rate (Zeng et al., ACC 2021):

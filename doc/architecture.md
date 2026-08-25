@@ -172,11 +172,13 @@ What the stack supports today, stated plainly rather than left implicit.
   Past the plan end the reference pose is the goal pose, orientation included,
   when the goal checker publishes a yaw tolerance it enforces; without one it
   holds the final segment's tangent.
-- **Model state layout.** Any `prox_mpc::Model` that enables obstacle avoidance
-  must carry its planar position at state columns 0 and 1: the
-  obstacle-constraint assembly in `prox_mpc_core` reads those two columns
-  directly rather than through a declared mapping (see
+- **Model state layout.** Any `prox_mpc::Model` may order its state as it
+  likes, with or without obstacle avoidance: every consumer of a state index,
+  the obstacle-constraint assembly in `prox_mpc_core` included, reads it from
+  the model's declared `getPlanarMapping()` (see
   [prox_mpc_core/doc/architecture.md](../prox_mpc_core/doc/architecture.md)).
+  A model that declares a position index outside its own state vector, or the
+  same index twice, is rejected when the solver is initialised.
 - **Weight matrices.** `MPC::init()` requires `Q`, `S`, `R` and `W` to be
   finite, symmetric, and positive semidefinite, and throws otherwise; a direct
   `prox_mpc_core` consumer does not have to enforce this itself.

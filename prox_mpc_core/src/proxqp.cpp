@@ -11,6 +11,7 @@
 #include <limits>
 #include <memory>
 #include <stdexcept>
+#include <string>
 #include <vector>
 
 // Solver-local convenience for the proxsuite types (kept out of the header so it
@@ -62,6 +63,41 @@ void ProxQP::init(std::shared_ptr<Model> model)
    * K > 0 was set; K = 0 (or the model flag off) reduces to the obstacle-off QP.
    * Cached so the per-iteration assembly (setH/setc/setC/setd) reuses it. */
   obstacle_active = model->getObsFlag() == true && max_obs > 0;
+
+  /* Where the model keeps its planar position. The obstacle rows are the only
+   * part of the assembly that has to know, so the mapping is read here, with
+   * obstacle_active, rather than per row or per cycle. Read only when the
+   * obstacle term is active: a model that does not use it may declare whatever
+   * mapping it likes, and rejecting one the solver never indexes would be this
+   * layer overreaching.
+   *
+   * Validated here rather than left to the caller. A consumer that drives this
+   * library directly - without the bundled Nav2 plugin's own model screening -
+   * would otherwise index a state column that does not exist, which
+   * EIGEN_NO_DEBUG turns into a silent out-of-range read rather than an abort. */
+  if (obstacle_active == true) {
+    const PlanarMapping mapping = model->getPlanarMapping();
+    const std::string where = "ProxQP::init: model '" + model->getName() + "' ";
+    if (mapping.idx_x >= n) {
+      throw std::invalid_argument(
+              where + "maps its x position to state index " +
+              std::to_string(mapping.idx_x) + ", outside its " + std::to_string(n) +
+              " states");
+    }
+    if (mapping.idx_y >= n) {
+      throw std::invalid_argument(
+              where + "maps its y position to state index " +
+              std::to_string(mapping.idx_y) + ", outside its " + std::to_string(n) +
+              " states");
+    }
+    if (mapping.idx_x == mapping.idx_y) {
+      throw std::invalid_argument(
+              where + "maps both planar positions to state index " +
+              std::to_string(mapping.idx_x));
+    }
+    idx_pos_x = mapping.idx_x;
+    idx_pos_y = mapping.idx_y;
+  }
 
   /* Update the number of inequality blocks: the first control input, plus the
    * obstacle constraint block and the slack lower-bound block when active. */
@@ -417,10 +453,10 @@ void ProxQP::setC(const MatrixXd & x)
     for (size_t r = ineq_idx[i]; r < ineq_idx[i + 1]; r++) {
       const size_t slot = r - ineq_idx[i];          // 0 .. Np*K-1
       const size_t node = slot / max_obs;           // predicted-node index 0 .. Np-1
-      col = x_start + n * (node + 1);               // position block of predicted node (node+1)
+      col = x_start + n * (node + 1);               // state block of predicted node (node+1)
 
-      const double dx = x(node + 1, 0) - obs(slot, 0);
-      const double dy = x(node + 1, 1) - obs(slot, 1);
+      const double dx = x(node + 1, idx_pos_x) - obs(slot, 0);
+      const double dy = x(node + 1, idx_pos_y) - obs(slot, 1);
       const double raw_norm = sqrt(dx * dx + dy * dy);
       double norm = raw_norm;
       if (norm < kObsNormalEps) {norm = kObsNormalEps;}
@@ -437,8 +473,8 @@ void ProxQP::setC(const MatrixXd & x)
         ny = dy / norm;
       }
 
-      C(r, col) = nx;                               // x
-      C(r, col + 1) = ny;                           // y
+      C(r, col + idx_pos_x) = nx;                   // x
+      C(r, col + idx_pos_y) = ny;                   // y
       C(r, w_start + slot) = 1;                     // slack
 
       obs_h(slot) = norm - obs(slot, 2);            // signed distance at node k+1
@@ -496,8 +532,8 @@ void ProxQP::setC(const MatrixXd & x)
               }
             }
           }
-          const double dxp = x(node, 0) - ox;
-          const double dyp = x(node, 1) - oy;
+          const double dxp = x(node, idx_pos_x) - ox;
+          const double dyp = x(node, idx_pos_y) - oy;
           const double norm_prev = sqrt(dxp * dxp + dyp * dyp);
           obs_h_prev(slot) = norm_prev - obs(prev_slot, 2);
           /* Second half of the linearization: the constraint is
@@ -523,9 +559,9 @@ void ProxQP::setC(const MatrixXd & x)
          * VALUE term above is not inert - it is the constant right-hand side of
          * the first coupled constraint - and is always computed. */
         if (node >= 1) {
-          const size_t col_prev = x_start + n * node;  // position block of node k
-          C(r, col_prev) = gx;
-          C(r, col_prev + 1) = gy;
+          const size_t col_prev = x_start + n * node;  // state block of node k
+          C(r, col_prev + idx_pos_x) = gx;
+          C(r, col_prev + idx_pos_y) = gy;
         }
       }
     }

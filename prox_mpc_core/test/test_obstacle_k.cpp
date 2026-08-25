@@ -469,6 +469,110 @@ TEST(ObstacleK, MultiObstacleAndSentinelReducesToK1)
   }
 }
 
+// --- The keep-out rows follow the model's declared planar mapping ------------
+//
+// The obstacle rows are the only part of the assembly that has to know where a
+// model keeps its position. They read it from Model::getPlanarMapping(), so a
+// model whose state is not ordered [x, y, ...] is constrained on the axes it
+// declares rather than on state columns 0 and 1.
+
+// A model whose state is ordered [theta, x, y] and which enables obstacle
+// avoidance: the case the assembly used to index wrongly. Unicycle dynamics
+// written against the permuted ordering, so it also solves.
+class PermutedObstacleModel : public prox_mpc::Model
+{
+public:
+  PermutedObstacleModel()
+  {
+    setName("permuted_obstacle");
+    setN(3);   // state: [theta, x, y]
+    setM(2);   // control: [v, omega]
+    setA(MatrixXd::Zero(getN(), getN()));
+    setB(MatrixXd::Zero(getN(), getM()));
+    setc(VectorXd::Zero(getN()));
+    setIneq("u", 0, -3.0, 3.0);
+    setIneq("u", 1, -1.0, 1.0);
+    setIneq("du", 0, -0.5, 0.5);
+    setIneq("du", 1, -0.5, 0.5);
+    setObsAvoid(true);
+  }
+  prox_mpc::PlanarMapping getPlanarMapping() const override
+  {
+    prox_mpc::PlanarMapping mapping;
+    mapping.idx_yaw = 0;
+    mapping.idx_x = 1;
+    mapping.idx_y = 2;
+    return mapping;
+  }
+  void updatec(double dt, VectorXd x_next) override
+  {
+    const double th = getX()(0);
+    c << getX()(0) - x_next(0) + dt * getU()(1),
+      getX()(1) - x_next(1) + dt * getU()(0) * std::cos(th),
+      getX()(2) - x_next(2) + dt * getU()(0) * std::sin(th);
+  }
+  void updateA(double dt) override
+  {
+    const double th = getX()(0);
+    const double v = getU()(0);
+    A << 1.0, 0.0, 0.0,
+      -dt * v * std::sin(th), 1.0, 0.0,
+      dt * v * std::cos(th), 0.0, 1.0;
+  }
+  void updateB() override
+  {
+    const double th = getX()(0);
+    B << 0.0, 1.0,
+      std::cos(th), 0.0,
+      std::sin(th), 0.0;
+  }
+};
+
+// The half-plane normal lands in the two state columns the model declares as
+// its position, and the column it declares as heading is left untouched. Read
+// out of the assembled constraint matrix rather than inferred from a solution:
+// a wrongly placed normal still produces a plausible trajectory, just one
+// constrained on the wrong pair of axes.
+TEST(ObstacleK, KeepOutRowsFollowTheDeclaredPlanarMapping)
+{
+  auto model = std::make_shared<PermutedObstacleModel>();
+  const size_t n = 3;
+  auto mpc = std::make_shared<MPC>();
+  mpc->setNp(kNp);
+  mpc->setNc(kNc);
+  mpc->setdt(kDt);
+  mpc->setQ(MatrixXd::Identity(n, n));
+  mpc->setS(MatrixXd::Identity(n, n));
+  mpc->setR(0.1 * MatrixXd::Identity(2, 2));
+  mpc->setW(MatrixXd::Constant(1, 1, 100.0));
+  mpc->setMaxObs(1);
+  mpc->init(model);
+
+  // One obstacle, and a node-1 position offset from it along +x only, so the
+  // expected normal is exactly (1, 0) in the declared axes.
+  const double ox = 1.0;
+  const double oy = 0.0;
+  MatrixXd obs = makeObs(kNp, 1);
+  fillSlot(obs, kNp, 1, 0, ox, oy, 0.5);
+
+  auto solver = mpc->getSolver();
+  solver->setObs(obs);
+  MatrixXd x = MatrixXd::Zero(kNp + 1, n);
+  x(1, 1) = ox + 2.0;   // declared x position of node 1
+  x(1, 2) = oy;         // declared y position of node 1
+  solver->setC(x);
+
+  const MatrixXd & C = solver->getC();
+  const std::vector<size_t> & ineq_idx = solver->getIneqIdx();
+  const size_t obs_start = ineq_idx[ineq_idx.size() - 3];
+  const size_t col = n * 1;   // x_start == 0; state block of node 1
+
+  EXPECT_NEAR(C(obs_start, col + 1), 1.0, 1e-12);   // declared x column carries n_x
+  EXPECT_NEAR(C(obs_start, col + 2), 0.0, 1e-12);   // declared y column carries n_y
+  // The heading column is not a position and must carry no keep-out gradient.
+  EXPECT_NEAR(C(obs_start, col + 0), 0.0, 1e-12);
+}
+
 // --- Current-time obstacle reconstruction at node 0 -------------------------
 //
 // The matrix's row 0 (block 0) carries the obstacle's position one step ahead

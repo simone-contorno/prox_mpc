@@ -10,6 +10,12 @@ design see [architecture.md](architecture.md).
 
 At each predicted node `k` the robot has a planar position
 $p_k = (x_k, y_k)$.
+Where those two components sit inside the model's state vector is the model's
+own business: the assembly reads their indices from `Model::getPlanarMapping()`,
+so a state ordered `[x, y, yaw, ...]` and one ordered `[yaw, x, y]` are both
+constrained on their real position axes.
+`ProxQP::init()` reads the pair once, and rejects a model that places either
+index outside its own state vector or places both at the same index.
 An obstacle is reduced to a point $o = (o_x, o_y)$ with a required clearance
 $d_\text{safe}$, which already folds in the robot radius, the obstacle inflation,
 and a safety margin.
