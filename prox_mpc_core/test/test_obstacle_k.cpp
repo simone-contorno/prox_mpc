@@ -82,7 +82,16 @@ std::shared_ptr<MPC> makeUnicycleMpc(
   const size_t m = model->getM();
 
   MatrixXd Q = MatrixXd::Identity(n, n);
+  // GCC's -Wnull-dereference misfires on this exact shape at -O3/NDEBUG (an
+  // Identity()-initialized matrix, one element written, then passed by value
+  // into a call GCC inlines): verified as a false positive by reproducing it
+  // in isolation, where neither an explicit Eigen::Index cast nor splitting
+  // the construction from the identity fill clears it. No rename, cast or
+  // scope change is available here; the site is narrowed to this one write.
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wnull-dereference"
   Q(0, 0) = 10.0;
+#pragma GCC diagnostic pop
   Q(1, 1) = 10.0;
   MatrixXd S = 2.0 * Q;
   MatrixXd R = 0.1 * MatrixXd::Identity(m, m);
