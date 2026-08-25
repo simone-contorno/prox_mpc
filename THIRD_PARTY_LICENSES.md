@@ -106,6 +106,7 @@ python3-yaml
 rcl_interfaces
 rclpy
 rcpputils
+rcutils
 robot_state_publisher
 ros2bag
 ros2launch
@@ -114,6 +115,7 @@ ros_gz_sim
 rosbag2_py
 rosidl_default_generators
 rosidl_default_runtime
+rosidl_typesupport_introspection_cpp
 rviz2
 std_msgs
 xacro
