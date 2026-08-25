@@ -392,6 +392,62 @@ TEST(ModelInterface, FrontAxleFromTwistHandlesFullLockAndReverse)
   EXPECT_NEAR(front.fromTwist(front.toTwist(ub))(0), -0.9, kTol);
 }
 
+// Every bundled model's two twist mappings agree: for each control fromTwist()
+// reports as determined, it returns the control toTwist() was given. This is
+// the guard on the hazard the pair creates - a model that overrides toTwist()
+// and inherits the base fromTwist() gets an inverse of a mapping it does not
+// use, and the consumer that seeds a control vector from a measured twist then
+// writes a plausible-looking wrong number into that channel. It is the
+// steering-rate channel of either bicycle that this catches: the base default
+// returns angular.z there, a body yaw rate, which is neither of their control
+// 1. A channel reported non-finite carries no claim and is skipped.
+TEST(ModelInterface, FromTwistAgreesWithToTwistOnEveryDeterminedChannel)
+{
+  VectorXd x3 = VectorXd::Zero(3);
+  VectorXd x4(4);
+  x4 << 0.0, 0.0, 0.0, 0.35;      // a steering angle the yaw laws actually use
+  VectorXd u(2);
+  // Control 1 is deliberately far from the yaw rate this state and speed imply
+  // (about 0.25 rad/s for either bicycle), so a channel filled from angular.z
+  // instead of from the control is unmistakable rather than merely off.
+  u << 1.1, 0.9;                  // [v, omega] or [v, delta_dot], per model
+
+  Unicycle uni;
+  uni.setX(x3);
+  BicycleFrontAxle front;
+  front.setX(x4);
+  BicycleRearAxle rear;
+  rear.setX(x4);
+  Bicycle alias;                  // deprecated, and still held to the same contract
+  alias.setX(x4);
+
+  struct Case
+  {
+    const char * name;
+    Model * model;
+  };
+  const Case cases[] = {
+    {"Unicycle", &uni},
+    {"BicycleFrontAxle", &front},
+    {"BicycleRearAxle", &rear},
+    {"Bicycle", &alias},
+  };
+
+  for (const auto & item : cases) {
+    SCOPED_TRACE(item.name);
+    const VectorXd back = item.model->fromTwist(item.model->toTwist(u));
+    ASSERT_EQ(back.size(), static_cast<Eigen::Index>(item.model->getM()));
+    bool any_determined = false;
+    for (Eigen::Index j = 0; j < back.size(); j++) {
+      if (!std::isfinite(back(j))) {continue;}
+      any_determined = true;
+      EXPECT_NEAR(back(j), u(j), 1e-9) << "control " << j;
+    }
+    // A model determining nothing would pass the loop vacuously.
+    EXPECT_TRUE(any_determined);
+  }
+}
+
 // --- BicycleRearAxle: identity, bounds, residual and Jacobians --------------
 //
 // BicycleFrontAxle (via the Bicycle alias) is covered above; BicycleRearAxle's
