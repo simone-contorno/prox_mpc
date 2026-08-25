@@ -105,6 +105,7 @@ python3-numpy
 python3-yaml
 rcl_interfaces
 rclpy
+rcpputils
 robot_state_publisher
 ros2bag
 ros2launch
