@@ -77,10 +77,13 @@ offset - the shift is exactly zero and the obstacle fill is bit-identical.
 `nav2_core::ControllerException` rather than indexing out of range, which
 `EIGEN_NO_DEBUG` would leave unchecked. It rejects a model with fewer than three
 states or no control, an index outside the model's own dimensions, two planar
-quantities sharing one index, a steering angle without a usable declared
-wheelbase or with a lateral reference offset, and - when `max_obstacles > 0` - a
-position mapped away from state columns 0 and 1, which is where the solver's
-keep-out rows read it.
+quantities sharing one index, and a steering angle without a usable declared
+wheelbase or with a lateral reference offset.
+
+The declared position may sit at any pair of state indices, with the in-loop
+obstacle term active or not. The solver reads the same declaration and indexes
+its keep-out rows through it, so a model that 1.0.0 could only drive with
+`max_obstacles` set to 0 now drives with avoidance on.
 
 It also rejects a model whose declared upper speed bound is zero or non-finite.
 1.0.0 required the bound to be present but not to be usable, so a model

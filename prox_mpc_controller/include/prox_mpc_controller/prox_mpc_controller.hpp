@@ -96,10 +96,12 @@ protected:
   /// model's own dimensions, two planar quantities sharing one index, a model
   /// carrying a steering angle without declaring a usable wheelbase or with a
   /// lateral reference offset, a steering-rate control index outside the control
-  /// vector or colliding with the speed channel, and, when the in-loop obstacle
-  /// term is active, a model whose position does not sit at state columns 0 and
-  /// 1, which is where the core's obstacle rows read it. Each rejection throws
+  /// vector or colliding with the speed channel. Each rejection throws
   /// nav2_core::ControllerException naming `model_plugin` and the reason.
+  ///
+  /// The declared position may sit at any pair of state indices, with or
+  /// without the in-loop obstacle term: the solver reads the same declaration
+  /// and indexes its keep-out rows through it.
   void readModelMapping(prox_mpc::Model & model, const std::string & model_plugin);
 
   /// Read the model's declared bounds into the cached control-law limits: both

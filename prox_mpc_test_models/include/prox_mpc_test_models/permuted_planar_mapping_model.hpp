@@ -21,10 +21,9 @@ namespace prox_mpc_test_models
 /// position to state columns 0 and 1, so no permutation defect is observable
 /// through them.
 ///
-/// Obstacle avoidance is off, which is what makes the permutation legal: the
-/// solver's keep-out rows read the position from state columns 0 and 1
-/// directly, so a model that moves it elsewhere is rejected at configure()
-/// while the in-loop obstacle term is active.
+/// Obstacle avoidance is on, so the fixture also covers the in-loop keep-out
+/// term against a permuted state: the solver reads the position's indices from
+/// the same declared mapping rather than assuming state columns 0 and 1.
 ///
 /// The dynamics are the unicycle's, written against the permuted ordering, so
 /// the model both configures and solves.
@@ -46,7 +45,7 @@ public:
     setIneq("du", 0, -0.5, 0.5);    // linear acceleration [m/s^2]
     setIneq("du", 1, -0.5, 0.5);    // angular acceleration [rad/s^2]
 
-    setObsAvoid(false);
+    setObsAvoid(true);
   }
 
   prox_mpc::PlanarMapping getPlanarMapping() const override

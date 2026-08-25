@@ -599,15 +599,6 @@ void ProxMpcController::readModelMapping(
     }
   }
 
-  /* The core's obstacle rows read the predicted position from state columns 0
-   * and 1 directly, so a model that puts it elsewhere cannot use the in-loop
-   * keep-out term. Rejected rather than silently constraining the wrong pair. */
-  if (model.getObsFlag() && max_obstacles_ > 0 && (mapping.idx_x != 0 || mapping.idx_y != 1)) {
-    reject(
-      "declares obstacle avoidance but maps its position away from state columns 0 and 1, "
-      "which is where the solver's keep-out rows read it; set max_obstacles to 0 or remap");
-  }
-
   idx_x_ = mapping.idx_x;
   idx_y_ = mapping.idx_y;
   idx_yaw_ = mapping.idx_yaw;

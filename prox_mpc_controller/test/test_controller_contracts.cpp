@@ -39,6 +39,7 @@
 #include <rclcpp_lifecycle/lifecycle_node.hpp>
 #include <tf2_ros/buffer.h>
 
+#include <prox_mpc/proxqp.hpp>
 #include <prox_mpc_msgs/msg/solver_diagnostics.hpp>
 
 #include "prox_mpc_controller/prox_mpc_controller.hpp"
@@ -171,31 +172,6 @@ public:
     mapping.idx_steering = 3;
     mapping.wheelbase = 1.6;
     mapping.ref_offset_y = 0.2;   // lateral: unsupported
-    return mapping;
-  }
-  void updatec(double, VectorXd) override {}
-  void updateA(double) override {}
-  void updateB() override {}
-};
-
-// Declares obstacle avoidance but maps its planar position away from state
-// columns 0 and 1, which is where the core's obstacle rows read it.
-class ObstacleModelWrongColumns : public prox_mpc::Model
-{
-public:
-  ObstacleModelWrongColumns()
-  {
-    setName("obstacle_wrong_columns");
-    setN(4);
-    setM(1);
-    setObsAvoid(true);
-  }
-  prox_mpc::PlanarMapping getPlanarMapping() const override
-  {
-    prox_mpc::PlanarMapping mapping;
-    mapping.idx_x = 1;
-    mapping.idx_y = 2;
-    mapping.idx_yaw = 3;
     return mapping;
   }
   void updatec(double, VectorXd) override {}
@@ -524,13 +500,48 @@ TEST_F(ControllerContractsTest, ReadModelMappingRejectsSteeringWithLateralOffset
     nav2_core::ControllerException);
 }
 
-TEST_F(ControllerContractsTest, ReadModelMappingRejectsObstacleModelMappedAwayFromColumnsZeroOne)
+// A model whose planar position is not at state columns 0 and 1 configures with
+// the in-loop keep-out term active. It used to be rejected here, because the
+// solver's obstacle rows indexed those two columns directly; they now index the
+// same declared mapping the controller reads, so there is nothing left to
+// reject and the model drives with avoidance on.
+//
+// The keep-out is then checked where it is assembled: the half-plane normal has
+// to land in the two state columns the model declares, and the column it
+// declares as heading must carry none of it. A misplaced normal still produces
+// a plausible trajectory, just one constrained on the wrong axes, so the
+// assembled matrix is read rather than the solution.
+TEST_F(ControllerContractsTest, PermutedModelDrivesWithObstacleAvoidanceActive)
 {
-  auto c = makeConfigured({rclcpp::Parameter("FollowPath.max_obstacles", 1)});
-  ObstacleModelWrongColumns model;
-  EXPECT_THROW(
-    callReadModelMapping(c, model, "test/ObstacleWrongColumns"),
-    nav2_core::ControllerException);
+  std::shared_ptr<TestableProxMpcController> c;
+  ASSERT_NO_THROW(
+    c = makeConfigured(
+      {rclcpp::Parameter(
+          "FollowPath.model_plugin", std::string("prox_mpc_test_models/PermutedPlanarMapping")),
+        rclcpp::Parameter("FollowPath.max_obstacles", 1)}));
+  ASSERT_NE(c, nullptr);
+  ASSERT_EQ(c->idxYaw(), 0u);
+  ASSERT_EQ(c->idxX(), 1u);
+  ASSERT_EQ(c->idxY(), 2u);
+  ASSERT_EQ(c->maxObstacles(), 1u);
+
+  c->activate();
+  c->setPlan(makeStraightPlan(61, 0.2));
+  const auto cmd =
+    c->computeVelocityCommands(makePose(0.0, 0.0, 0.0), geometry_msgs::msg::Twist(), nullptr);
+  EXPECT_TRUE(std::isfinite(cmd.twist.linear.x));
+
+  auto solver = c->mpc()->getSolver();
+  const MatrixXd & C = solver->getC();
+  const std::vector<size_t> & ineq_idx = solver->getIneqIdx();
+  const size_t obs_start = ineq_idx[ineq_idx.size() - 3];
+  const size_t col = c->n_ * 1;   // x_start == 0; state block of node 1
+
+  // The row is a unit normal spread over the two declared position columns.
+  const double nx = C(obs_start, col + c->idxX());
+  const double ny = C(obs_start, col + c->idxY());
+  EXPECT_NEAR(nx * nx + ny * ny, 1.0, 1e-9);
+  EXPECT_NEAR(C(obs_start, col + c->idxYaw()), 0.0, 1e-12);
 }
 
 // A model that overrides nothing still drives: the default getPlanarMapping()

@@ -40,10 +40,10 @@
     <description>
       Fixture model whose state vector is ordered [theta, x, y] instead of
       [x, y, theta], so its declared planar mapping is idx_yaw = 0, idx_x = 1,
-      idx_y = 2. Obstacle avoidance is off, which is what makes the permutation
-      legal. Used to test that the controller drives a model through its
-      declared mapping rather than through the bundled state ordering. Test
-      fixture only.
+      idx_y = 2. Obstacle avoidance is on, so it also covers the in-loop
+      keep-out term against a permuted state. Used to test that the controller
+      and the solver drive a model through its declared mapping rather than
+      through the bundled state ordering. Test fixture only.
     </description>
   </class>
 </library>
