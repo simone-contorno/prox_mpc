@@ -269,7 +269,7 @@ TEST(MoveBlocking, NcEqualsOneWarmStartDoesNotCrash)
 // Nc > Np is rejected whichever setter runs second. Either horizon may still
 // be at its unset sentinel (0) when the first one runs, so that call defers the
 // comparison rather than accepting the pair; the second call makes it.
-TEST(MoveBlocking, SetNcRejectsNcGreaterThanNp)
+TEST(MoveBlocking, HorizonBoundRejectedByEitherSetter)
 {
   MPC mpc;
   mpc.setNp(5);
