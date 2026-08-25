@@ -340,6 +340,37 @@ TEST(ModelInterface, FromTwistInvertsToTwist)
   const VectorXd u_rear = rear.fromTwist(rear.toTwist(ub));
   ASSERT_EQ(u_rear.size(), 2);
   EXPECT_NEAR(u_rear(0), 0.7, kTol);         // control 0 is already the base_link speed
+  EXPECT_FALSE(std::isfinite(u_rear(1)));    // delta_dot is not observable here either
+}
+
+// Both bicycles override the inverse because both override toTwist, and the
+// base class default is the inverse of the mapping neither of them uses: it
+// returns angular.z in control 1, a body yaw rate, while control 1 on either
+// bicycle is a steering rate. The rear axle is the case where that is easy to
+// miss, since its control 0 does match the default. Driven head-on, where the
+// emitted yaw rate is zero, so an inherited default would return a plausible
+// finite 0.0 in the steering-rate slot rather than an obviously wrong number.
+TEST(ModelInterface, RearAxleFromTwistLeavesTheSteeringRateUndetermined)
+{
+  BicycleRearAxle rear;
+  VectorXd xb(4);
+  xb << 0.0, 0.0, 0.0, 0.0;      // straight ahead: toTwist emits angular.z == 0
+  rear.setX(xb);
+  VectorXd ub(2);
+  ub << 1.3, 0.4;                // [v, delta_dot], with a non-zero steering rate
+
+  const geometry_msgs::msg::Twist tw = rear.toTwist(ub);
+  ASSERT_NEAR(tw.angular.z, 0.0, kTol);
+
+  const VectorXd u = rear.fromTwist(tw);
+  ASSERT_EQ(u.size(), 2);
+  EXPECT_NEAR(u(0), 1.3, kTol);        // round-trips the base_link speed
+  EXPECT_FALSE(std::isfinite(u(1)));   // not 0.0: the twist says nothing about delta_dot
+
+  // Reverse travel keeps its sign; there is no magnitude to recover here.
+  ub(0) = -0.8;
+  rear.setX(xb);
+  EXPECT_NEAR(rear.fromTwist(rear.toTwist(ub))(0), -0.8, kTol);
 }
 
 // The front-axle inverse is singularity-free at the model's own +/- pi/2

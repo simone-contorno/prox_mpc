@@ -5,6 +5,7 @@
 #define PROX_MPC__MODELS__BICYCLE_REAR_AXLE_HPP_
 
 #include <cmath>
+#include <limits>
 #include <map>
 #include <stdexcept>
 #include <string>
@@ -134,6 +135,23 @@ public:
     twist.linear.x = u(0);                                       // base_link speed
     twist.angular.z = u(0) * tan(this->x(3)) / this->params(0);  // omega = v tan(delta)/L
     return twist;
+  }
+
+  /*!
+   * Recover the control from a base_link twist. Control 0 is already that
+   * frame's speed, so it is read straight out of linear.x.
+   *
+   * The steering rate is left undetermined, as it is for the front axle: a
+   * twist shows the steering angle's effect, not the rate the angle is
+   * changing at. Overridden rather than inherited for exactly that reason -
+   * the base class default returns angular.z in control 1, which is a body yaw
+   * rate, and this model's control 1 is a steering rate.
+   */
+  VectorXd fromTwist(const geometry_msgs::msg::Twist & twist) const override
+  {
+    VectorXd u = VectorXd::Constant(2, std::numeric_limits<double>::quiet_NaN());
+    u(0) = twist.linear.x;
+    return u;
   }
 
   void updatec(double dt, VectorXd x_next) override

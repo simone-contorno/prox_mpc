@@ -97,6 +97,13 @@ steering bound. Control 1 is left non-finite: a twist shows the steering angle's
 effect, not the rate the angle is changing at, so the caller keeps whatever
 value it already holds for that channel.
 
+`BicycleRearAxle` overrides it as well, for the second half of the same reason.
+Its control 0 *is* the `base_link` speed, so the default would read that channel
+correctly, but its control 1 is a steering rate while the default returns
+`angular.z` there - a body yaw rate, and the two are not the same quantity. A
+model that overrides `toTwist()` needs this hook even when its speed channel
+happens to agree with the default.
+
 ## `MPC` gains candidate state
 
 `MPC` gains four public methods and six data members. The methods are non-virtual
