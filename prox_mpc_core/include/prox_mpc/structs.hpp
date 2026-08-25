@@ -55,7 +55,20 @@ struct ModelInfo
 
 /* How a model's state and control vectors map onto the planar quantities a Nav2
  * consumer drives. Declared by Model::getPlanarMapping() and read once at the
- * consumer's configuration time, never on the control path. */
+ * consumer's configuration time, never on the control path.
+ *
+ * Validation is split by who indexes what. The core validates only the indices
+ * it dereferences itself: today that is idx_x and idx_y, checked in
+ * ProxQP::init() when obstacle avoidance is active. idx_yaw and the steering
+ * indices are deliberately unchecked there, because no core path reads them -
+ * a two-state holonomic model doing obstacle avoidance through the core
+ * directly is legitimate, and its out-of-range idx_yaw default harms nothing.
+ * The Nav2 controller validates all of them at readModelMapping(), for its own
+ * use of them.
+ *
+ * Whoever first makes a core path index the heading or a steering channel must
+ * extend the check in ProxQP::init() to cover it: EIGEN_NO_DEBUG turns an
+ * out-of-range read into silent garbage rather than an abort. */
 struct PlanarMapping
 {
   /* Index value meaning "this model does not carry that quantity". */
