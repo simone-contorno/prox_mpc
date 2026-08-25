@@ -101,6 +101,23 @@ public:
   void updateB() override {}
 };
 
+// Declares its state dimension and forgets its control dimension. Model's
+// control count is a ModelInfo default member initialiser (0) and Model
+// declares no constructor, so a subclass that never calls setM leaves it there;
+// setM's own m == 0 rejection only covers an explicit zero.
+class NoControlModel : public prox_mpc::Model
+{
+public:
+  NoControlModel()
+  {
+    setName("no_control");
+    setN(3);   // clears the n_ < 3 gate, so m_ < 1 is the one under test
+  }
+  void updatec(double, VectorXd) override {}
+  void updateA(double) override {}
+  void updateB() override {}
+};
+
 // Maps y to the same state index as x -- an internally inconsistent mapping.
 class DuplicatePlanarIndexModel : public prox_mpc::Model
 {
@@ -455,11 +472,30 @@ TEST_F(ControllerContractsTest, ReadModelMappingRejectsFewerThanThreeStates)
   EXPECT_THROW(callReadModelMapping(c, model, "test/TwoState"), nav2_core::ControllerException);
 }
 
-// Model::setM(0) throws in the model's own constructor (model.cpp), so
-// readModelMapping()'s "m_ < 1" rejection can never actually be reached
-// through a constructible Model -- see the Findings table in the final report
-// rather than a test here, since there is no way to build the input this
-// branch guards against.
+// setM(0) throws, but a model that never calls setM at all does not: ModelInfo
+// default-initialises m to 0 and Model declares no constructor of its own, so
+// the omission survives construction and readModelMapping() -- which runs
+// before readModelBounds() -- is the first gate it reaches.
+//
+// The message is asserted, not merely the exception type. Every later mapping
+// check compares an index against m_, so all of them also fire at m_ == 0 and
+// any of them would satisfy an EXPECT_THROW: the default speed index 0 is
+// "outside" a zero-length control vector. Only the message distinguishes being
+// told the model declares no control from being pointed at a speed-index
+// mapping the author never wrote.
+TEST_F(ControllerContractsTest, ReadModelMappingRejectsAModelDeclaringNoControl)
+{
+  auto c = makeUnconfigured();
+  NoControlModel model;
+  try {
+    callReadModelMapping(c, model, "test/NoControl");
+    FAIL() << "a model declaring no control must not configure";
+  } catch (const nav2_core::ControllerException & ex) {
+    const std::string what(ex.what());
+    EXPECT_NE(what.find("declares no control input"), std::string::npos) << what;
+    EXPECT_NE(what.find("test/NoControl"), std::string::npos) << what;
+  }
+}
 
 TEST_F(ControllerContractsTest, ReadModelMappingRejectsDuplicatePlanarIndices)
 {
