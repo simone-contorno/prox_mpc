@@ -43,6 +43,11 @@ The `AsymmetricBounds` model is the only seam that reaches the controller's asym
 
 The `PermutedPlanarMapping` model is the only seam that reaches the controller's use of the declared mapping in its own assembly steps, for the same reason again: a model whose state is already `[x, y, theta]` cannot show a controller that ignores the mapping and indexes by position.
 
+A fixture that overrides `toTwist()` with a finite mapping must also override `fromTwist()`.
+The controller seeds its deceleration ramp from every control channel the inverse reports as determined, so a fixture that inherits the base `fromTwist()` while emitting its own twist hands that ramp the inverse of a mapping it does not use, and the resulting wrong value looks like a plausible control rather than an obvious fault.
+`NonFiniteTwistModel` and `NonFiniteTwistOtherAxesModel` are the exception, and deliberately so: their whole purpose is to emit a non-finite twist, which cannot round-trip through any inverse, so they override neither and are excluded from the bundled models' round-trip check (`FromTwistAgreesWithToTwistOnEveryDeterminedChannel` in `prox_mpc_core`).
+A new fixture with a finite twist mapping is not exempt.
+
 ## How It Is Used
 
 The package is a `<test_depend>` of `prox_mpc_controller`.
