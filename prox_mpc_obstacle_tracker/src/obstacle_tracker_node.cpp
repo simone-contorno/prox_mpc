@@ -146,10 +146,15 @@ ObstacleTrackerNode::CallbackReturn ObstacleTrackerNode::on_configure(
     }
 
     tp.max_tracks = static_cast<std::size_t>(max_tracks);
-    tracker_ = std::make_unique<Tracker>(tp);
-
-    obstacle_pub_ = create_publisher<prox_mpc_msgs::msg::ObstacleArray>(
-      output_topic_, rclcpp::QoS(rclcpp::KeepLast(5)));
+    // No scan callback can be running yet (the subscription is created only in
+    // on_activate, below), but the lock is still taken here so the guarded set
+    // is provably consistent regardless of executor scheduling.
+    {
+      std::lock_guard<std::mutex> lock(state_mutex_);
+      tracker_ = std::make_unique<Tracker>(tp);
+      obstacle_pub_ = create_publisher<prox_mpc_msgs::msg::ObstacleArray>(
+        output_topic_, rclcpp::QoS(rclcpp::KeepLast(5)));
+    }
 
     RCLCPP_INFO(
       get_logger(),
@@ -169,13 +174,21 @@ ObstacleTrackerNode::CallbackReturn ObstacleTrackerNode::on_activate(
 {
   try {
     LifecycleNode::on_activate(state);  // activates managed entities (the publisher)
-    if (tracker_) {tracker_->reset();}  // start the velocity estimate fresh
 
-    // TF is only read by the scan callback, so it lives with the active state (not
-    // configure). spin_thread = true: a dedicated thread services /tf and /tf_static
-    // so the callback can lookupTransform at the scan stamp with a timeout.
-    tf_buffer_ = std::make_shared<tf2_ros::Buffer>(get_clock());
-    tf_listener_ = std::make_shared<tf2_ros::TransformListener>(*tf_buffer_, this, true);
+    // No scan callback can be running yet (the subscription is created below,
+    // after this block), but the lock is still taken here so the guarded set
+    // is provably consistent regardless of executor scheduling.
+    {
+      std::lock_guard<std::mutex> lock(state_mutex_);
+      if (tracker_) {tracker_->reset();}  // start the velocity estimate fresh
+
+      // TF is only read by the scan callback, so it lives with the active state
+      // (not configure). spin_thread = true: a dedicated thread services /tf and
+      // /tf_static so the callback can lookupTransform at the scan stamp with a
+      // timeout.
+      tf_buffer_ = std::make_shared<tf2_ros::Buffer>(get_clock());
+      tf_listener_ = std::make_shared<tf2_ros::TransformListener>(*tf_buffer_, this, true);
+    }
 
     // Depth 1 (large-sensor profile): keep only the freshest scan and minimize
     // memory, rather than the SensorDataQoS default of KeepLast(5).

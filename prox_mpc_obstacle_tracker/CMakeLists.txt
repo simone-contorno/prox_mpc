@@ -30,6 +30,7 @@ find_package(prox_mpc_msgs REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(rclcpp_components REQUIRED)
 find_package(rclcpp_lifecycle REQUIRED)
+find_package(rcpputils REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(tf2 REQUIRED)
 find_package(tf2_ros REQUIRED)
@@ -64,6 +65,7 @@ ament_target_dependencies(${PROJECT_NAME}_component
   rclcpp
   rclcpp_components
   rclcpp_lifecycle
+  rcpputils
   sensor_msgs
   tf2
   tf2_ros

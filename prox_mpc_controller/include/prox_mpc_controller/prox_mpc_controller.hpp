@@ -25,6 +25,7 @@
 #include <rclcpp/rclcpp.hpp>
 #include <rclcpp_lifecycle/lifecycle_node.hpp>
 #include <rclcpp_lifecycle/lifecycle_publisher.hpp>
+#include <rcpputils/thread_safety_annotations.hpp>
 #include <tf2_ros/buffer.h>
 #include <visualization_msgs/msg/marker_array.hpp>
 
@@ -229,7 +230,8 @@ protected:
   /// shared-pointer exchange between them safe, and removing it would be a race.
   rclcpp::Subscription<prox_mpc_msgs::msg::ObstacleArray>::SharedPtr obstacle_sub_;
   std::mutex obstacles_mutex_;
-  prox_mpc_msgs::msg::ObstacleArray::ConstSharedPtr latest_obstacles_;
+  prox_mpc_msgs::msg::ObstacleArray::ConstSharedPtr latest_obstacles_
+  RCPPUTILS_TSA_GUARDED_BY(obstacles_mutex_);
 
   /// One dynamic obstacle's predicted positions over the horizon (costmap global
   /// frame), retained from the fill so the marker publisher need not recompute.

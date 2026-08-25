@@ -27,6 +27,7 @@
   <depend version_gte="0.6.5">proxsuite</depend>
   <depend>rclcpp</depend>
   <depend>rclcpp_lifecycle</depend>
+  <depend>rcpputils</depend>
   <depend>tf2</depend>
   <depend>tf2_ros</depend>
   <depend>visualization_msgs</depend>
