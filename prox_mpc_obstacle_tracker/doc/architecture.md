@@ -145,7 +145,11 @@ The node follows the standard managed-node lifecycle.
 
 The standalone driver installs its own async-signal-safe `SIGINT`/`SIGTERM`
 handler, cancels the spin, and runs a single checked finalize ladder
-(`deactivate -> cleanup -> shutdown`); a second signal force-quits.
+(`deactivate -> cleanup -> shutdown`).
+Repeat signals are idempotent: one shutdown reaches the process twice whenever a
+supervisor signals the process group and the launch parent also forwards to each
+child, so a repeat only re-asserts the stop flag rather than skipping the ladder.
+A genuine hang is bounded by the supervisor's `SIGKILL` escalation.
 
 ## Parameters
 

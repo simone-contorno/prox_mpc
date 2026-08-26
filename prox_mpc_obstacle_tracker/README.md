@@ -149,8 +149,11 @@ preset), so the controller always interpolates and never extrapolates there.
 The node is a managed lifecycle node.
 The standalone `obstacle_tracker` executable is a self-activating driver: it walks
 the node up (`configure -> activate`), spins, and on `SIGINT`/`SIGTERM` runs a
-single checked finalize ladder (`deactivate -> cleanup -> shutdown`); a second
-signal force-quits.
+single checked finalize ladder (`deactivate -> cleanup -> shutdown`).
+Repeat signals are idempotent, because one shutdown reaches the process twice
+whenever a supervisor signals the process group and the launch parent also
+forwards to each child; a genuine hang is bounded by the supervisor's `SIGKILL`
+escalation rather than by a force-quit in the handler.
 
 ```mermaid
 stateDiagram-v2
