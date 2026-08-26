@@ -479,6 +479,15 @@ committed grids + posters are under `doc/media/`.
 
 <!-- BENCHMARK_RESULTS_END -->
 
+Reading the `slack` column on `static_box`: the mode-b1 spread there
+(`1.963±1.203` on the bicycle against `0.490±0.000` on the unicycle) is a
+sampling artefact, not a difference between the two models.
+Both models relax the keep-out by 2.945 m on control cycle 1 and by 0.000 m from
+cycle 2 onward, so a run's recorded maximum depends on whether the metrics node's
+diagnostics subscription matched in time to receive that first cycle.
+The steady-state peak is 0.490 m for both.
+See [section 6.3 of the controller comparison](../doc/controller-comparison-results.md#63-ground-truth-predictive-confirmation-mode-b1).
+
 ## License
 
 [Apache-2.0](../LICENSE) - the full text is in [LICENSE](../LICENSE) and
