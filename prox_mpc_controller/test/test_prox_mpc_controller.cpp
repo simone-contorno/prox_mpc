@@ -554,7 +554,7 @@ TEST_F(ProxMpcControllerTest, ConfigureUsesDefaultForNonFiniteClampedParameter)
       [](const auto & c) {return c->mpc()->getS()(0, 0) / c->mpc()->getQ()(0, 0);}},
     {"r_weight", 0.1, [](const auto & c) {return c->mpc()->getR()(0, 0);}},
     {"w_weight", 100.0, [](const auto & c) {return c->mpc()->getW()(0, 0);}},
-    {"safety_margin", 0.1, [](const auto & c) {return c->safetyMargin();}},
+    {"safety_margin", 0.2, [](const auto & c) {return c->safetyMargin();}},
     {"robot_radius", 0.5, [](const auto & c) {return c->robotRadius();}},
     {"cbf_gamma", 1.0, [](const auto & c) {return c->cbfGamma();}},
     {"obstacle_cluster_radius", 0.3, [](const auto & c) {return c->obstacleClusterRadius();}},

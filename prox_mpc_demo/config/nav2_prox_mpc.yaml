@@ -144,7 +144,7 @@ controller_server:
       # feature is opt-in and lives in nav2_prox_mpc_predictive.yaml; enable it with
       # `predictive:=True`.
       max_obstacles: 0
-      safety_margin: 0.1
+      safety_margin: 0.2
       robot_radius: 0.22
       cbf_gamma: 1.0
       costmap_cost_threshold: 200

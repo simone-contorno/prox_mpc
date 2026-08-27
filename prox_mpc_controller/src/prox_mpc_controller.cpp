@@ -343,9 +343,9 @@ void ProxMpcController::configure(
     RCLCPP_WARN(logger_, "max_obstacles %d < 0; clamping to 0.", max_obstacles_);
     max_obstacles_ = 0;
   }
-  declare("safety_margin", safety_margin_, 0.1);
+  declare("safety_margin", safety_margin_, 0.2);
   declare("robot_radius", robot_radius_, 0.5);
-  clamp_low("safety_margin", safety_margin_, 0.0, 0.1);
+  clamp_low("safety_margin", safety_margin_, 0.0, 0.2);
   clamp_low("robot_radius", robot_radius_, 0.0, 0.5);
   /* Cross-check the avoidance disc against the footprint the costmap actually
    * carries. d_safe = robot_radius + safety_margin sizes every keep-out

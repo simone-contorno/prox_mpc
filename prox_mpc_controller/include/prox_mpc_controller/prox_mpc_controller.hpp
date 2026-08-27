@@ -297,7 +297,7 @@ protected:
   /// Control-law parameters.
   int max_solver_failures_{3};
   int max_obstacles_{1};
-  double safety_margin_{0.1};
+  double safety_margin_{0.2};
   double robot_radius_{0.5};
   double cbf_gamma_{1.0};
   int costmap_cost_threshold_{200};
