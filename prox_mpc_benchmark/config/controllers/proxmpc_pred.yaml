@@ -27,7 +27,7 @@ FollowPath:
   guess: true
   max_solver_failures: 3
   max_obstacles: 4
-  safety_margin: 0.1
+  safety_margin: 0.2
   robot_radius: 0.22
   cbf_gamma: 1.0
   # 253 (inscribed + lethal only, not the reactive preset's 200): the static
