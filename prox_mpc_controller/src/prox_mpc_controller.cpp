@@ -285,12 +285,12 @@ void ProxMpcController::configure(
   double r_weight = 0.0;
   declare("r_weight", r_weight, 0.1);
   double w_weight = 0.0;
-  declare("w_weight", w_weight, 100.0);
+  declare("w_weight", w_weight, 1000.0);
   clamp_low("q_pos", q_pos, kMinCostWeight, 10.0);
   clamp_low("q_theta", q_theta, kMinCostWeight, 1.0);
   clamp_low("s_factor", s_factor, kMinCostWeight, 2.0);
   clamp_low("r_weight", r_weight, kMinCostWeight, 0.1);
-  clamp_low("w_weight", w_weight, kMinCostWeight, 100.0);
+  clamp_low("w_weight", w_weight, kMinCostWeight, 1000.0);
 
   /* Iteration caps are structural, like the horizon sizing: they reach the core
    * as size_t, so a negative value wraps to an astronomical bound (an effectively
@@ -343,9 +343,9 @@ void ProxMpcController::configure(
     RCLCPP_WARN(logger_, "max_obstacles %d < 0; clamping to 0.", max_obstacles_);
     max_obstacles_ = 0;
   }
-  declare("safety_margin", safety_margin_, 0.2);
+  declare("safety_margin", safety_margin_, 0.1);
   declare("robot_radius", robot_radius_, 0.5);
-  clamp_low("safety_margin", safety_margin_, 0.0, 0.2);
+  clamp_low("safety_margin", safety_margin_, 0.0, 0.1);
   clamp_low("robot_radius", robot_radius_, 0.0, 0.5);
   /* Cross-check the avoidance disc against the footprint the costmap actually
    * carries. d_safe = robot_radius + safety_margin sizes every keep-out

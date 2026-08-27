@@ -48,7 +48,7 @@ controller_server:
       q_theta: 1.0
       s_factor: 2.0
       r_weight: 0.1
-      w_weight: 100.0
+      w_weight: 1000.0
 
       # Solver limits (defaults match the core). The three iteration caps must be
       # >= 1: 0 is rejected by ProxQP and a negative value wraps to an unbounded
@@ -67,7 +67,7 @@ controller_server:
 
       # Obstacle avoidance. K is the per-node slot capacity; 0 disables it.
       max_obstacles: 1
-      safety_margin: 0.2    # [m] folded into d_safe by the controller
+      safety_margin: 0.1    # [m] folded into d_safe by the controller
       robot_radius: 0.5     # [m] folded into d_safe by the controller
       cbf_gamma: 1.0        # discrete-time CBF rate h(x_{k+1}) >= (1-gamma) h(x_k); 1.0 = pointwise constraint, <1 couples nodes for smoother avoidance
 

@@ -241,7 +241,7 @@ and fail the lifecycle transition.
 | `q_theta` | double | 1.0 | Heading (and remaining state) tracking weight. |
 | `s_factor` | double | 2.0 | Terminal-weight factor: `S = s_factor * Q`. |
 | `r_weight` | double | 0.1 | Control-effort weight. |
-| `w_weight` | double | 100.0 | Obstacle-slack penalty. |
+| `w_weight` | double | 1000.0 | Obstacle-slack penalty. |
 
 ### Solver limits
 
@@ -265,7 +265,7 @@ iteration caps are the only bound unless a stack sets a positive budget.
 | Parameter | Type | Default | Unit | Description |
 | --- | --- | --- | --- | --- |
 | `max_obstacles` | int | 1 | slots | Obstacle-slot capacity `K` per node; 0 disables the in-loop term. |
-| `safety_margin` | double | 0.2 | m | Folded into `d_safe`. |
+| `safety_margin` | double | 0.1 | m | Folded into `d_safe`. |
 | `robot_radius` | double | 0.5 | m | Robot disc radius, folded into `d_safe`. |
 | `cbf_gamma` | double | 1.0 | - | Discrete-time CBF rate `h(x_{k+1}) >= (1-gamma) h(x_k)`; 1.0 = pointwise. |
 | `costmap_cost_threshold` | int | 200 | cost | Cells at or above this count as occupied. |

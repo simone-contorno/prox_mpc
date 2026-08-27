@@ -128,7 +128,7 @@ controller_server:
       q_theta: 1.0
       s_factor: 2.0
       r_weight: 0.1
-      w_weight: 100.0
+      w_weight: 1000.0
 
       # Solver limits (core defaults).
       max_int_iter_qp: 1500
@@ -144,7 +144,7 @@ controller_server:
       # feature is opt-in and lives in nav2_prox_mpc_predictive.yaml; enable it with
       # `predictive:=True`.
       max_obstacles: 0
-      safety_margin: 0.2
+      safety_margin: 0.1
       robot_radius: 0.22
       cbf_gamma: 1.0
       costmap_cost_threshold: 200
