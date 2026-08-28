@@ -83,7 +83,7 @@ controller_server:
       # across nodes, so the NMPC avoids where each obstacle will be; the rest of
       # the K slots are filled from the costmap (hybrid). predict_obstacles=false
       # (and any stale/missing tracking data) reproduces the costmap-only fill.
-      predict_obstacles: false              # opt-in; false selects the costmap-only obstacle fill
+      predict_obstacles: true               # false selects the costmap-only obstacle fill
       obstacle_topic: "tracked_obstacles"   # prox_mpc_msgs/ObstacleArray input
       obstacle_timeout: 0.5                 # [s] staleness before costmap-only fallback
       dynamic_speed_threshold: 0.1          # [m/s] speed above which a track is propagated

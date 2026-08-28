@@ -384,9 +384,13 @@ void ProxMpcController::configure(
     max_obstacle_scan_cells_ = 1;
   }
 
-  /* Predictive (dynamic) obstacle avoidance. predict_obstacles off reproduces the
-   * costmap-only behavior bit-for-bit; the rest size the predictive + hybrid fill. */
-  declare("predict_obstacles", predict_obstacles_, false);
+  /* Predictive (dynamic) obstacle avoidance, on by default: the costmap-only
+   * fill reacts to where an obstacle was seen, which is measurably the weaker
+   * configuration once more than one obstacle moves. With no tracker publishing,
+   * or a stale message, the fill degrades to the costmap-only path, so the
+   * default costs a subscription rather than a behavior change. Setting
+   * predict_obstacles off reproduces that behavior bit-for-bit. */
+  declare("predict_obstacles", predict_obstacles_, true);
   declare("obstacle_topic", obstacle_topic_, std::string("tracked_obstacles"));
   declare("obstacle_timeout", obstacle_timeout_, 0.5);
   declare("dynamic_speed_threshold", dynamic_speed_threshold_, 0.1);
