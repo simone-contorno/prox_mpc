@@ -93,7 +93,8 @@ Each cycle the controller performs the following steps.
    fresh tracking data is available, otherwise costmap-only.
 4. **Solve** one SQP cycle and read `qp_info.status`.
 5. **Guard and veto.** Reject a non-finite iterate, then run an exact
-   polygon-footprint check on the pose one step ahead; a veto decelerates.
+   polygon-footprint check over the predicted stopping distance; a veto
+   decelerates.
 6. **Command or brake.** On success, map the first control with
    `model->toTwist(...)`; on failure, decelerate and escalate after
    `max_solver_failures` consecutive failures.
@@ -115,7 +116,7 @@ sequenceDiagram
   Ctrl->>MPC: solve()
   MPC-->>Ctrl: x, u and qp_info.status
   alt solved and finite
-    Ctrl->>CM: exact footprint check (one step ahead)
+    Ctrl->>CM: exact footprint check (to stopping distance)
     alt footprint clear
       Ctrl->>Model: toTwist(u0)
     else vetoed
@@ -133,9 +134,11 @@ Obstacle avoidance is split across two layers.
 The engine keeps a fast, convex, disc-based margin inside the optimization, which
 shapes the trajectory away from obstacles
 (see [obstacle avoidance](../../prox_mpc_core/doc/obstacle-avoidance.md)).
-A separate, outline-only footprint check, evaluated on the pose one step ahead
-with `nav2_costmap_2d::FootprintCollisionChecker`, is a backstop rather than a
-guarantee: it rasterises only the footprint perimeter and reports the maximum
+A separate, outline-only footprint check, evaluated with
+`nav2_costmap_2d::FootprintCollisionChecker` on each predicted pose until their
+cumulative arc length passes the distance the robot needs to stop
+(`v^2 / (2a)`, from the commanded speed and the model's declared deceleration
+rate), is a backstop rather than a guarantee: it rasterises only the footprint perimeter and reports the maximum
 edge cost, with no interior fill and no sweep between the current and the next
 commanded pose. It vetoes the command when that pose's footprint reaches
 `LETHAL_OBSTACLE`, treating unknown space as non-colliding when the local
@@ -220,7 +223,7 @@ and fail the lifecycle transition.
 | `model_plugin` | string | `prox_mpc_core/Unicycle` | - | `prox_mpc::Model` plugin loaded by name. Bundled: `prox_mpc_core/Unicycle`, `prox_mpc_core/BicycleFrontAxle`, `prox_mpc_core/BicycleRearAxle`, and `prox_mpc_core/Bicycle` as a deprecated alias for the front-axle model. |
 | `model_params.L` | double | 1.6 | m | Wheelbase forwarded to `Model::configure`. The steering reference is built on the wheelbase the loaded model declares back through `getPlanarMapping()`, not on this value directly. |
 | `model_params.v_max` | double | 0.0 | m/s | Optional forward-speed bound on the model's `u[0]` input. Forwarded to `Model::configure` only when `> 0.0`; the default 0.0 keeps the model's built-in limit. |
-| `model_params.v_min` | double | 0.0 | m/s | Reverse-speed bound, forwarded only alongside a positive `v_max`. A negative value is used as given; otherwise the bound is set to `-v_max`. |
+| `model_params.v_min` | double | 0.0 | m/s | Reverse-speed bound. A negative value is forwarded on its own, or alongside a positive `v_max`; with `v_max > 0.0` and a non-negative `v_min` the bound is set to `-v_max`. `allow_reversing: false` narrows it to `0.0` afterwards regardless. |
 | `np` | int | 20 | nodes | Prediction horizon. |
 | `nc` | int | 20 | nodes | Control horizon. |
 | `dt` | double | 0.1 | s | Step size and control period. |
@@ -231,7 +234,7 @@ and fail the lifecycle transition.
 | --- | --- | --- | --- | --- |
 | `desired_linear_vel` | double | 1.0 | m/s | Cruise speed the plan is sampled at; clamped to the model's speed bound. |
 | `curvature_gain` | double | 0.0 | - | Cruise reduction on path curvature; 0.0 disables it. |
-| `allow_reversing` | bool | false | - | Follow the plan's own pose orientations into reverse travel, signing the reference speed and truncating the reference at the first direction change. Off reproduces the forward-only reference. |
+| `allow_reversing` | bool | false | - | Follow the plan's own pose orientations into reverse travel, signing the reference speed and truncating the reference at the first direction change. Off also narrows the model's linear control bound to `[0, v_max]`, so the solver cannot plan reverse travel at all. |
 
 ### Cost weights
 
@@ -276,7 +279,7 @@ iteration caps are the only bound unless a stack sets a positive budget.
 
 | Parameter | Type | Default | Unit | Description |
 | --- | --- | --- | --- | --- |
-| `predict_obstacles` | bool | false | - | Opt-in; false reproduces the costmap-only behavior. |
+| `predict_obstacles` | bool | true | - | False reproduces the costmap-only behavior. With no tracker publishing, or a stale message, the fill degrades to costmap-only regardless. |
 | `obstacle_topic` | string | `tracked_obstacles` | - | `ObstacleArray` input topic. |
 | `obstacle_timeout` | double | 0.5 | s | Staleness before falling back to costmap-only. |
 | `dynamic_speed_threshold` | double | 0.1 | m/s | Speed above which a track is propagated (static is left to the costmap). |
@@ -322,7 +325,8 @@ controller parameters.
   unknown space does not hard-block the optimizer. Where unknown space must be
   treated as blocking, that belongs to the costmap and planner configuration.
 - The footprint veto evaluates the polygon from `getRobotFootprint()` through
-  `footprintCostAtPose(...)` at the pose one step ahead; the pre-oriented
+  `footprintCostAtPose(...)` at each predicted pose within the stopping
+  distance; the pre-oriented
   `getOrientedFootprint(...)` is not used. Publishing an accurate robot footprint
   of at least three points keeps the check active, because a smaller footprint is
   not a valid polygon and the veto is skipped for that cycle with a throttled

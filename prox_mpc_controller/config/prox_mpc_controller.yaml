@@ -21,7 +21,7 @@ controller_server:
       model_params:        # forwarded to Model::configure(); absent keys keep the literals
         L: 1.6             # wheelbase [m], used by the bicycle models
         v_max: 0.0         # [m/s] forward input bound; forwarded only when > 0, else the model literal
-        v_min: 0.0         # [m/s] reverse input bound; used only alongside a positive v_max (< 0, else -v_max)
+        v_min: 0.0         # [m/s] reverse input bound; negative forwards on its own, else -v_max
 
       # Horizons and step (couple via Np / dt / T).
       np: 20
@@ -36,6 +36,8 @@ controller_server:
       curvature_gain: 0.0       # cruise reduction on path curvature; 0.0 disables it
       # Follow a plan's own pose orientations into reverse travel, truncating the
       # reference at the first direction change.
+      # Also narrows the linear control bound to [0, v_max] when false, so the
+      # solver cannot plan reverse travel.
       allow_reversing: false
 
       # Step the deceleration ramp advances by on a braking cycle. 0 measures the

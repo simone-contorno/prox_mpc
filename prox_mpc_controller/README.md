@@ -53,8 +53,9 @@ driving a TurtleBot3 waffle under a full Nav2 stack in Gazebo Harmonic (see
   easing.
 - **Two-layer obstacle avoidance:** a fast in-loop disc constraint built from the
   local costmap (clustered, windowed scan) shapes the trajectory, and an
-  outline-only footprint check on the single predicted pose one step ahead
-  vetoes a command whose rasterised footprint perimeter crosses a lethal cell.
+  outline-only footprint check, walked along the predicted trajectory as far as
+  the robot's own stopping distance, vetoes a command whose rasterised footprint
+  perimeter crosses a lethal cell.
   It is a backstop, not a guarantee: it depends on costmap inflation sized to
   the robot and on the local costmap's unknown-space tracking to be effective.
 - **Predictive (dynamic) obstacle avoidance (opt-in):** consumes tracked
