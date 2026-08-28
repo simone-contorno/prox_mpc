@@ -182,9 +182,14 @@ std::tuple<MatrixXd, MatrixXd> MPC::solveCandidate()
     cand_u.row(cand_u.rows() - 1) = cand_u.row(cand_u.rows() - 2);
   }
 
-  /* Update current predicted state with the current real pose */
+  /* Update current predicted state with the current real pose. The control warm
+   * start keeps what the shift above produced: row 0 holds the previous plan's
+   * second control, which is the one this cycle is about to decide. Writing u0
+   * here instead would put the control already executed last cycle in row 0
+   * while row 1 still held the plan's third, so the pair straddled two steps of
+   * the rate limit and the warm start entered the QP violating its own
+   * control-rate chain. u0 reaches the solver separately as the rate anchor. */
   cand_x.row(0) = pose;
-  cand_u.row(0) = u0;
 
   /* Set ProxQP */
   proxqp->setdt(dt);
