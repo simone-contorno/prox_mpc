@@ -301,7 +301,7 @@ void ProxMpcController::configure(
   int max_ext_iter_qp = 0;
   declare("max_ext_iter_qp", max_ext_iter_qp, 10000);
   int max_iter_sqp = 0;
-  declare("max_iter_sqp", max_iter_sqp, 100);
+  declare("max_iter_sqp", max_iter_sqp, 1);
   if (max_int_iter_qp < 1 || max_ext_iter_qp < 1 || max_iter_sqp < 1) {
     throw nav2_core::ControllerException(
             "ProxMpcController: max_int_iter_qp >= 1, max_ext_iter_qp >= 1, max_iter_sqp >= 1 "

@@ -180,8 +180,11 @@ w \mathrel{+}= \Delta w,
 \qquad \text{until } \texttt{status} = \text{SOLVED} \text{ or } k \ge k_{\max}.
 $$
 
-The retry count is bounded by `max_iter_sqp` (100 by default) and, when set, by
-the `max_solve_time` wall-clock budget.
+The retry count is bounded by `max_iter_sqp` (1 by default, the real-time
+iteration) and, when set, by the `max_solve_time` wall-clock budget.
+A retry cap above 1 multiplies the cost of a non-converged sub-problem by that
+cap within the one cycle, because the loop re-solves rather than deferring to
+the next control period.
 The budget is tested only between SQP sub-problem solves, never while one is in
 flight, so it cannot interrupt a slow QP and does not bound worst-case cycle
 latency in either direction: a loop that exceeds it simply stops early with

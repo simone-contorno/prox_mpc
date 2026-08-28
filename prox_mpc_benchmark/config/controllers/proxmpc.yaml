@@ -16,7 +16,7 @@ FollowPath:
   w_weight: 1000.0
   max_int_iter_qp: 1500
   max_ext_iter_qp: 10000
-  max_iter_sqp: 100
+  max_iter_sqp: 1
   qp_type: false
   guess: true
   max_solver_failures: 3

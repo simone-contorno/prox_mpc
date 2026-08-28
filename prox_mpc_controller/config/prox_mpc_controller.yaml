@@ -56,7 +56,7 @@ controller_server:
       # QP that can never converge.
       max_int_iter_qp: 1500
       max_ext_iter_qp: 10000
-      max_iter_sqp: 100
+      max_iter_sqp: 1
       max_solve_time: 0.0   # [s] wall-clock budget for the SQP loop; 0 = disabled (iteration caps only)
       qp_type: false        # false = sparse, true = dense
       guess: true           # true = ProxQP equality-constrained initial guess per QP; false = no initial guess

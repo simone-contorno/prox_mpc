@@ -161,7 +161,7 @@ protected:
   /* Default solver limits (centralized; override via the setters) */
   static constexpr size_t kDefaultMaxExtQP = 10000;  // Max QP external iterations.
   static constexpr size_t kDefaultMaxIntQP = 1500;   // Max QP internal iterations (proximal op).
-  static constexpr size_t kDefaultMaxIterSQP = 100;  // Max SQP iterations.
+  static constexpr size_t kDefaultMaxIterSQP = 1;  // Max SQP iterations (real-time iteration).
 
   /* ProxQP */
   std::shared_ptr<ProxQP> proxqp;        // QP solver.
