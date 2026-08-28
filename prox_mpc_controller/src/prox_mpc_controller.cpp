@@ -718,10 +718,13 @@ void ProxMpcController::cleanup()
   diag_pub_.reset();
   obstacle_sub_.reset();
   {
+    /* Both clears under the mutex, matching deactivate(): the subscription is
+     * already gone by here, but splitting them left the two teardown paths
+     * disagreeing about which member the mutex covers. */
     std::lock_guard<std::mutex> lock(obstacles_mutex_);
     latest_obstacles_.reset();
+    predicted_obstacles_.clear();
   }
-  predicted_obstacles_.clear();
   costmap_ros_.reset();
   tf_.reset();
 }
@@ -1962,26 +1965,33 @@ void ProxMpcController::publishPredictedObstacleMarkers(const rclcpp::Time & now
 
   const std::string global_frame = costmap_ros_->getGlobalFrameID();
   int id = 0;
-  for (const auto & po : predicted_obstacles_) {
-    visualization_msgs::msg::Marker m;
-    m.header.frame_id = global_frame;
-    m.header.stamp = now;
-    m.ns = "predicted_obstacles";
-    m.id = id++;
-    m.type = visualization_msgs::msg::Marker::LINE_STRIP;
-    m.action = visualization_msgs::msg::Marker::ADD;
-    m.scale.x = 0.05;
-    m.color.r = 1.0f;
-    m.color.g = 0.4f;
-    m.color.a = 1.0f;
-    m.pose.orientation.w = 1.0;
-    for (const auto & p : po.positions) {
-      geometry_msgs::msg::Point pt;
-      pt.x = p[0];
-      pt.y = p[1];
-      m.points.push_back(pt);
+  /* predicted_obstacles_ is filled by this thread but cleared by deactivate()
+   * and cleanup() on the lifecycle thread, so the read is guarded like the fill.
+   * The array is published after the lock is dropped: the tracker callback takes
+   * the same mutex, and this path only runs while something is subscribed. */
+  {
+    std::lock_guard<std::mutex> lock(obstacles_mutex_);
+    for (const auto & po : predicted_obstacles_) {
+      visualization_msgs::msg::Marker m;
+      m.header.frame_id = global_frame;
+      m.header.stamp = now;
+      m.ns = "predicted_obstacles";
+      m.id = id++;
+      m.type = visualization_msgs::msg::Marker::LINE_STRIP;
+      m.action = visualization_msgs::msg::Marker::ADD;
+      m.scale.x = 0.05;
+      m.color.r = 1.0f;
+      m.color.g = 0.4f;
+      m.color.a = 1.0f;
+      m.pose.orientation.w = 1.0;
+      for (const auto & p : po.positions) {
+        geometry_msgs::msg::Point pt;
+        pt.x = p[0];
+        pt.y = p[1];
+        m.points.push_back(pt);
+      }
+      arr.markers.push_back(m);
     }
-    arr.markers.push_back(m);
   }
   marker_pub_->publish(arr);
 }
