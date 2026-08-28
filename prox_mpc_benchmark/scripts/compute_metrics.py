@@ -68,6 +68,11 @@ def main():
 
     solve, sqp, qp = [], [], []
     miss = infeas = diag_n = solve_dropped = 0
+    # Retain the status histogram and the per-cycle iteration maxima, not only
+    # the means: a cycle that exhausts the QP budget and then succeeds on an SQP
+    # retry is averaged away and reported as converged, so the worst latency
+    # event in a run leaves no trace in infeasible_rate.
+    status_counts = {}
     slack_max = 0.0
     ct, gd = [], []
     SOLVED = 0
@@ -86,6 +91,7 @@ def main():
             qp.append(msg.qp_iters_ext)
             miss += int(msg.deadline_missed)
             infeas += int(msg.status != SOLVED)
+            status_counts[int(msg.status)] = status_counts.get(int(msg.status), 0) + 1
             slack_max = max(slack_max, msg.max_obstacle_slack)
         elif tn == 'Float64' and topic == args.ct_topic:
             ct.append(msg.data)
@@ -110,6 +116,9 @@ def main():
         'mean_sqp_iters': st.mean(sqp) if sqp else 0.0,
         'mean_qp_iters_ext': st.mean(qp) if qp else 0.0,
         'infeasible_rate': (infeas / diag_n) if diag_n else 0.0,
+        'max_sqp_iters': max(sqp) if sqp else None,
+        'max_qp_iters_ext': max(qp) if qp else None,
+        'status_counts': status_counts,
         'max_obstacle_slack_m': slack_max,
         'num_diag_samples': diag_n,
         'status': 'ok',
