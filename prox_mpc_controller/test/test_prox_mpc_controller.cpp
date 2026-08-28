@@ -1650,9 +1650,13 @@ TEST_F(ProxMpcControllerTest, SpeedLimitAppliesOnNextControlCycle)
 // reachable form, together with the NO_SPEED_LIMIT restore path.
 TEST_F(ProxMpcControllerTest, SpeedLimitPreservesAsymmetricLowerBound)
 {
+  // allow_reversing is opted into so the model's declared reverse bound survives
+  // configure: with it false the box is narrowed to [0, v_max] up front, and
+  // there would be no negative lower bound left for the speed limit to preserve.
   auto c = makeRunning(
     {rclcpp::Parameter(
-      "FollowPath.model_plugin", std::string("prox_mpc_test_models/AsymmetricBounds"))});
+      "FollowPath.model_plugin", std::string("prox_mpc_test_models/AsymmetricBounds")),
+      rclcpp::Parameter("FollowPath.allow_reversing", true)});
 
   c->setSpeedLimit(1.0, false);
   runCycle(c);
@@ -1667,6 +1671,28 @@ TEST_F(ProxMpcControllerTest, SpeedLimitPreservesAsymmetricLowerBound)
   EXPECT_NEAR(c->maxLinearVel(), 2.0, kTol);
   EXPECT_NEAR(c->model()->getIneq("u").at(0)[1], -0.3, kTol);
   EXPECT_NEAR(c->model()->getIneq("u").at(0)[2], 2.0, kTol);
+}
+
+// allow_reversing gates the control box, not only the reference. With it false
+// the solver must not be able to plan reverse travel at all, so the model's
+// declared negative lower bound is narrowed to zero at configure; with it true
+// the model's own bound is left alone. AsymmetricBounds is used because its
+// -0.3 lower bound is distinguishable from both 0 and -v_max.
+TEST_F(ProxMpcControllerTest, ReversingDisabledNarrowsTheControlBox)
+{
+  auto forward = makeRunning(
+    {rclcpp::Parameter(
+      "FollowPath.model_plugin", std::string("prox_mpc_test_models/AsymmetricBounds")),
+      rclcpp::Parameter("FollowPath.allow_reversing", false)});
+  EXPECT_NEAR(forward->model()->getIneq("u").at(0)[1], 0.0, kTol);
+  EXPECT_NEAR(forward->model()->getIneq("u").at(0)[2], 2.0, kTol);
+
+  auto reversing = makeRunning(
+    {rclcpp::Parameter(
+      "FollowPath.model_plugin", std::string("prox_mpc_test_models/AsymmetricBounds")),
+      rclcpp::Parameter("FollowPath.allow_reversing", true)});
+  EXPECT_NEAR(reversing->model()->getIneq("u").at(0)[1], -0.3, kTol);
+  EXPECT_NEAR(reversing->model()->getIneq("u").at(0)[2], 2.0, kTol);
 }
 
 // --- cancel() / reset() ----------------------------------------------------

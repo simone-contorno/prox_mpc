@@ -430,6 +430,11 @@ void ProxMpcController::configure(
   if (model_v_max > 0.0) {
     model_params["v_max"] = model_v_max;
     model_params["v_min"] = (model_v_min < 0.0) ? model_v_min : -model_v_max;
+  } else if (model_v_min < 0.0) {
+    /* A reverse bound is honoured on its own. Model::overrideBound keeps the side
+     * whose key is absent, so capping reverse travel no longer requires naming a
+     * forward cap the configuration does not mean to change. */
+    model_params["v_min"] = model_v_min;
   }
   model_->configure(model_params);
   n_ = model_->getN();
@@ -437,6 +442,21 @@ void ProxMpcController::configure(
 
   readModelMapping(*model_, model_plugin);
   readModelBounds(*model_, model_plugin);
+  /* allow_reversing gates the control box, not only the reference. Left to the
+   * reference alone, the solver still held a negative lower bound on the speed
+   * control and could command reverse on a robot configured forward-only
+   * whenever the cost made it attractive - most easily while manoeuvring around
+   * an obstacle, which is where reverse is least wanted. The bound is narrowed
+   * rather than the command clamped, so the plan the solver returns is one the
+   * robot is actually allowed to execute. */
+  if (!allow_reversing_ && v_min_ < 0.0) {
+    RCLCPP_INFO(
+      logger_,
+      "allow_reversing is false; narrowing the model's linear control bound from [%.3f, %.3f] "
+      "to [0.000, %.3f] so the solver cannot plan reverse travel.", v_min_, v_max_, v_max_);
+    model_->updateIneq("u", idx_v_, 0.0, v_max_);
+    v_min_ = 0.0;
+  }
   if (allow_reversing_ && v_min_ >= 0.0) {
     RCLCPP_WARN(
       logger_,
