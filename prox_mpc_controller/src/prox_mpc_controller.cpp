@@ -1293,7 +1293,7 @@ geometry_msgs::msg::TwistStamped ProxMpcController::computeVelocityCommands(
     return fail("non-finite solver output");
   }
 
-  /* Polygon-footprint veto on the pose one step ahead.
+  /* Polygon-footprint veto over the predicted stopping distance.
    *
    * The footprint is copied before the grid lock is taken. getRobotFootprint()
    * returns Costmap2DROS's padded_footprint_ by value, and the grid mutex guards
@@ -1308,36 +1308,65 @@ geometry_msgs::msg::TwistStamped ProxMpcController::computeVelocityCommands(
     std::lock_guard<nav2_costmap_2d::Costmap2D::mutex_t> lock(*(costmap->getMutex()));
     if (footprint.size() >= 3) {
       nav2_costmap_2d::FootprintCollisionChecker<nav2_costmap_2d::Costmap2D *> checker(costmap);
-      /* The padded footprint is defined about base_link, while the predicted pose
-       * refers to the model's own reference point, so it is carried back before
-       * the check. The two coincide for a model referenced to base_link. */
-      const double pth = x_sol(1, idx_yaw_);
-      const double pbx =
-        x_sol(1, idx_x_) - (ref_offset_x_ * std::cos(pth) - ref_offset_y_ * std::sin(pth));
-      const double pby =
-        x_sol(1, idx_y_) - (ref_offset_x_ * std::sin(pth) + ref_offset_y_ * std::cos(pth));
-      const double fcost = checker.footprintCostAtPose(pbx, pby, pth, footprint);
-      /* Upstream Nav2's own collision policy, in upstream's order: unknown space
-       * is not a collision when the costmap tracks it, and everything else is
-       * judged at LETHAL_OBSTACLE rather than INSCRIBED_INFLATED_OBSTACLE,
-       * because a real polygon check has already been performed and an inflated
-       * cell is not by itself a collision (RPP collision_checker.cpp:143-154,
-       * MPPI cost_critic.hpp:71-78). Nav2's own doc comment describes
-       * footprintCostAtPose as returning the maximum cost under the footprint,
-       * which would mask a lethal cell behind an adjoining unknown one; measured
-       * against the installed nav2_costmap_2d (1.3.12+), it does not - a
-       * footprint spanning both reports the lethal cost, so the veto still
-       * fires (see FootprintVetoStillFiresWhenLethalAdjoinsUnknown). */
-      const bool unknown_is_clear =
-        fcost == static_cast<double>(nav2_costmap_2d::NO_INFORMATION) &&
-        costmap_ros_->getLayeredCostmap()->isTrackingUnknown();
-      if (!unknown_is_clear &&
-        fcost >= static_cast<double>(nav2_costmap_2d::LETHAL_OBSTACLE))
-      {
-        /* Escalate a persistent veto so a robot stuck behind a static obstacle one
-         * step ahead triggers the behavior-tree recovery instead of braking
-         * forever. The veto counter is kept separate from the solver-failure
-         * budget, so a single veto still does not trip recovery. */
+      /* How far the veto looks: the distance the robot needs to stop, not one
+       * step. Braking from the commanded speed at the model's declared rate
+       * covers v^2 / (2a) - 0.25 m at the 0.5 m/s operating point, against the
+       * 0.05 m a single step spans - so a veto that only ever saw node 1 found
+       * an obstacle five times later than it could still stop short of. The
+       * walk stops at the first node past that distance, which keeps the
+       * lookahead proportional to speed and costs one footprint test per step
+       * of travel rather than one per horizon node. */
+      const double v_cmd = std::abs(u0(static_cast<Eigen::Index>(idx_v_)));
+      const double stop_distance =
+        (std::isfinite(fallback_ramp_lin_) && fallback_ramp_lin_ > 0.0) ?
+        (v_cmd * v_cmd) / (2.0 * fallback_ramp_lin_) : 0.0;
+
+      bool vetoed = false;
+      double travelled = 0.0;
+      for (Eigen::Index node = 1; node < x_sol.rows(); ++node) {
+        /* The padded footprint is defined about base_link, while the predicted
+         * pose refers to the model's own reference point, so it is carried back
+         * before the check. The two coincide for a model referenced to
+         * base_link. */
+        const double pth = x_sol(node, idx_yaw_);
+        const double pbx =
+          x_sol(node, idx_x_) - (ref_offset_x_ * std::cos(pth) - ref_offset_y_ * std::sin(pth));
+        const double pby =
+          x_sol(node, idx_y_) - (ref_offset_x_ * std::sin(pth) + ref_offset_y_ * std::cos(pth));
+        const double fcost = checker.footprintCostAtPose(pbx, pby, pth, footprint);
+        /* Upstream Nav2's own collision policy, in upstream's order: unknown
+         * space is not a collision when the costmap tracks it, and everything
+         * else is judged at LETHAL_OBSTACLE rather than
+         * INSCRIBED_INFLATED_OBSTACLE, because a real polygon check has already
+         * been performed and an inflated cell is not by itself a collision (RPP
+         * collision_checker.cpp:143-154, MPPI cost_critic.hpp:71-78). Nav2's own
+         * doc comment describes footprintCostAtPose as returning the maximum
+         * cost under the footprint, which would mask a lethal cell behind an
+         * adjoining unknown one; measured against the installed nav2_costmap_2d
+         * (1.3.12+), it does not - a footprint spanning both reports the lethal
+         * cost, so the veto still fires (see
+         * FootprintVetoStillFiresWhenLethalAdjoinsUnknown). */
+        const bool unknown_is_clear =
+          fcost == static_cast<double>(nav2_costmap_2d::NO_INFORMATION) &&
+          costmap_ros_->getLayeredCostmap()->isTrackingUnknown();
+        if (!unknown_is_clear &&
+          fcost >= static_cast<double>(nav2_costmap_2d::LETHAL_OBSTACLE))
+        {
+          vetoed = true;
+          break;
+        }
+        travelled += std::hypot(
+          x_sol(node, idx_x_) - x_sol(node - 1, idx_x_),
+          x_sol(node, idx_y_) - x_sol(node - 1, idx_y_));
+        if (travelled >= stop_distance) {break;}
+      }
+
+      if (vetoed) {
+        /* Escalate a persistent veto so a robot stuck behind a static obstacle
+         * inside its stopping distance triggers the behavior-tree recovery
+         * instead of braking forever. The veto counter is kept separate from
+         * the solver-failure budget, so a single veto still does not trip
+         * recovery. */
         veto_count_++;
         /* Published before the escalation test, not after it: the cycle that
          * ends the task is still a control cycle, and the record of why it
