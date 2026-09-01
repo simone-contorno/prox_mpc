@@ -2,7 +2,7 @@
 <?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
 <package format="3">
   <name>prox_mpc_obstacle_tracker</name>
-  <version>1.0.0</version>
+  <version>2.0.0</version>
   <description>In-house 2D-lidar dynamic-obstacle detector and tracker for
   ProxMPC: a lifecycle node that clusters a LaserScan, associates clusters to
   IMM (constant-velocity / constant-turn-rate) Kalman tracks in a fixed frame,

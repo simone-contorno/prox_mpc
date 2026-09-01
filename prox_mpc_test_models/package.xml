@@ -2,7 +2,7 @@
 <?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
 <package format="3">
   <name>prox_mpc_test_models</name>
-  <version>1.0.0</version>
+  <version>2.0.0</version>
   <description>Test-fixture prox_mpc::Model plugins for the ProxMPC stack. These
   models exercise controller paths the bundled production models cannot reach
   (for example a non-finite command, or an asymmetric bound). Not for

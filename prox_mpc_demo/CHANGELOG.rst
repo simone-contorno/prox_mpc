@@ -2,6 +2,13 @@
 Changelog for package prox_mpc_demo
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
+2.0.0 (2026-09-01)
+------------------
+* The local costmap tracks unknown space, so cells the sensor has not swept are
+  marked ``NO_INFORMATION`` instead of being published as free.
+* Nav2 parameter files follow the controller's changed defaults.
+* Contributors: Simone Contorno
+
 1.0.0 (2026-07-28)
 ------------------
 * Initial release: self-contained closed-loop NMPC simulation node (bicycle / unicycle)

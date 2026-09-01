@@ -2,6 +2,16 @@
 Changelog for package prox_mpc_benchmark
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
+2.0.0 (2026-09-01)
+------------------
+* The mode-(b2) run index is rebuilt from the records on disk, so a re-run of a
+  subset no longer leaves stale rows from a previous campaign in the index.
+* Per-run metrics record the QP status histogram and the SQP / QP external
+  iteration maxima.
+* Scenario definitions and the ProxMPC presets follow the controller's changed
+  defaults.
+* Contributors: Simone Contorno
+
 1.0.0 (2026-07-28)
 ------------------
 * Initial release: scenario-driven benchmarking harness with the standalone
