@@ -143,6 +143,7 @@ void MPC::configProxQP()
   proxqp->setMaxOutIter(max_ext_qp);
   proxqp->setQPType(qp_type);
   proxqp->setGuess(guess);
+  proxqp->setWarmStart(warm_start);
   proxqp->setCbfGamma(cbf_gamma);
   proxqp->setMaxObs(max_obs);
   proxqp->init(model);
@@ -513,6 +514,19 @@ void MPC::setGuess(bool new_guess)
 {
   rejectAfterInit(initialized, "setGuess");
   this->guess = new_guess;
+}
+
+/*!
+ * Enable the cross-cycle QP warm start: the solver workspace is built once and
+ * updated in place, so the factorization and the previous primal/dual iterate
+ * carry over between solves. Structural, because it decides how the workspace is
+ * built, so it is rejected after init() like the other structural setters.
+ * @param new_warm_start flag (default: true).
+ */
+void MPC::setWarmStart(bool new_warm_start)
+{
+  rejectAfterInit(initialized, "setWarmStart");
+  this->warm_start = new_warm_start;
 }
 
 /*!

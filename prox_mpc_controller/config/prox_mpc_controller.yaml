@@ -62,6 +62,9 @@ controller_server:
       max_solve_time: 0.0   # [s] wall-clock budget for the SQP loop; 0 = disabled (iteration caps only)
       qp_type: false        # false = sparse, true = dense
       guess: true           # true = ProxQP equality-constrained initial guess per QP; false = no initial guess
+      # Reuse the QP workspace and previous primal/dual iterate across cycles
+      # instead of rebuilding the solver every cycle.
+      warm_start: true
 
       # Consecutive non-converged solves tolerated before the controller raises a
       # recovery; each failure decelerates toward zero at the robot's limit.

@@ -87,6 +87,7 @@ public:
   void setMaxIterSQP(size_t max_iter);
   void setMaxSolveTime(double seconds);
   void setGuess(bool new_guess);
+  void setWarmStart(bool new_warm_start);
   void setQPtype(bool new_qp_type);
   void setCbfGamma(double new_cbf_gamma);
 
@@ -145,7 +146,8 @@ protected:
   VectorXd pose;      // Current vehicle pose.
   MatrixXd goal_x;    // State's goals.
   MatrixXd goal_u;    // Control's goals.
-  bool guess = true;  // Use (true) / don't use (false) warm start for initial guesses.
+  bool guess = true;        // ProxQP cheap-start policy selector.
+  bool warm_start = true;   // Cross-cycle QP warm start (workspace + iterate reuse).
 
   /* Staged result of the last solveCandidate(), retained only by commitCandidate(). */
   MatrixXd cand_x;              // Candidate states.

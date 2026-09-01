@@ -62,9 +62,16 @@ public:
   void setMaxOutIter(size_t new_max_out_iter);
   void setQPType(bool new_qp_type);
   void setGuess(bool new_guess);
+  void setWarmStart(bool new_warm_start);
 
-  /// Initial-guess policy handed to proxsuite for each QP sub-problem.
+  /// Initial-guess policy for a solve that updates a surviving workspace.
   proxsuite::proxqp::InitialGuessStatus initialGuessPolicy() const;
+
+  /// Initial-guess policy for a solve that (re)builds the workspace.
+  proxsuite::proxqp::InitialGuessStatus coldGuessPolicy() const;
+
+  /// Declare the fixed sparsity structure the workspace is built against.
+  void declarePattern();
   void setCbfGamma(double new_cbf_gamma);
 
   /* Obstacle avoidance */
@@ -132,12 +139,14 @@ private:
 
   /* Settings (mirror the MPC defaults; MPC overwrites them all before init()). */
   bool qp_type = false;         // Sparse (false) / dense (true) problem.
-  bool guess = true;            // Use (true) / don't use (false) warm start for initial guesses.
+  bool guess = true;            // ProxQP cheap-start policy selector.
+  bool warm_start = true;       // Reuse the workspace and previous iterate across cycles.
   size_t max_out_iter = 10000;  // Maximum number of outer iterations.
   size_t max_inn_iter = 1500;   // Maximum number of inner iterations (proximal operator).
 
   /* Results */
   proxsuite::proxqp::sparse::Vec<double> result_x;       // Optimal decision variables.
+  bool qp_ready{false};  // Workspace built; later cycles update it in place.
   // Info is a plain aggregate with no default member initializers; value-initialize
   // it so a read before the first solve() is not indeterminate. The zero-valued
   // QPSolverOutput enumerator is PROXQP_SOLVED, so the constructor overrides the

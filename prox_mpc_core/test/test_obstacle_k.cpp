@@ -75,7 +75,7 @@ void fillSlotRange(
 }
 
 std::shared_ptr<MPC> makeUnicycleMpc(
-  size_t k_obs, double w_weight = 1000.0, double cbf_gamma = 1.0)
+  size_t k_obs, double w_weight = 1000.0, double cbf_gamma = 1.0, bool warm_start = true)
 {
   auto model = std::make_shared<Unicycle>();
   const size_t n = model->getN();
@@ -107,6 +107,7 @@ std::shared_ptr<MPC> makeUnicycleMpc(
   mpc->setW(W);
   mpc->setMaxObs(k_obs);
   mpc->setCbfGamma(cbf_gamma);
+  mpc->setWarmStart(warm_start);
   mpc->init(model);
 
   MatrixXd goal_x = MatrixXd::Zero(kNp + 1, n);   // straight reference to (6, 0, 0)
@@ -170,6 +171,40 @@ TEST(ObstacleK, ConstraintGeometryDetour)
   EXPECT_GE(s.min_dist, d_safe - 0.15);
   // The robot detoured laterally to get around the obstacle.
   EXPECT_GT(s.max_abs_y, 0.3);
+}
+
+// The cross-cycle warm start updates the solver workspace in place rather than
+// rebuilding it, which ProxQP only honours while the sparsity structure stays
+// put. A structure derived from the values would move as the half-plane normals
+// pass through zero, and ProxQP would silently ignore the update - dropping the
+// keep-out rows and letting the robot drive through the obstacle. This pins that
+// the constraint survives a long run on the update path, and that turning the
+// warm start off produces the same avoidance.
+TEST(ObstacleK, WarmStartPreservesTheKeepOutRows)
+{
+  const double ox = 2.5;
+  const double oy = 0.5;
+  const double d_safe = 1.0;
+
+  auto run = [&](bool warm_start) {
+      auto mpc = makeUnicycleMpc(1, 1000.0, 1.0, warm_start);
+      MatrixXd obs = makeObs(kNp, 1);
+      fillSlot(obs, kNp, 1, 0, ox, oy, d_safe);
+      mpc->setObs(obs);
+      return runLoop(mpc, 3, 70, ox, oy);
+    };
+
+  const auto warm = run(true);
+  const auto cold = run(false);
+
+  // The keep-out holds on the update path, not only on the first (init) cycle.
+  EXPECT_GE(warm.min_dist, d_safe - 0.15);
+  EXPECT_GT(warm.max_abs_y, 0.3);
+
+  // And the two paths agree: the warm start changes how the QP is solved, not
+  // which problem is solved.
+  EXPECT_NEAR(warm.min_dist, cold.min_dist, 0.05);
+  EXPECT_NEAR(warm.max_abs_y, cold.max_abs_y, 0.05);
 }
 
 // The discrete-time CBF coupling (cbf_gamma < 1) is wired and active: it changes

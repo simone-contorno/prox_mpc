@@ -26,6 +26,8 @@ namespace
 // Guard for the obstacle-constraint normal: avoids 0/0 = NaN when the predicted
 // robot position coincides with the obstacle.
 constexpr double kObsNormalEps = 1e-9;
+// Far placeholder used only while probing the sparsity pattern at init.
+constexpr double kObsProbeSentinel = 1e6;
 // Fastest obstacle motion the backward extrapolation of the current-time
 // obstacle position is trusted for [m/s]. The reconstruction 2 o_1 - o_2
 // amplifies inter-block noise, so an implied inter-block displacement above
@@ -171,16 +173,18 @@ void ProxQP::init(std::shared_ptr<Model> new_model)
 
   /* Sparse problem */
   if (qp_type == false) {
-    // Sparse matrices
-    H_sparse = H.sparseView();
-    E_sparse = E.sparseView();
-    C_sparse = C.sparseView();
+    declarePattern();
 
-    // QP settings
-    qp_sparse = sparse::QP<double, isize>(qp_dim, qp_eq, qp_ineq);
+    /* Constructed from the structural masks rather than the dimensions, so the
+     * KKT layout is allocated once for the pattern every later update() reuses. */
+    using BoolMat = sparse::SparseMat<bool, isize>;
+    qp_sparse = sparse::QP<double, isize>(
+      BoolMat(H_sparse.cast<bool>()), BoolMat(E_sparse.cast<bool>()),
+      BoolMat(C_sparse.cast<bool>()));
     qp_sparse.settings.max_iter = max_out_iter;
     qp_sparse.settings.max_iter_in = max_inn_iter;
     qp_sparse.settings.compute_timings = true;
+    qp_ready = false;
   }
   // Dense problem
   else {
@@ -193,14 +197,112 @@ void ProxQP::init(std::shared_ptr<Model> new_model)
 }
 
 /*!
+ * @brief Fixed-sparsity bookkeeping for ProxQP's in-place update.
+ *
+ * ProxQP's sparse backend only applies update() when the matrices carry the same
+ * sparsity structure as the workspace was built with; a pattern that moves is
+ * silently ignored, which drops the obstacle keep-out rows. Deriving the pattern
+ * from sparseView() does exactly that, because the half-plane normals and the
+ * model Jacobians pass through zero as the trajectory evolves.
+ *
+ * The structure is therefore declared once from the positions setE and setC
+ * write - which depend only on the problem dimensions, never on the values - and
+ * the values are written into it each cycle, structural zeros included.
+ */
+namespace
+{
+/// Structural pattern of `m`: every entry a filler touched, marked by non-NaN.
+Eigen::SparseMatrix<double> writtenPattern(const MatrixXd & m)
+{
+  std::vector<Eigen::Triplet<double>> t;
+  for (Eigen::Index j = 0; j < m.cols(); j++) {
+    for (Eigen::Index i = 0; i < m.rows(); i++) {
+      if (!std::isnan(m(i, j))) {
+        t.emplace_back(static_cast<int>(i), static_cast<int>(j), 1.0);
+      }
+    }
+  }
+  Eigen::SparseMatrix<double> s(m.rows(), m.cols());
+  s.setFromTriplets(t.begin(), t.end());
+  s.makeCompressed();
+  return s;
+}
+
+/// Copy the dense values into a fixed pattern, keeping structural zeros.
+void writeInto(Eigen::SparseMatrix<double> & pat, const MatrixXd & dense)
+{
+  for (int k = 0; k < pat.outerSize(); k++) {
+    for (Eigen::SparseMatrix<double>::InnerIterator it(pat, k); it; ++it) {
+      it.valueRef() = dense(it.row(), it.col());
+    }
+  }
+}
+}  // namespace
+
+/*!
+ * Declare the sparsity structure of the equality and inequality blocks.
+ *
+ * setE and setC touch a fixed set of positions on every call, so filling the
+ * dense blocks with NaN and running them once reveals exactly which entries they
+ * own, without duplicating their indexing here.
+ */
+void ProxQP::declarePattern()
+{
+  const MatrixXd x_probe = MatrixXd::Zero(Np + 1, n);
+  const MatrixXd u_probe = MatrixXd::Zero(Nc, m);
+  const MatrixXd obs_saved = obs;
+  if (obstacle_active == true &&
+    (obs.rows() != static_cast<Eigen::Index>(Np * max_obs) || obs.cols() != 3))
+  {
+    obs = MatrixXd::Constant(Np * max_obs, 3, kObsProbeSentinel);
+  }
+
+  const double marker = std::numeric_limits<double>::quiet_NaN();
+  E.setConstant(marker);
+  C.setConstant(marker);
+  setE(x_probe, u_probe);
+  setC(x_probe);
+  E_sparse = writtenPattern(E);
+  C_sparse = writtenPattern(C);
+  E.setZero();
+  C.setZero();
+  obs = obs_saved;
+
+  /* H is built once from the constant weights, so its own view is already fixed. */
+  H_sparse = H.sparseView();
+  H_sparse.makeCompressed();
+}
+
+/*!
  * @brief Initial-guess policy for the QP sub-problem.
  *
- * The sub-problem is rebuilt with fresh matrices each solve, so only ProxQP's own
- * cheap starts apply: the equality-constrained guess (the default) or no guess.
- * An external initial guess handed to a freshly initialized workspace mixes a
- * stale guess with a reset state, which proxsuite 0.6.5 answers by diverging.
+ * WARM_START rather than WARM_START_WITH_PREVIOUS_RESULT: the latter also carries
+ * the proximal step sizes across solves, and unused obstacle slots are padded
+ * with a far sentinel whose rows are ~1e6 in magnitude, so step sizes tuned
+ * against that scaling cripple the next solve. WARM_START keeps the previous
+ * primal/dual iterate and derives the active set from it, which is the part that
+ * pays.
+ *
+ * Only meaningful while the workspace survives between solves. Requesting a warm
+ * start right after a fresh init mixes a stale guess with a reset state, which
+ * proxsuite 0.6.5 answers by diverging, so the caller selects this only on an
+ * update() path.
  */
 proxsuite::proxqp::InitialGuessStatus ProxQP::initialGuessPolicy() const
+{
+  return guess ?
+         proxsuite::proxqp::InitialGuessStatus::WARM_START :
+         proxsuite::proxqp::InitialGuessStatus::NO_INITIAL_GUESS;
+}
+
+/*!
+ * @brief Initial-guess policy for a solve that (re)builds the workspace.
+ *
+ * A freshly initialized workspace has no previous iterate to warm start from, so
+ * the cheap starts are all that apply here: the equality-constrained guess, or
+ * none when the caller turned guessing off.
+ */
+proxsuite::proxqp::InitialGuessStatus ProxQP::coldGuessPolicy() const
 {
   return guess ?
          proxsuite::proxqp::InitialGuessStatus::EQUALITY_CONSTRAINED_INITIAL_GUESS :
@@ -231,12 +333,19 @@ ProxQP::solve(
 
   /* Sparse problem */
   if (qp_type == false) {
-    // Make constraints matrices sparse
-    E_sparse = E.sparseView();
-    C_sparse = C.sparseView();
+    /* Values only: the structure was declared at init and must not move, or
+     * ProxQP silently ignores the update and the keep-out rows go missing. */
+    writeInto(E_sparse, E);
+    writeInto(C_sparse, C);
 
-    qp_sparse.settings.initial_guess = initialGuessPolicy();
-    qp_sparse.init(H_sparse, c, E_sparse, b, C_sparse, low, upp);
+    if (warm_start == true && qp_ready == true) {
+      qp_sparse.settings.initial_guess = initialGuessPolicy();
+      qp_sparse.update(H_sparse, c, E_sparse, b, C_sparse, low, upp);
+    } else {
+      qp_sparse.settings.initial_guess = coldGuessPolicy();
+      qp_sparse.init(H_sparse, c, E_sparse, b, C_sparse, low, upp);
+      qp_ready = true;
+    }
 
     qp_sparse.solve();
 
@@ -248,7 +357,7 @@ ProxQP::solve(
   }
   /* Dense problem */
   else {
-    qp_dense.settings.initial_guess = initialGuessPolicy();
+    qp_dense.settings.initial_guess = coldGuessPolicy();
     qp_dense.init(H, c, E, b, C, low, upp);
 
     qp_dense.solve();
@@ -766,6 +875,12 @@ void ProxQP::setQPType(bool new_qp_type) {this->qp_type = new_qp_type;}
  * @param new_guess no (false) or yes (true).
  */
 void ProxQP::setGuess(bool new_guess) {this->guess = new_guess;}
+
+/*!
+ * Enable the cross-cycle QP warm start.
+ * @param new_warm_start reuse the workspace and the previous iterate.
+ */
+void ProxQP::setWarmStart(bool new_warm_start) {this->warm_start = new_warm_start;}
 
 /*!
  * Set the discrete-time CBF rate for the obstacle coupling.

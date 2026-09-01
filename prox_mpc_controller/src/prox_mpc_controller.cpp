@@ -318,6 +318,13 @@ void ProxMpcController::configure(
   declare("qp_type", qp_type, false);
   bool guess = true;
   declare("guess", guess, true);
+  /* Cross-cycle QP warm start. The solver workspace is built once and updated in
+   * place, so proxsuite keeps its factorization and previous primal/dual iterate
+   * instead of being re-initialized every cycle. Rebuilding it per cycle was the
+   * wrong use of the API: it discarded the iterate the 'guess' parameter implies
+   * is being reused. */
+  bool warm_start = true;
+  declare("warm_start", warm_start, true);
   declare("max_solver_failures", max_solver_failures_, 3);
   if (max_solver_failures_ < 0) {
     RCLCPP_WARN(logger_, "max_solver_failures %d < 0; clamping to 0.", max_solver_failures_);
@@ -519,6 +526,7 @@ void ProxMpcController::configure(
   mpc_->setMaxIterSQP(static_cast<std::size_t>(max_iter_sqp));
   mpc_->setMaxSolveTime(max_solve_time);
   mpc_->setGuess(guess);
+  mpc_->setWarmStart(warm_start);
   mpc_->setQPtype(qp_type);
   mpc_->setCbfGamma(cbf_gamma_);
   mpc_->setMaxObs(k_obs);

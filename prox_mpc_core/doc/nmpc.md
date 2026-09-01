@@ -247,8 +247,31 @@ sequenceDiagram
 
 The QP is solved in **sparse** mode by default (`qp_type = false`); a dense path
 exists for small problems (`qp_type = true`).
-The QP is re-initialized with fresh matrices each solve, and `guess` selects
-between ProxQP's own cheap starts: the equality-constrained guess (`true`, the
-default) or no initial guess (`false`).
-The trajectory-level warm start in `MPC::solve` slides the previous solution
+There are two warm starts, at different levels, and they are independent.
+
+The **trajectory-level** warm start in `MPC::solve` slides the previous solution
 forward one step before re-linearizing.
+It is always on and is what makes the real-time iteration scheme work.
+
+The **solver-level** warm start is `warm_start` (`true` by default).
+With it on, the ProxQP workspace is built once and updated in place, so the
+factorization and the previous primal/dual iterate survive between cycles and
+ProxQP starts from the previous solution rather than from scratch.
+With it off, the QP is re-initialized with fresh matrices each solve and only
+ProxQP's own cheap starts apply, which is what `guess` selects between: the
+equality-constrained guess (`true`, the default) or no initial guess (`false`).
+`guess` also selects the policy on the update path, where `true` means
+`WARM_START` and `false` still means no guess.
+
+`WARM_START` is used rather than `WARM_START_WITH_PREVIOUS_RESULT` because the
+latter also carries the proximal step sizes across solves; unused obstacle slots
+are padded with a far sentinel whose rows are ~1e6 in magnitude, so step sizes
+tuned against that scaling would cripple the next solve.
+
+In-place update requires the sparsity structure to stay fixed - ProxQP silently
+ignores an update whose pattern moved, which would drop the keep-out rows.
+The structure is therefore declared once at `init()` from the positions `setE`
+and `setC` write, and the values are written into it each cycle, structural
+zeros included.
+A pattern taken from `sparseView()` would not do: the half-plane normals and the
+model Jacobians pass through zero as the trajectory evolves.
