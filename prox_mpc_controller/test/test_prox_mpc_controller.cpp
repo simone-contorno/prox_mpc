@@ -1653,10 +1653,13 @@ TEST_F(ProxMpcControllerTest, SpeedLimitPreservesAsymmetricLowerBound)
   // allow_reversing is opted into so the model's declared reverse bound survives
   // configure: with it false the box is narrowed to [0, v_max] up front, and
   // there would be no negative lower bound left for the speed limit to preserve.
+  // model_params.v_min names the bound explicitly, which is what opts out of the
+  // conservative reverse cap applied when reversing is enabled without one.
   auto c = makeRunning(
     {rclcpp::Parameter(
       "FollowPath.model_plugin", std::string("prox_mpc_test_models/AsymmetricBounds")),
-      rclcpp::Parameter("FollowPath.allow_reversing", true)});
+      rclcpp::Parameter("FollowPath.allow_reversing", true),
+      rclcpp::Parameter("FollowPath.model_params.v_min", -0.3)});
 
   c->setSpeedLimit(1.0, false);
   runCycle(c);
@@ -1690,9 +1693,26 @@ TEST_F(ProxMpcControllerTest, ReversingDisabledNarrowsTheControlBox)
   auto reversing = makeRunning(
     {rclcpp::Parameter(
       "FollowPath.model_plugin", std::string("prox_mpc_test_models/AsymmetricBounds")),
-      rclcpp::Parameter("FollowPath.allow_reversing", true)});
+      rclcpp::Parameter("FollowPath.allow_reversing", true),
+      rclcpp::Parameter("FollowPath.model_params.v_min", -0.3)});
   EXPECT_NEAR(reversing->model()->getIneq("u").at(0)[1], -0.3, kTol);
   EXPECT_NEAR(reversing->model()->getIneq("u").at(0)[2], 2.0, kTol);
+}
+
+// Nothing guards the area behind the robot: the keep-out fill skips
+// NO_INFORMATION cells and the footprint veto treats them as clear. Enabling
+// reversing without naming a reverse bound therefore must not inherit the
+// model's own lower bound, which is a modelling limit rather than a safety
+// choice - for AsymmetricBounds that is -0.3, well past the conservative cap.
+// Naming model_params.v_min is the documented way to opt out, covered above.
+TEST_F(ProxMpcControllerTest, ReversingWithoutABoundIsCappedSlow)
+{
+  auto c = makeRunning(
+    {rclcpp::Parameter(
+      "FollowPath.model_plugin", std::string("prox_mpc_test_models/AsymmetricBounds")),
+      rclcpp::Parameter("FollowPath.allow_reversing", true)});
+  EXPECT_NEAR(c->model()->getIneq("u").at(0)[1], -0.15, kTol);
+  EXPECT_NEAR(c->model()->getIneq("u").at(0)[2], 2.0, kTol);
 }
 
 // --- cancel() / reset() ----------------------------------------------------

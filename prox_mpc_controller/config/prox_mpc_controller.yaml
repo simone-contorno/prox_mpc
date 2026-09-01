@@ -36,8 +36,10 @@ controller_server:
       curvature_gain: 0.0       # cruise reduction on path curvature; 0.0 disables it
       # Follow a plan's own pose orientations into reverse travel, truncating the
       # reference at the first direction change.
-      # Also narrows the linear control bound to [0, v_max] when false, so the
-      # solver cannot plan reverse travel.
+      # Narrows the linear control bound to [0, v_max] when false, so the solver
+      # cannot plan reverse travel. When true without an explicit v_min above,
+      # reverse is capped at 0.15 m/s because nothing observes the area behind
+      # the robot.
       allow_reversing: false
 
       # Step the deceleration ramp advances by on a braking cycle. 0 measures the

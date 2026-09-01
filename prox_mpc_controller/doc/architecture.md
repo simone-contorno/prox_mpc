@@ -223,7 +223,7 @@ and fail the lifecycle transition.
 | `model_plugin` | string | `prox_mpc_core/Unicycle` | - | `prox_mpc::Model` plugin loaded by name. Bundled: `prox_mpc_core/Unicycle`, `prox_mpc_core/BicycleFrontAxle`, `prox_mpc_core/BicycleRearAxle`, and `prox_mpc_core/Bicycle` as a deprecated alias for the front-axle model. |
 | `model_params.L` | double | 1.6 | m | Wheelbase forwarded to `Model::configure`. The steering reference is built on the wheelbase the loaded model declares back through `getPlanarMapping()`, not on this value directly. |
 | `model_params.v_max` | double | 0.0 | m/s | Optional forward-speed bound on the model's `u[0]` input. Forwarded to `Model::configure` only when `> 0.0`; the default 0.0 keeps the model's built-in limit. |
-| `model_params.v_min` | double | 0.0 | m/s | Reverse-speed bound. A negative value is forwarded on its own, or alongside a positive `v_max`; with `v_max > 0.0` and a non-negative `v_min` the bound is set to `-v_max`. `allow_reversing: false` narrows it to `0.0` afterwards regardless. |
+| `model_params.v_min` | double | 0.0 | m/s | Reverse-speed bound. A negative value is forwarded on its own, or alongside a positive `v_max`; with `v_max > 0.0` and a non-negative `v_min` the bound is set to `-v_max`. `allow_reversing: false` narrows it to `0.0` afterwards regardless; `allow_reversing: true` with this left unset caps it at `-0.15`. Naming it is how a platform with rear sensing states its real reverse envelope. |
 | `np` | int | 20 | nodes | Prediction horizon. |
 | `nc` | int | 20 | nodes | Control horizon. |
 | `dt` | double | 0.1 | s | Step size and control period. |
@@ -234,7 +234,7 @@ and fail the lifecycle transition.
 | --- | --- | --- | --- | --- |
 | `desired_linear_vel` | double | 1.0 | m/s | Cruise speed the plan is sampled at; clamped to the model's speed bound. |
 | `curvature_gain` | double | 0.0 | - | Cruise reduction on path curvature; 0.0 disables it. |
-| `allow_reversing` | bool | false | - | Follow the plan's own pose orientations into reverse travel, signing the reference speed and truncating the reference at the first direction change. Off also narrows the model's linear control bound to `[0, v_max]`, so the solver cannot plan reverse travel at all. |
+| `allow_reversing` | bool | false | - | Follow the plan's own pose orientations into reverse travel, signing the reference speed and truncating the reference at the first direction change. Off narrows the model's linear control bound to `[0, v_max]`, so the solver cannot plan reverse travel at all. On without an explicit `model_params.v_min` caps reverse at **0.15 m/s**: nothing observes the area behind the robot, so an unguarded manoeuvre is kept slow. |
 
 ### Cost weights
 
@@ -310,6 +310,12 @@ remaining behaviors below are fixed in the plugin, so a deployment adapts to the
 through the model plugin and the costmap configuration rather than through
 controller parameters.
 
+- **Reverse travel is unguarded.** The in-loop keep-out fill skips
+  `NO_INFORMATION` cells and the footprint veto treats them as clear once the
+  costmap tracks unknown space, so neither guard sees the area behind the robot.
+  `allow_reversing: true` therefore caps reverse at 0.15 m/s unless
+  `model_params.v_min` names a bound; raise it only on a platform whose sensor
+  coverage includes the reverse direction.
 - `desired_linear_vel`, together with the `model_params.v_max` and
   `model_params.v_min` overrides, should follow the vehicle's real envelope
   rather than the simulation defaults. `model_params` carries only `L`, `v_max`,

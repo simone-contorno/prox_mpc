@@ -68,6 +68,13 @@ constexpr double kMaxBrakePeriodFactor = 2.0;
 /// Upper bound on the costmap scan half-window [cells] to keep the per-cycle cost
 /// bounded on constrained hardware.
 constexpr int kMaxScanHalfWidth = 50;
+/// Reverse speed applied when reversing is enabled but no reverse bound is named
+/// [m/s]. Nothing guards the area behind the robot: the keep-out fill skips
+/// NO_INFORMATION cells and the footprint veto treats them as clear, so a reverse
+/// manoeuvre runs into whatever the sensors never saw. A deliberately slow
+/// default keeps an unguarded manoeuvre slow; naming model_params.v_min
+/// overrides it, which is where an operator with rear sensing states so.
+constexpr double kDefaultReverseSpeed = 0.15;
 /// Minimum strictly-positive cost weight, keeping the QP Hessian positive definite
 /// (a negative weight would make the sub-problem non-convex).
 constexpr double kMinCostWeight = 1e-9;
@@ -467,6 +474,19 @@ void ProxMpcController::configure(
       "to [0.000, %.3f] so the solver cannot plan reverse travel.", v_min_, v_max_, v_max_);
     model_->updateIneq("u", idx_v_, 0.0, v_max_);
     v_min_ = 0.0;
+  }
+  /* Reversing was asked for without a reverse bound to go with it. The model's
+   * own lower bound is a modelling limit, not a safety choice - for the bundled
+   * models it is -v_max, so enabling reversing would silently authorise reverse
+   * at full cruise speed into the one direction nothing observes. */
+  if (allow_reversing_ && model_v_min >= 0.0 && v_min_ < -kDefaultReverseSpeed) {
+    RCLCPP_INFO(
+      logger_,
+      "allow_reversing is true but model_params.v_min was not set; capping reverse travel at "
+      "%.3f m/s (was %.3f). Nothing guards the area behind the robot, so set model_params.v_min "
+      "explicitly if the platform has rear sensing.", -kDefaultReverseSpeed, v_min_);
+    model_->updateIneq("u", idx_v_, -kDefaultReverseSpeed, v_max_);
+    v_min_ = -kDefaultReverseSpeed;
   }
   if (allow_reversing_ && v_min_ >= 0.0) {
     RCLCPP_WARN(
