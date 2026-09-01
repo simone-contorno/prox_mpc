@@ -180,6 +180,13 @@ to a fixed obstacle slot across nodes, and fills the remaining slots from the
 costmap (hybrid).
 A stale or missing message, or a missing transform, degrades to the costmap-only
 fill for that cycle, so the feature is a clean enable/disable switch.
+
+The costmap-only fill scans one present-time costmap around every predicted node,
+so a moving obstacle enters the horizon at the position it currently occupies -
+an error of `v_obs * t_node`, up to a metre at the far end of a 2 s horizon.
+It is validated for single-obstacle environments, where the free corridor
+absorbs the resulting late reaction. With more than one mover that corridor
+closes, and the tracker is required rather than optional.
 The propagation and the wall-rejection guard are derived in
 [control-law.md](control-law.md).
 

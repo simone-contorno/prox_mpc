@@ -58,11 +58,15 @@ driving a TurtleBot3 waffle under a full Nav2 stack in Gazebo Harmonic (see
   perimeter crosses a lethal cell.
   It is a backstop, not a guarantee: it depends on costmap inflation sized to
   the robot and on the local costmap's unknown-space tracking to be effective.
-- **Predictive (dynamic) obstacle avoidance (opt-in):** consumes tracked
+- **Predictive (dynamic) obstacle avoidance (on by default):** consumes tracked
   obstacles, follows each track's tracker-sampled predicted trajectory over the
   horizon (a constant-velocity ray when no samples are provided), binds it to a
   fixed constraint slot, and fills the remaining slots from the costmap (hybrid);
-  off by default, reproducing the costmap-only behavior bit-for-bit.
+  `predict_obstacles: false` reproduces the costmap-only behavior bit-for-bit.
+  The costmap-only fill reads one present-time costmap for every horizon node, so
+  a moving obstacle is constrained where it was rather than where it will be.
+  It is validated for single-obstacle environments; with more than one mover the
+  error closes the gap the plan was routed through, and the tracker is required.
 - **Safe failure handling:** a non-converged or non-finite solve decelerates from
   the measured velocity at the robot's limit and escalates to a Nav2 recovery
   after `max_solver_failures` consecutive failures; `cancel()` ramps to a stop
