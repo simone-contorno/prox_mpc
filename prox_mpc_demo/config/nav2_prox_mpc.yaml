@@ -164,6 +164,9 @@ local_costmap:
       global_frame: odom
       robot_base_frame: base_link
       rolling_window: true
+      # Unobserved cells are marked NO_INFORMATION rather than defaulting to
+      # free space, so the costmap does not claim to have seen what it has not.
+      track_unknown_space: true
       width: 3
       height: 3
       resolution: 0.05
