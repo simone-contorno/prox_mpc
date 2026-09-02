@@ -148,7 +148,7 @@ controller_server:
       # `predictive:=True`.
       max_obstacles: 0
       safety_margin: 0.1
-      robot_radius: 0.234
+      robot_radius: 0.235
       cbf_gamma: 1.0
       costmap_cost_threshold: 200
       obstacle_cluster_radius: 0.3

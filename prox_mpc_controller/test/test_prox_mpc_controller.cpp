@@ -729,7 +729,10 @@ TEST_F(ProxMpcControllerTest, RobotRadiusWarnsWhenBelowFootprintCircumscribedRad
   bool found = false;
   for (const auto & msg : LogCapture::messages()) {
     if (msg.find("robot_radius 0.500 m") != std::string::npos &&
-      msg.find("circumscribed radius 0.721 m") != std::string::npos)
+      msg.find("circumscribed radius 0.7212 m") != std::string::npos &&
+      // Rounded up to the millimetre it is printed at, so setting exactly what
+      // the message asks for clears the check instead of tripping it again.
+      msg.find("at least 0.722 m") != std::string::npos)
     {
       found = true;
       break;

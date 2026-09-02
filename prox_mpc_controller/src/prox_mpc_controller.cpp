@@ -371,13 +371,18 @@ void ProxMpcController::configure(
   const double circumscribed_radius =
     costmap_ros_->getLayeredCostmap()->getCircumscribedRadius();
   if (std::isfinite(circumscribed_radius) && robot_radius_ < circumscribed_radius) {
+    /* The advice is rounded up to the millimetre it is printed at. Reporting the
+     * circumscribed radius itself at %.3f names a value that can be smaller than
+     * the true one, and an operator who sets exactly what the message asks for
+     * would then trip the same warning again. */
+    const double advised_radius = std::ceil(circumscribed_radius * 1000.0) / 1000.0;
     RCLCPP_WARN(
       logger_,
-      "robot_radius %.3f m is below the costmap footprint's circumscribed radius %.3f m, so "
+      "robot_radius %.3f m is below the costmap footprint's circumscribed radius %.4f m, so "
       "the obstacle keep-out (d_safe = robot_radius + safety_margin = %.3f m) is undersized "
       "for this footprint and the endpoint footprint veto is the only remaining guard. Raise "
       "robot_radius to at least %.3f m, or shrink the footprint.",
-      robot_radius_, circumscribed_radius, robot_radius_ + safety_margin_, circumscribed_radius);
+      robot_radius_, circumscribed_radius, robot_radius_ + safety_margin_, advised_radius);
   }
   declare("cbf_gamma", cbf_gamma_, 1.0);
   clamp_range("cbf_gamma", cbf_gamma_, kMinCbfGamma, 1.0, 1.0);
