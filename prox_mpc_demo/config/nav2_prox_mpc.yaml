@@ -147,7 +147,9 @@ controller_server:
       # feature is opt-in and lives in nav2_prox_mpc_predictive.yaml; enable it with
       # `predictive:=True`.
       max_obstacles: 0
-      safety_margin: 0.1
+      # 0.085 with robot_radius 0.235 keeps d_safe at 0.320 m; the radius is the
+      # footprint's circumscribed value and the margin is the discretionary part.
+      safety_margin: 0.085
       robot_radius: 0.235
       cbf_gamma: 1.0
       costmap_cost_threshold: 200
