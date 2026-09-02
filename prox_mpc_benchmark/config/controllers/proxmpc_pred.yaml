@@ -28,7 +28,7 @@ FollowPath:
   max_solver_failures: 3
   max_obstacles: 4
   safety_margin: 0.1
-  robot_radius: 0.22
+  robot_radius: 0.234
   cbf_gamma: 1.0
   # 253 (inscribed + lethal only, not the reactive preset's 200): the static
   # fill adds robot_radius + safety_margin around every cell it ingests, so

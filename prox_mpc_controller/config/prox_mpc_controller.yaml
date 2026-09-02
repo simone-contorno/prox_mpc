@@ -38,8 +38,8 @@ controller_server:
       # reference at the first direction change.
       # Narrows the linear control bound to [0, v_max] when false, so the solver
       # cannot plan reverse travel. When true without an explicit v_min above,
-      # reverse is capped at 0.15 m/s because nothing observes the area behind
-      # the robot.
+      # reverse is capped at 0.15 m/s, because whether the platform senses the
+      # reverse direction is not something this plugin can check.
       allow_reversing: false
 
       # Step the deceleration ramp advances by on a braking cycle. 0 measures the

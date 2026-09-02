@@ -317,12 +317,16 @@ remaining behaviors below are fixed in the plugin, so a deployment adapts to the
 through the model plugin and the costmap configuration rather than through
 controller parameters.
 
-- **Reverse travel is unguarded.** The in-loop keep-out fill skips
-  `NO_INFORMATION` cells and the footprint veto treats them as clear once the
-  costmap tracks unknown space, so neither guard sees the area behind the robot.
-  `allow_reversing: true` therefore caps reverse at 0.15 m/s unless
-  `model_params.v_min` names a bound; raise it only on a platform whose sensor
-  coverage includes the reverse direction.
+- **Reverse travel needs rear sensing.** Obstacles behind the robot are guarded
+  exactly as far as the platform observes them: a 360-degree scanner marks them
+  in the local costmap, where the keep-out fill and the footprint veto both act
+  on them, while a forward-facing sensor leaves the manoeuvre blind. Neither
+  guard covers genuinely unobserved space - the fill skips `NO_INFORMATION`
+  cells and the veto treats them as clear - so occlusions and anything beyond
+  the rolling window stay unseen in every direction. `allow_reversing: true`
+  therefore caps reverse at 0.15 m/s unless `model_params.v_min` names a bound;
+  raise it once the platform's rear coverage is established, and consider
+  Nav2's Collision Monitor as a velocity-directed backstop.
 - `desired_linear_vel`, together with the `model_params.v_max` and
   `model_params.v_min` overrides, should follow the vehicle's real envelope
   rather than the simulation defaults. `model_params` carries only `L`, `v_max`,

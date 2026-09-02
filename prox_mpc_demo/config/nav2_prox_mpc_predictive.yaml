@@ -117,6 +117,9 @@ controller_server:
       model_plugin: "prox_mpc_core/Unicycle"
       model_params:
         L: 0.0              # unused by the unicycle; kept for interface symmetry
+        # Reverse bound [m/s]. Naming it explicitly is what states this platform's
+        # real reverse envelope, rather than inheriting the model literal.
+        v_min: -0.15
 
       # Horizons and step.
       np: 20
@@ -160,7 +163,7 @@ controller_server:
       #  * max_obstacles 4: capture the box plus adjacent wall cells.
       max_obstacles: 4
       safety_margin: 0.1
-      robot_radius: 0.22
+      robot_radius: 0.234
       cbf_gamma: 1.0
       costmap_cost_threshold: 253
       obstacle_cluster_radius: 0.3
@@ -184,6 +187,14 @@ controller_server:
       # goes blind to it. Matters for dynamic obstacles, inert for the static box.
       max_dynamic_obstacles: 2
       max_dynamic_obstacle_radius: 0.5
+
+
+      # The waffle's 360-degree LDS sees behind the robot, and the Collision
+      # Monitor already in the cmd_vel chain projects the footprint along the
+      # commanded twist - reverse included - so backing out of a closing gap is
+      # guarded here. The shipped controller default stays forward-only, because
+      # a library cannot assume the integrator's platform has rear sensing.
+      allow_reversing: true
 
       log_level: "info"
 

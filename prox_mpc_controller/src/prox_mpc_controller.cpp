@@ -69,11 +69,12 @@ constexpr double kMaxBrakePeriodFactor = 2.0;
 /// bounded on constrained hardware.
 constexpr int kMaxScanHalfWidth = 50;
 /// Reverse speed applied when reversing is enabled but no reverse bound is named
-/// [m/s]. Nothing guards the area behind the robot: the keep-out fill skips
-/// NO_INFORMATION cells and the footprint veto treats them as clear, so a reverse
-/// manoeuvre runs into whatever the sensors never saw. A deliberately slow
-/// default keeps an unguarded manoeuvre slow; naming model_params.v_min
-/// overrides it, which is where an operator with rear sensing states so.
+/// [m/s]. Whether the reverse direction is sensed at all is a property of the
+/// platform, which this plugin cannot know: a forward-facing lidar leaves the
+/// manoeuvre blind, while a 360-degree scanner covers it. The conservative
+/// default therefore assumes the worse case and keeps an unverified manoeuvre
+/// slow. Naming model_params.v_min overrides it, which is how a platform with
+/// rear sensing states its real reverse envelope.
 constexpr double kDefaultReverseSpeed = 0.15;
 /// Minimum strictly-positive cost weight, keeping the QP Hessian positive definite
 /// (a negative weight would make the sub-problem non-convex).
@@ -477,14 +478,15 @@ void ProxMpcController::configure(
   }
   /* Reversing was asked for without a reverse bound to go with it. The model's
    * own lower bound is a modelling limit, not a safety choice - for the bundled
-   * models it is -v_max, so enabling reversing would silently authorise reverse
-   * at full cruise speed into the one direction nothing observes. */
+   * models it is -v_max, so enabling reversing would otherwise silently
+   * authorise reverse at full cruise speed on a platform whose rear coverage
+   * this plugin has no way to check. */
   if (allow_reversing_ && model_v_min >= 0.0 && v_min_ < -kDefaultReverseSpeed) {
     RCLCPP_INFO(
       logger_,
       "allow_reversing is true but model_params.v_min was not set; capping reverse travel at "
-      "%.3f m/s (was %.3f). Nothing guards the area behind the robot, so set model_params.v_min "
-      "explicitly if the platform has rear sensing.", -kDefaultReverseSpeed, v_min_);
+      "%.3f m/s (was %.3f). Set model_params.v_min explicitly to the platform's real reverse "
+      "envelope once its rear coverage is established.", -kDefaultReverseSpeed, v_min_);
     model_->updateIneq("u", idx_v_, -kDefaultReverseSpeed, v_max_);
     v_min_ = -kDefaultReverseSpeed;
   }
