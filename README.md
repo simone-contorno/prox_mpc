@@ -67,26 +67,26 @@ the summary is below.
 > dev host (Intel Core i7-10750H, 6 cores / 12 threads, 31 GiB RAM,
 > Ubuntu 24.04.4) - not on physical robot hardware and not contact-dynamics.
 > A collision is a *would-be* overlap of the robot and obstacle discs, scored
-> identically for every controller. Gazebo validation is a single open-cell run;
-> full Gazebo and hardware validation remain open.
+> identically for every controller. **No measurement has been taken on the arm64
+> target this controller is intended for.** Gazebo validation reflects the
+> `v1.0.0` baseline; full Gazebo and hardware validation remain open.
 
-| Controller | Tracking RMS (open) | Compute p50 / p95 (open) | Static clearance | Multi-obstacle margin |
-| --- | --- | --- | --- | --- |
-| **ProxMPC** | 0.0002 m | **0.65 / 1.93 ms** | **+0.448 m** | -0.062 m, **+0.233 m predictive** |
-| DWB | 0.0002 m | 2.65 / 4.56 ms | +0.087 m | +0.098 m |
-| MPPI | 0.0028 m | 2.87 / 4.36 ms | +0.208 m | +0.002 m |
-| Regulated Pure Pursuit | 0.0000 m | 0.21 / 0.39 ms | +0.223 m | +0.124 m |
-| Vector Pursuit | 0.0000 m | 0.22 / 0.41 ms | +0.212 m (stops short) | -0.020 m |
-| Graceful | 0.0000 m | 0.16 / 0.28 ms | +0.212 m | -0.006 m |
+| Controller | Tracking RMS (open) | Compute p50 / p95 (open) | Static clearance | Multi-obstacle margin | Collisions (10 cells) |
+| --- | --- | --- | --- | --- | --- |
+| **ProxMPC** | 0.0001 m | **0.30 / 0.92 ms** | **+0.381 m** | -0.001 m, **+0.159 m predictive** | 30 %, **6 % predictive** |
+| DWB | 0.0001 m | 2.78 / 4.97 ms | +0.089 m | +0.064 m | 28 % |
+| MPPI | 0.0029 m | 2.96 / 4.12 ms | +0.211 m | -0.003 m | 30 % |
+| Regulated Pure Pursuit | 0.0000 m | 0.22 / 0.40 ms | +0.213 m | +0.128 m | 16 % |
+| Vector Pursuit | 0.0000 m | 0.22 / 0.43 ms | +0.142 m (stops short) | -0.036 m | 40 % |
+| Graceful | 0.0000 m | 0.15 / 0.29 ms | +0.207 m | -0.008 m | 38 % |
 
 Multi-obstacle margin is the median closest approach over six two-mover cells (30
 runs per controller, 60 for MPPI's 10 repeats); positive clears the obstacle.
-The margin is reported instead of a collision count on purpose. Those cells
-are deliberately marginal, so 40-80 % of runs finish within 0.15 m of the
-threshold and the collision *count* is dominated by scheduling jitter: the same
-cell, with the same binary, returned 1/5, 5/5, and 2/5 collisions on three
-separate runs. The median margin is stable across the same runs and is the
-honest discriminator. Counts are still reported per cell in
+Collisions are over all ten obstacle cells (50 runs per controller, 100 for MPPI).
+Both are reported because neither alone is honest: those cells are deliberately
+marginal, so 37-80 % of runs finish within 0.15 m of the threshold and per-cell
+counts swing widely, while the median margin is stable across the same runs.
+Read the aggregate over 30-50 runs, not any single cell. Per-cell counts are in
 [doc/controller-comparison-results.md](doc/controller-comparison-results.md),
 which is the source of truth.
 
@@ -94,26 +94,32 @@ which is the source of truth.
 
 - **Tracking on par with the best.** Sub-millimetre cross-track on an empty
   straight traverse (0.0004 m RMS, 5/5 success).
-- **Lighter than the other optimising controllers.** ~0.65 ms median per cycle
-  on the open cell, ~4.1x lighter than DWB and ~4.4x than MPPI at equal tracking
-  accuracy, at 6.2-11.9 % CPU against their 8.6-9.4 %. The advantage narrows as
-  the obstacle field tightens, and on four of the six two-mover cells ProxMPC is
-  marginally *heavier* than DWB. Deadline misses are nonzero on 4 of 435 runs,
-  but 6 of the 110 ProxMPC-family runs recorded a single cycle above the 50 ms
-  budget, peaking at 260 ms, because the QP factorization is rebuilt every
-  cycle. The geometric pursuit controllers are lighter still.
+- **Lighter than the other optimising controllers.** 0.30 ms median per cycle
+  on the open cell - **9.3x lighter than DWB and 9.9x than MPPI** at equal
+  tracking accuracy - at 8.5 % CPU across all obstacle cells against their 9.3 %
+  and 9.1 %. ProxMPC's cost scales with obstacle load while theirs does not, so
+  the advantage narrows to ~2.5x on single-obstacle cells and ~1.2x on the
+  hardest two-mover cells, but it never inverts. The geometric pursuit
+  controllers are an order of magnitude lighter still, and collide 16-40 % of the
+  time.
+- **Bounded per-cycle latency.** Zero cycles above the 50 ms budget across 100
+  runs, worst observed 33.9 ms. The previous release measured 300 ms worst cases
+  on three separate cells, from an SQP loop that re-linearised up to 99 times
+  after a failed solve and a QP workspace rebuilt from scratch every cycle.
+  Both are fixed.
 - **The largest static-obstacle margin.** It reaches the goal *and* holds
-  +0.45 m clearance around a static box, the widest of the field - ahead of
-  MPPI (+0.21 m) and DWB (+0.09 m) among the optimising controllers, and of RPP
-  and Graceful (~+0.21 m) among the geometric ones.
+  +0.374 m clearance around a static box at its closest, the widest of the field
+  - ahead of MPPI (+0.21 m) and DWB (+0.06 m) among the optimising controllers,
+  and of RPP and Graceful (~+0.21 m) among the geometric ones.
 - **Prediction gives the field's widest margin among two simultaneous movers.**
   With its own obstacle tracker enabled (an IMM filter combining constant-velocity
-  and constant-turn-rate models) ProxMPC holds a +0.233 m median closest
-  approach across the six two-mover cells, ahead of every peer - RPP +0.124 m,
-  DWB +0.098 m, MPPI +0.002 m, Graceful -0.006 m, Vector Pursuit -0.020 m - and
-  only 8 of its 30 runs finish inside the 0.15 m marginal band, against 19-30 for
-  the others. It clears every single-obstacle cell outright, including the
-  orbiting obstacle that DWB and Graceful both collide on in 5 runs of 5.
+  and constant-turn-rate models) ProxMPC holds a +0.159 m median closest
+  approach across the six two-mover cells, ahead of every peer - RPP +0.128 m,
+  DWB +0.064 m, MPPI -0.003 m, Graceful -0.008 m, Vector Pursuit -0.036 m - and
+  collides on only 3 of 30 runs there against 7 for the next best. It is the one
+  controller with no two-mover cell worse than 1 in 5, and it clears every
+  single-obstacle cell outright, including the orbiting obstacle that DWB and
+  Graceful both collide on in 4 runs of 5.
 - **Deterministic and model-agnostic.** The control law is a deterministic
   function of its inputs, unlike MPPI, which samples and exposes no seed in Nav2
   Jazzy. Note that this does not make a *closed-loop run* reproducible: control,
@@ -124,32 +130,39 @@ which is the source of truth.
 ### Where it is weaker
 
 - **The two-mover cells remain the real limit.** Reactive ProxMPC collides on
-  19 of 30 runs across the six of them and predictive on 4 of 30 - two close
-  movers force a non-convex "which side of each obstacle" choice that the
-  linearised keep-out constraint cannot represent. Widening the keep-out was
-  measured and does not help either variant, so the limitation is the
-  constraint's form rather than its size. The hardest cell is now `blind_multi_2`
-  for the reactive path and `blind_multi_0` for the predictive one.
+  15 of 30 runs across the six of them, predictive on 3 of 30 - two close movers
+  force a non-convex "which side of each obstacle" choice that the linearised
+  keep-out constraint cannot represent. Widening the keep-out was measured and
+  makes both *worse*, so the limitation is the constraint's form rather than its
+  size. The reactive path is additionally limited by its perception: the
+  costmap-only fill constrains each obstacle where it *was*, an error of up to a
+  metre at the far end of a 2 s horizon, which is why it should be treated as a
+  single-obstacle configuration and why `predict_obstacles` now defaults to
+  true.
 - **Reactive ProxMPC runs closer to the obstacles than its peers** on the
   two-mover cells (median margin -0.062 m, the field's narrowest). Prediction
   reverses this completely, so the tracker is not optional if the environment has
   two or more simultaneous movers.
 - The compute advantage is smallest exactly where compute matters most. On the
-  dense two-mover cells the per-cycle median rises to ~2.4-3.3 ms, marginally
-  *heavier* than DWB on four of the six, against ~4.1x lighter on the open cell.
-  The worst single cycle recorded was 260 ms against a 50 ms budget, and no
-  figure here has been measured on the arm64 target.
+  dense two-mover cells the per-cycle median rises to ~2.3-3.0 ms against the
+  samplers' flat ~2.9-3.1 ms, so ~1.2x rather than the ~9x of the open cell.
+  **No figure here has been measured on the arm64 target**, and Gazebo
+  validation still reflects `v1.0.0`.
 
 **In short:** ProxMPC delivers constrained, model-agnostic optimal control that
-tracks as well as the best of the field, runs at roughly a quarter of the
-sampling controllers' per-cycle cost on an open cell, and holds the largest
-margin in the field around both a static obstacle and - with its own
-dynamic-obstacle tracker enabled - two simultaneous movers. That predictive path
-is the configuration to deploy: the geometric and sampling controllers have no
-mechanism to match it, and reactive ProxMPC alone runs closer to moving obstacles
-than its peers do. Neither variant is collision-free among two simultaneous
-movers, so an environment with several independent movers needs a safety layer
-this controller does not provide.
+tracks as well as the best of the field, computes a command 9x faster than the
+sampling controllers on an open cell, and - with its own dynamic-obstacle tracker
+enabled - is **the most reliable avoider measured here: 6 % collisions across 50
+obstacle runs against 16 % for the next best**. Every cycle in 100 runs stayed
+inside the 50 ms budget, which was not true of the previous release.
+
+That predictive path is the configuration to deploy, and is now the default. The
+costmap-only path should be treated as a single-obstacle configuration: it
+constrains obstacles where they were rather than where they will be, which one
+free corridor absorbs and two closing movers do not. Neither variant is
+collision-free among two simultaneous movers, so an environment with several
+independent movers still needs a safety layer this controller does not
+provide.
 
 ## Known limits and future work
 

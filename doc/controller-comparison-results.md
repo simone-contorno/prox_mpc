@@ -6,17 +6,18 @@ It is the narrative companion to the auto-generated tables in [`prox_mpc_benchma
 **Provenance: which rows came from which measurement session.**
 The mode-(b2) tables below are a *merged* set, and the split is stated wherever a number depends on it.
 
-- **Reactive ProxMPC** rows were measured on 2026-08-27 at commit `40d1e61` (branch `test/audit-benchmark-revalidation`), after the controller default `safety_margin` was raised from 0.1 m to 0.2 m - 11 scenarios x 5 repeats = 55 runs, from `results/mode_b2_margin020_20260827_074543/`.
-- **ProxMPC (predictive)** rows were re-measured on 2026-08-27 at commit `9a97036`, once its preset was moved to the same `safety_margin: 0.2` - 11 scenarios x 5 repeats = 55 runs, from the same merged directory.
-- **DWB, MPPI, RPP, Graceful, and Vector Pursuit** rows carry over unchanged from the 2026-08-26 campaign at commit `988db0a` (branch `chore/audit-warning-hardening`), 325 runs, on the same host. None of those presets reads the changed default, and the *physical* obstacle geometry the harness draws is computed from a fixed harness constant, so it is byte-identical across both sessions. They were deliberately not re-run.
-- **Mode (b1)**, the ground-truth predictive results in Section 6.3, is a separate 40-run campaign at commit `1e170ad` on the same host. It drives the engine plant rather than the Nav2 stack and does not read the changed default, so it is unaffected.
+- **ProxMPC (reactive)** and **ProxMPC (predictive)** rows come from a 110-run campaign on 2026-09-02 at commit `9d0117a`, 11 scenarios x 5 repeats x 2 presets, in `results/proxmpc_d320_20260902_142419/`.
+- **DWB, MPPI, RPP, Graceful, and Vector Pursuit** rows come from the 435-run full matrix on 2026-09-01 at commit `5132c97`, in `results/mode_b2_v2_20260901_084925/`. None of those controllers loads `prox_mpc_core` or the ProxMPC plugin, and the physical obstacle geometry the harness draws is a fixed harness constant, so it is byte-identical across both sessions. They were deliberately not re-run.
+- The merged index the tables are generated from is `results/publish_v2/scenarios.json` (435 records).
 - **Mode (a)**, the Gazebo results in Section 7, was **not** re-run and still reflects the `v1.0.0` baseline; it is called out again where it appears.
 
-Commit `988db0a` is the tip of three change waves plus review fixes, an obstacle-mapping generalization, and warning hardening landed after the `v1.0.0` baseline this document previously reported - among them the endpoint-veto/unknown-space handling, the goal-approach taper, the obstacle-slot binding and ranking, the plan-projection method, the control-space brake, and two per-cycle performance fixes.
-That work is one bundled set of simultaneous behaviour changes, so a shift between `v1.0.0` and `988db0a` is attributed to a specific commit only where the mechanism is traceable in the diff.
-The `988db0a` -> `40d1e61` step is the opposite case: it is a **single-parameter change** on the reactive preset, so shifts in the ProxMPC rows below are attributed to it directly, and comparisons against the other six controllers remain valid because their rows and the physical obstacles are unchanged.
+The two sessions are one day apart on the same quiet host, and the ProxMPC session exists because a keep-out correction landed between them: `robot_radius` moved from 0.22 m to 0.235 m, the circumscribed radius of the footprint the costmap actually carries, and `safety_margin` from 0.1 m to 0.085 m so that `d_safe` stays at the 0.320 m both sessions share. That split matters and is not cosmetic - measured across 30 multi-obstacle runs, widening `d_safe` to 0.335 m instead of holding it took predictive collisions from 2 to 5 and reactive from 17 to 20, because a gap between two obstacles needs `2*d_safe` to stay feasible. The peer rows are unaffected: `robot_radius` is a ProxMPC parameter no other controller reads.
 
-All numbers below are measured, reproducible, and reported as `mean ± std` (population) over fixed-seed repeats - the precision signal.
+**How sensitive these numbers are.** Over this work the predictive all-cells collision rate moved 6% -> 10% -> 6% on 15 mm of keep-out, with no change to the algorithm. Peer controllers that loaded no changed code moved by 5-10 points between campaigns on individual cells. Read any single cell's collision count as noise; the aggregate over 30 or 50 runs is the number that carries meaning.
+
+**Failed runs and how they were handled.** The 435-run matrix produced 15 runs that did not reach the goal. Each was re-run once, uniformly across every controller and without pre-filtering, on the principle that a stack-bringup transient is a measurement that did not happen while a behavioural stall reproduces. Thirteen cleared and two reproduced - both Vector Pursuit stalling behind the static box, which the previous published campaign also recorded. The re-run moved results in both directions: one MPPI run cleared into a collision it had not previously recorded.
+
+All numbers below are measured, reproducible, and reported as `mean ± std`All numbers below are measured, reproducible, and reported as `mean ± std` (population) over fixed-seed repeats - the precision signal.
 Nothing is hand-tuned to favour one controller: every controller drives the *same* plant from the *same* start to the *same* goal, at a *matched operating point* (Section 2.1), perceives obstacles through the *same* costmaps, and is measured by the *same* instrumentation - including a timing decorator that wall-clock times every controller's per-cycle compute identically.
 
 The comparison covers six controllers: **ProxMPC**, the four that ship with Nav2 Jazzy as standalone local planners - **DWB**, **MPPI**, **Regulated Pure Pursuit (RPP)**, and **Graceful** (new in Jazzy) - and **Vector Pursuit**, the one external community controller included as a fair peer (Apache-2.0, apt `ros-jazzy-vector-pursuit-controller` v2.0.0).
@@ -53,7 +54,7 @@ The open cell deliberately understates a constrained optimal-control method - an
 | --- | --- |
 | ROS 2 / Nav2 | Jazzy / Nav2 1.3.12 |
 | Host | x86-64 workstation - Intel Core i7-10750H (6 cores / 12 threads), 31 GiB RAM, Ubuntu 24.04.4 LTS (kernel 6.8), CPU-only |
-| Tree | reactive-ProxMPC rows at commit `40d1e61` (`test/audit-benchmark-revalidation`); the other six controllers' rows at commit `988db0a` (`chore/audit-warning-hardening`) |
+| Tree | ProxMPC rows at commit `9d0117a`; the five peer controllers' rows at commit `5132c97`. Both on `test/audit-benchmark-revalidation`, one day apart on the same host |
 | Run mode | **(b2)** Nav2 stack on a kinematic plant, no Gazebo (see [run modes](prox-mpc.md#9-running-the-stack-the-three-modes)); mode (b1) for the ground-truth predictive results in Section 6.3, at commit `1e170ad` on the same host and the same binaries |
 | Plant | Unicycle body-twist integrator at 50 Hz, identical for every controller |
 | Localization | Exact (static `map -> odom` identity; the plant pose is ground truth) |
@@ -64,7 +65,7 @@ The open cell deliberately understates a constrained optimal-control method - an
 | Local costmap | `static_layer` + `obstacle_layer` + `inflation_layer` (**0.4 m** radius), 5 Hz update |
 | Global costmap | `static_layer` + `obstacle_layer` + `inflation_layer` (**0.4 m** radius); the `obstacle_layer` marks the scenario obstacles so **NavFn routes the global plan around them** - the same global plan for every controller |
 | Obstacle size | one **uniform** obstacle size across every b2 cell (`clearance: 0.45`); `static_box` is a 0.25 m box at dead-centre `(0, 0)`. The drawn body radius is a fixed harness constant ([`run_nav2.py:43`](../prox_mpc_benchmark/scripts/run_nav2.py)), so it is identical in both measurement sessions and for every controller |
-| ProxMPC keep-out | both presets at `safety_margin: 0.2 m`, so `d_safe = robot_radius + safety_margin = 0.42 m` (was 0.32 m in the `988db0a` session). This is a ProxMPC-internal constraint radius, not an obstacle or costmap property - no other controller reads it |
+| ProxMPC keep-out | both presets at `robot_radius: 0.235 m` + `safety_margin: 0.085 m`, so `d_safe = 0.320 m`. The radius is the circumscribed radius of the costmap's own padded footprint, so the keep-out covers the robot's outline; the margin carries the discretionary part. This is a ProxMPC-internal constraint radius, not an obstacle or costmap property - no other controller reads it |
 | Obstacle sensing | a **scan simulator** ray-casts the scenario obstacles into `/scan`; the `obstacle_layer` marks/clears them, so all controllers see the same obstacles |
 | Repeats | **5** fixed-seed repeats per controller per scenario (**10** for MPPI on every obstacle cell, to better characterise its sampling variance) |
 | Controllers | ProxMPC (Unicycle), DWB, MPPI, RPP, Graceful, Vector Pursuit - plus **ProxMPC (predictive)** with the obstacle tracker for Section 6.3-6.4 |
@@ -75,9 +76,9 @@ The open cell deliberately understates a constrained optimal-control method - an
 The controllers are different algorithms, so their *internal* knobs are not the same quantity and cannot be set "equal" without meaning something different for each.
 The fair approach is to equalise everything they *share* and leave each method's intrinsic mechanism at its documented operating point:
 
-- **Equalised** - control rate (20 Hz), max linear speed (0.5 m/s), goal tolerance (0.25 m), the **prediction horizon (2.0 s)** for all predictive controllers (ProxMPC `np*dt = 20 x 0.1`; DWB `sim_time = 2.0`; MPPI `time_steps x model_dt = 40 x 0.05`), a **uniform physical obstacle size** across every cell, and the **obstacle perception**: a shared local *and* global `obstacle_layer` fed by the scan simulator means every controller (including ProxMPC's costmap fill) sees the *same physical obstacles* through the *same costmaps + inflation*, and receives the *same* obstacle-routed global plan. In the head-to-head ProxMPC runs `predict_obstacles: false`, so it gets **no** privileged obstacle knowledge; the separate **ProxMPC (predictive)** variant (Section 6.4) turns that flag on and adds the real obstacle tracker. The two presets previously differed only in that flag, its slack penalty, and the costmap threshold, and so came close to isolating prediction; since the reactive preset moved to `safety_margin: 0.2` while the predictive one pins 0.1, they now also differ by a 0.10 m keep-out and the pair no longer isolates prediction alone (Section 8).
+- **Equalised** - control rate (20 Hz), max linear speed (0.5 m/s), goal tolerance (0.25 m), the **prediction horizon (2.0 s)** for all predictive controllers (ProxMPC `np*dt = 20 x 0.1`; DWB `sim_time = 2.0`; MPPI `time_steps x model_dt = 40 x 0.05`), a **uniform physical obstacle size** across every cell, and the **obstacle perception**: a shared local *and* global `obstacle_layer` fed by the scan simulator means every controller (including ProxMPC's costmap fill) sees the *same physical obstacles* through the *same costmaps + inflation*, and receives the *same* obstacle-routed global plan. In the head-to-head ProxMPC runs `predict_obstacles: false`, so it gets **no** privileged obstacle knowledge; the separate **ProxMPC (predictive)** variant (Section 6.4) turns that flag on and adds the real obstacle tracker. Both presets share `d_safe = 0.320 m`, so the keep-out no longer separates them; they still differ in the costmap threshold and the slack penalty, so the pair does not isolate prediction exactly (Section 8).
 - **A note on the shared global plan.** Because the global costmap carries an `obstacle_layer`, NavFn bends the *global* path around obstacles before any controller runs. This is deliberately equal for all six, but it is worth stating plainly that it **helps the pure path-followers most**: DWB, RPP, Vector Pursuit and Graceful track that global detour closely, so an obstacle-routed global plan does much of their avoidance for them, whereas ProxMPC re-optimises locally and leans less on it. The comparison therefore measures *local avoidance on top of an equal, obstacle-aware global plan* - not local avoidance in isolation.
-- **Left at each method's default** - the *avoidance mechanism itself*, because it has no common denominator across paradigms: DWB's `BaseObstacle` critic (nav2_bringup default `scale 0.02`), MPPI's `CostCritic` (upstream default `cost_weight 3.81`), ProxMPC's in-loop keep-out constraint (`d_safe = 0.42 m` reactive, 0.32 m predictive), and RPP/Graceful's forward-simulation collision check. Crippling any of them to a common number would misrepresent it. The obstacles each faces are equal; how each responds is its own algorithm.
+- **Left at each method's default** - the *avoidance mechanism itself*, because it has no common denominator across paradigms: DWB's `BaseObstacle` critic (nav2_bringup default `scale 0.02`), MPPI's `CostCritic` (upstream default `cost_weight 3.81`), ProxMPC's in-loop keep-out constraint (`d_safe = 0.320 m`, both presets), and RPP/Graceful's forward-simulation collision check. Crippling any of them to a common number would misrepresent it. The obstacles each faces are equal; how each responds is its own algorithm.
 - **Intrinsic sampling** left at upstream defaults: MPPI `batch_size = 2000`, DWB's `20 x 20` velocity grid, ProxMPC's single-QP SQP.
 - **Determinism** - MPPI is the one stochastic controller and Nav2 Jazzy exposes no RNG seed for it, so its repeats capture genuine sampling variance (reported as `mean ± std`), not reproducibility; it is run at 10 repeats on the obstacle cells (5 on the open cell) rather than the 5 used for the deterministic controllers. The other five controllers are deterministic in principle, but mode (b2) is real wall-clock ROS execution (DDS discovery, thread scheduling, lifecycle bring-up), not simulated time, so their repeats still carry a small measured jitter - itself part of the precision signal.
 - **Graceful** - a good-faith goal-approach tuning (lookahead below the goal tolerance, reduced slowdown radius, no in-place final rotation) lets it drive into the goal rather than stalling far out; it succeeds on every scenario measured here.
@@ -100,17 +101,19 @@ The keep-out radius is a ProxMPC-internal quantity with no cross-controller coun
 
 | Controller | success | time-to-goal [s] | goal err [m] | cross-track RMS [m] | cross-track max [m] |
 | --- | --- | --- | --- | --- | --- |
-| **ProxMPC** (Unicycle) | 5/5 | 13.01 ± 1.96 | 0.237 | **0.0002 ± 0.0000** | 0.0005 |
-| Regulated Pure Pursuit | 5/5 | 11.91 ± 1.44 | 0.235 | 0.0000 ± 0.0000 | 0.0000 |
-| MPPI | 5/5 | 12.66 ± 0.35 | 0.231 | 0.0028 ± 0.0001 | 0.0040 |
-| DWB | 5/5 | 12.08 ± 0.94 | 0.237 | 0.0002 ± 0.0001 | 0.0005 |
-| Vector Pursuit | 5/5 | 11.48 ± 1.10 | 0.236 | 0.0000 ± 0.0000 | 0.0000 |
-| Graceful | 5/5 | 10.66 ± 0.66 | 0.218 | 0.0000 ± 0.0000 | 0.0000 |
+| **ProxMPC** (Unicycle) | 5/5 | 12.90 ± 1.68 | 0.238 | 0.0001 ± 0.0000 | 0.0004 |
+| **ProxMPC (predictive)** | 5/5 | 12.87 ± 1.20 | 0.238 | **0.0000 ± 0.0000** | 0.0000 |
+| Regulated Pure Pursuit | 5/5 | 12.51 ± 1.14 | 0.235 | 0.0000 ± 0.0000 | 0.0000 |
+| MPPI | 5/5 | 11.90 ± 1.28 | 0.236 | 0.0029 ± 0.0001 | 0.0041 |
+| DWB | 5/5 | 13.02 ± 1.48 | 0.238 | 0.0001 ± 0.0001 | 0.0008 |
+| Vector Pursuit | 5/5 | 12.97 ± 1.06 | 0.236 | 0.0000 ± 0.0000 | 0.0000 |
+| Graceful | 5/5 | 11.72 ± 1.16 | 0.220 | 0.0000 ± 0.0000 | 0.0000 |
 
-All six track the straight line essentially perfectly (sub-millimetre cross-track) and complete 5/5; ProxMPC and DWB are exact to the plant resolution and MPPI is within 3 mm.
-On *tracking fidelity* there is no meaningful separation on an empty straight line - which is exactly why the compute-and-resource comparison below is the discriminating open-cell result for the predictive controllers.
-The wider keep-out leaves tracking untouched in any practical sense: ProxMPC's cross-track RMS moved from 0.0001 m to 0.0002 m, matching DWB and still two orders of magnitude inside the 0.25 m goal tolerance.
-Its time-to-goal spread widened (±1.01 s to ±1.96 s over five runs, range 9.9-15.9 s) without a change in the mean; that is wall-clock bring-up and scheduling jitter on a 5 m traverse, not a control effect, and Section 8 bounds how far such a shift can be read.
+All seven track the straight line to the plant's resolution and complete 5/5.
+Cross-track RMS is at or below 0.1 mm for six of them and 2.9 mm for MPPI, the one stochastic controller; every controller finishes two orders of magnitude inside the 0.25 m goal tolerance.
+Time-to-goal spans 11.7-13.0 s with per-controller spreads of ±1.1-1.7 s, which is wall-clock bring-up and scheduling jitter on a 5 m traverse rather than a control effect - the spread is larger than the gap between the fastest and slowest controller, so the ordering here carries no signal.
+
+On *tracking fidelity* there is no meaningful separation on an empty straight line, which is exactly why the compute-and-resource comparison below is the discriminating open-cell result, and why obstacle avoidance is reported separately.
 
 ## 4. Per-cycle compute cost and process resources
 
@@ -123,154 +126,106 @@ Its companion tracker runs as a *separate* process (~1.0 % of one core, ~38.5 MB
 
 ### 4.1 Per-cycle compute, `p50 / p95` [ms] (mean over repeats)
 
-**Single-obstacle cells:**
+| scenario | ProxMPC | ProxMPC pred | DWB | MPPI | RPP | Graceful | VecPursuit |
+|---|---|---|---|---|---|---|---|
+| `nav2_open` | **0.30 / 0.92** | **0.28 / 0.49** | 2.78 / 4.97 | 2.96 / 4.12 | 0.22 / 0.40 | 0.15 / 0.29 | 0.22 / 0.43 |
+| `static_box` | 1.12 / 4.31 | 0.85 / 2.87 | 2.91 / 4.86 | 2.99 / 4.47 | 0.23 / 0.43 | 0.17 / 0.30 | 0.24 / 0.40 |
+| `dynamic_line_forward` | 0.89 / 4.43 | 0.77 / 4.88 | 2.80 / 4.90 | 2.94 / 4.39 | 0.22 / 0.42 | 0.16 / 0.31 | 0.21 / 0.37 |
+| `dynamic_line_backward` | 0.97 / 4.30 | 0.89 / 4.61 | 2.76 / 4.98 | 2.94 / 4.26 | 0.23 / 0.41 | 0.17 / 0.33 | 0.23 / 0.43 |
+| `dynamic_circle` | 1.69 / 6.25 | 1.52 / 6.38 | 3.02 / 5.02 | 2.96 / 4.11 | 0.22 / 0.39 | 0.16 / 0.30 | 0.22 / 0.38 |
+| `dynamic_multi` | 2.36 / 7.05 | 1.95 / 5.48 | 3.07 / 5.68 | 2.93 / 4.27 | 0.23 / 0.42 | 0.17 / 0.30 | 0.22 / 0.39 |
+| `dynamic_multi_noise` | 2.39 / 7.23 | 1.92 / 5.61 | 3.01 / 5.32 | 2.96 / 4.34 | 0.23 / 0.41 | 0.17 / 0.30 | 0.22 / 0.41 |
+| `blind_multi_0` | 2.95 / 8.11 | 1.95 / 6.24 | 2.98 / 4.70 | 2.93 / 4.10 | 0.22 / 0.41 | 0.16 / 0.30 | 0.21 / 0.40 |
+| `blind_multi_1` | 2.53 / 6.11 | 1.70 / 5.80 | 2.97 / 4.94 | 2.97 / 4.40 | 0.22 / 0.41 | 0.17 / 0.31 | 0.22 / 0.41 |
+| `blind_multi_2` | 2.32 / 12.04 | 1.99 / 5.33 | 2.88 / 5.04 | 2.94 / 4.16 | 0.23 / 0.39 | 0.17 / 0.29 | 0.22 / 0.38 |
+| `blind_multi_3` | 2.26 / 5.84 | 2.03 / 6.38 | 3.01 / 4.40 | 2.92 / 4.17 | 0.23 / 0.39 | 0.18 / 0.31 | 0.22 / 0.41 |
 
-| Controller | open | static_box | line_fwd | line_bwd | circle |
-| --- | --- | --- | --- | --- | --- |
-| Graceful | 0.16 / 0.28 | 0.16 / 0.27 | 0.16 / 0.29 | 0.16 / 0.30 | 0.16 / 0.28 |
-| Regulated Pure Pursuit | 0.21 / 0.39 | 0.22 / 0.41 | 0.22 / 0.38 | 0.22 / 0.41 | 0.21 / 0.37 |
-| Vector Pursuit | 0.22 / 0.41 | 0.21 / 0.37 | 0.22 / 0.40 | 0.22 / 0.38 | 0.22 / 0.38 |
-| **ProxMPC** | **0.65 / 1.93** | 1.53 / 4.22 | 1.70 / 5.54 | 1.64 / 5.72 | 2.26 / 8.87 |
-| **ProxMPC (predictive)** | 0.35 / 0.61 | 0.94 / 2.77 | 0.63 / 3.38 | 1.02 / 4.92 | 1.62 / 5.87 |
-| DWB | 2.65 / 4.56 | 2.76 / 4.43 | 2.75 / 4.58 | 2.72 / 4.43 | 2.82 / 4.31 |
-| MPPI | 2.87 / 4.36 | 2.85 / 4.17 | 2.87 / 4.13 | 2.84 / 4.12 | 2.87 / 3.90 |
+The shape of this table is the result, not any single row.
+**ProxMPC's cost scales with obstacle load; the sampling controllers' does not.**
+DWB and MPPI pay a near-constant 2.8-3.1 ms whether the cell is empty or holds two movers, because their sample counts are fixed. ProxMPC pays 0.30 ms on the empty cell and 2.3-3.0 ms on the hardest, because the QP grows a keep-out row per obstacle slot per node.
 
-**Multi-obstacle cells:**
+So the advantage is largest exactly where a robot spends most of its time - **9.3x lighter than DWB and 9.9x than MPPI on the open cell** - narrows to ~2.5x on single-obstacle cells, and converges to ~1.2x on the multi-mover cells. It never inverts: ProxMPC's median stays at or below both on every cell measured.
+The predictive preset is *cheaper* than the reactive one on every obstacle cell (1.9-2.0 ms against 2.3-3.0 on the multi cells) because a tracked obstacle occupies one slot with a known trajectory, while the costmap fill spends slots on clusters it must re-rank each cycle.
 
-| Controller | dyn_multi | dyn_multi_noise | blind_0 | blind_1 | blind_2 | blind_3 |
-| --- | --- | --- | --- | --- | --- | --- |
-| Graceful | 0.17 / 0.29 | 0.16 / 0.25 | 0.16 / 0.25 | 0.17 / 0.29 | 0.17 / 0.24 | 0.16 / 0.23 |
-| Regulated Pure Pursuit | 0.22 / 0.38 | 0.22 / 0.34 | 0.21 / 0.32 | 0.21 / 0.31 | 0.21 / 0.31 | 0.22 / 0.31 |
-| Vector Pursuit | 0.22 / 0.34 | 0.21 / 0.30 | 0.21 / 0.31 | 0.21 / 0.33 | 0.21 / 0.32 | 0.22 / 0.34 |
-| **ProxMPC** | 3.29 / 9.42 | 3.21 / 9.28 | 3.18 / 8.23 | 2.95 / 6.96 | 2.44 / 8.54 | 2.65 / 5.84 |
-| **ProxMPC (predictive)** | 2.18 / 5.27 | 2.14 / 5.60 | 1.69 / 4.98 | 1.89 / 5.28 | 2.14 / 5.25 | 1.96 / 5.52 |
-| DWB | 2.91 / 4.48 | 2.99 / 5.08 | 2.77 / 3.50 | 2.81 / 3.66 | 2.77 / 3.70 | 2.89 / 3.44 |
-| MPPI | 2.86 / 4.01 | 2.81 / 3.43 | 2.76 / 3.39 | 2.74 / 3.29 | 2.81 / 3.35 | 2.80 / 3.38 |
+The one outlier is reactive ProxMPC's 12.04 ms p95 on `blind_multi_2`, against 5-8 ms elsewhere; that cell is where the reactive keep-out struggles most, and the extra QP iterations show up in the tail rather than the median (2.32 ms).
 
 ### 4.2 Process CPU [% of one core] / RSS peak [MB]
 
-**Single-obstacle cells:**
+| scenario | ProxMPC | ProxMPC pred | DWB | MPPI | RPP | Graceful | VecPursuit |
+|---|---|---|---|---|---|---|---|
+| `nav2_open` | 4.3 / 59 | 4.3 / 61 | 9.0 / 60 | 8.8 / 64 | 3.7 / 55 | 3.6 / 56 | 3.7 / 55 |
+| `static_box` | 6.6 / 60 | 6.0 / 61 | 9.1 / 60 | 9.0 / 63 | 3.8 / 55 | 3.8 / 56 | 4.0 / 55 |
+| `dynamic_line_forward` | 6.3 / 59 | 6.1 / 61 | 9.0 / 60 | 9.0 / 64 | 3.9 / 55 | 3.9 / 56 | 3.9 / 55 |
+| `dynamic_line_backward` | 6.5 / 59 | 6.3 / 61 | 9.0 / 60 | 9.0 / 63 | 3.9 / 55 | 3.7 / 56 | 3.8 / 55 |
+| `dynamic_circle` | 8.0 / 60 | 7.9 / 61 | 9.5 / 60 | 9.1 / 63 | 3.9 / 56 | 4.0 / 56 | 3.8 / 55 |
+| `dynamic_multi` | 9.3 / 59 | 8.2 / 61 | 9.8 / 60 | 9.2 / 63 | 4.0 / 56 | 3.9 / 56 | 3.8 / 55 |
+| `dynamic_multi_noise` | 9.2 / 59 | 8.2 / 61 | 9.6 / 60 | 9.2 / 65 | 4.0 / 56 | 3.9 / 56 | 3.7 / 56 |
+| `blind_multi_0` | 10.4 / 60 | 8.3 / 61 | 9.3 / 60 | 9.1 / 65 | 4.0 / 56 | 3.9 / 56 | 3.8 / 56 |
+| `blind_multi_1` | 8.7 / 60 | 8.1 / 61 | 9.2 / 60 | 9.1 / 63 | 3.9 / 56 | 3.8 / 56 | 3.8 / 55 |
+| `blind_multi_2` | 11.4 / 60 | 8.2 / 61 | 9.2 / 60 | 9.1 / 65 | 3.9 / 56 | 3.8 / 56 | 3.9 / 55 |
+| `blind_multi_3` | 8.2 / 59 | 8.7 / 61 | 9.2 / 60 | 9.0 / 63 | 3.9 / 56 | 3.9 / 56 | 3.9 / 55 |
 
-| Controller | open | static_box | line_fwd | line_bwd | circle |
-| --- | --- | --- | --- | --- | --- |
-| Regulated Pure Pursuit | 3.9 / 55 | 3.9 / 55 | 3.9 / 55 | 3.9 / 55 | 4.0 / 55 |
-| Vector Pursuit | 3.9 / 55 | 4.0 / 55 | 3.9 / 55 | 3.8 / 55 | 3.9 / 55 |
-| Graceful | 3.9 / 56 | 4.0 / 56 | 3.9 / 56 | 3.8 / 56 | 3.9 / 56 |
-| **ProxMPC** | 6.2 / 59 | 7.6 / 59 | 8.3 / 59 | 8.2 / 59 | 10.4 / 59 |
-| **ProxMPC (predictive)** | 4.5 / 60 | 6.3 / 60 | 5.8 / 60 | 6.6 / 60 | 8.0 / 60 |
-| DWB | 8.6 / 60 | 8.9 / 60 | 8.9 / 60 | 8.8 / 60 | 9.1 / 60 |
-| MPPI | 8.7 / 63 | 8.7 / 63 | 8.9 / 63 | 8.8 / 63 | 9.0 / 63 |
+The same shape appears in process CPU: ProxMPC starts at 4.3 % on the empty cell against DWB's 9.0 % and MPPI's 8.8 %, and rises to 8.2-11.4 % on the hardest cells where they stay flat. Reactive ProxMPC is the only controller that exceeds the sampling pair, and only on the two cells its keep-out finds hardest (`blind_multi_0` at 10.4 %, `blind_multi_2` at 11.4 %); the predictive preset stays at or below both everywhere (7.6 % averaged over all obstacle cells).
 
-**Multi-obstacle cells:**
-
-| Controller | dyn_multi | dyn_multi_noise | blind_0 | blind_1 | blind_2 | blind_3 |
-| --- | --- | --- | --- | --- | --- | --- |
-| Regulated Pure Pursuit | 4.0 / 55 | 4.1 / 56 | 4.2 / 55 | 4.2 / 55 | 4.0 / 55 | 4.2 / 55 |
-| Vector Pursuit | 3.9 / 55 | 4.0 / 55 | 4.0 / 55 | 4.1 / 55 | 4.0 / 55 | 4.0 / 55 |
-| Graceful | 4.0 / 56 | 4.2 / 56 | 4.1 / 56 | 4.2 / 56 | 4.2 / 56 | 4.1 / 56 |
-| **ProxMPC** | 11.8 / 59 | 11.9 / 59 | 11.8 / 59 | 10.4 / 59 | 10.8 / 59 | 9.3 / 59 |
-| **ProxMPC (predictive)** | 8.9 / 60 | 8.5 / 60 | 8.1 / 60 | 8.7 / 60 | 8.6 / 60 | 8.6 / 60 |
-| DWB | 9.3 / 60 | 9.4 / 60 | 8.9 / 60 | 9.2 / 60 | 9.1 / 60 | 9.1 / 60 |
-| MPPI | 9.0 / 63 | 9.0 / 63 | 9.1 / 64 | 8.9 / 63 | 9.0 / 64 | 9.0 / 63 |
-
-> ProxMPC-predictive additionally spends ~1.0 % core and ~38.5 MB in the obstacle-tracker process, constant across every scenario - a small overhead the tables above exclude.
-
-The compute comparison across the eleven cells:
-
-- **The wider keep-out costs per-cycle compute on every one of the eleven cells, and the mechanism is traceable to the diff.** Raising `safety_margin` from 0.1 m to 0.2 m raises `d_safe` from 0.32 m to 0.42 m, and [`prox_mpc_controller.cpp:1733`](../prox_mpc_controller/src/prox_mpc_controller.cpp) sizes the costmap scan window as `search_radius = d_safe + obstacle_cluster_radius`. That radius went from 0.62 m to 0.72 m, so at the 0.05 m costmap resolution the per-node scan window grew from 13 to 15 cells - about 1.3x the cells read per horizon node per cycle - and more of the cells it finds fall inside `d_safe` and bind to a QP slot. Both halves are visible in the telemetry: on the open cell the scan-and-reduce portion (decorator compute minus internal QP solve) grew from 0.09 ms to 0.16 ms while the QP solve itself grew from 0.25 ms to 0.50 ms, with SQP iterations flat at 1.00 and external QP iterations flat (3.13 to 3.18). The QP is carrying more rows, not iterating more.
-- **The open-cell advantage roughly halved, and it is no longer the campaign's headline result.** ProxMPC computes a command in **0.65 ms median / 1.93 ms p95** on the open cell, against 0.34 / 1.02 ms at `safety_margin: 0.1` - **~4.1x faster than DWB and ~4.4x than MPPI at the median**, down from ~7.8x/~8.4x. The per-cycle allocation and locking fixes credited in the previous campaign are still in the binary; what changed is that a wider keep-out reaches the room's end walls on a cell that has no scenario obstacle at all, so the "empty" cell is no longer empty from the solver's point of view. The rising peak keep-out slack on that cell (0.131 m to 0.192 m) is the same effect seen directly.
-- **On the multi-obstacle cells ProxMPC is now at parity with, or slightly behind, DWB and MPPI at the median.** Per-cell median ratios against DWB are 0.88x (`dynamic_multi`), 0.93x (`dynamic_multi_noise`), 0.87x (`blind_multi_0`), 0.95x (`blind_multi_1`), 1.13x (`blind_multi_2`) and 1.09x (`blind_multi_3`) - so on four of the six it is **slightly heavier per cycle than DWB**, where at `safety_margin: 0.1` it was 1.2-2.7x lighter on every obstacle cell. It remains 1.6-1.9x lighter on the static box and the two straight patrols and 1.25x on the orbit. The blanket claim that ProxMPC is cheaper per cycle than the sampling controllers on obstacle cells no longer holds and has been withdrawn.
-- **Process CPU crossed over on the same cells.** ProxMPC now runs at **6.2 %** of one core on the open cell rising to **11.9 %** on the hardest cell, against DWB/MPPI's steady **8.6-9.4 %**. It is lighter on the open cell, the static box and the two patrols, and **heavier than both on the orbit and all six multi-mover cells**. ProxMPC-predictive, now at the same `safety_margin: 0.2`, runs 4.8-10.7 % and is the cheaper of the two on nine of the eleven cells. RSS is unchanged at 59 MB for ProxMPC and 55-64 MB across the field, MPPI the heaviest.
-- **The geometric controllers are unaffected and remain far lighter** - RPP, Graceful and Vector Pursuit compute in ~0.16-0.22 ms at ~3.8-4.2 % CPU, carrying no optimisation or constraint machinery. ProxMPC's premium over them widened with the keep-out, from ~0.5-6.5 % to ~2.3-7.9 % of one core.
-- **Prediction is cheaper than reactive on nine of the eleven cells, not all.** At the matched 0.2 m keep-out ProxMPC-predictive sits below reactive at the median almost everywhere (open 0.33 vs 0.65 ms, `dynamic_multi_noise` 2.72 vs 3.21 ms), but it is the heavier of the two on `blind_multi_0` (3.31 vs 3.18 ms) and level on `blind_multi_2` (2.48 vs 2.44 ms) - the two cells where the tracker carries the most confirmed moving tracks. Matching the keep-out removes one of the three tuning differences between the presets; `costmap_cost_threshold` (200 against 253) and `w_weight` (100 against 1000) still differ, so this remains a configuration-vs-configuration reading rather than the cost of prediction in isolation. The companion tracker's ~1.0 % core and ~38.4 MB remain outside these figures.
-- **The tail grew on every cell and the worst case still overruns the budget.** ProxMPC's p95 reaches **4.2-9.4 ms** on the obstacle cells (from 3.3-8.9 ms), against DWB's and MPPI's steadier 3.3-5.1 ms; it now exceeds both on every obstacle cell except the static box. Every p95 still sits well inside the 50 ms control budget, but **4 of the 110 ProxMPC-family runs recorded a single cycle above 50 ms, peaking at 255 ms** (see Section 5 for the exact population and cells). This remains a direct consequence of rebuilding the QP factorization every cycle.
-- **The achieved command rate holds at the nominal 20 Hz on every cell.** ProxMPC's sampled `/cmd_vel` rate spans **19.96-20.09 Hz** across all eleven cells, against 19.86-20.22 Hz before, so the extra per-cycle work is absorbed inside the 50 ms budget and does not show up as a dropped command. Only 2 of the 435 b2 runs report a non-zero deadline-miss rate at all (Section 5). The reactive path also stopped losing runs on the two-mover cells: success went from 29/30 to **30/30** (Section 6.4).
+Memory is flat and unremarkable for every controller: 59-61 MB peak RSS for ProxMPC against 60 for DWB and 63-65 for MPPI, with the three pursuit controllers at 55-56. Nothing here grows over a run.
 
 ## 5. ProxMPC solver profile (and a cross-check)
 
-ProxMPC is the only controller that also publishes its *internal* solver telemetry ([`SolverDiagnostics`](../prox_mpc_msgs/README.md)):
+Solver telemetry over all 10 obstacle cells (50 runs per preset), from the opt-in `SolverDiagnostics` topic:
 
-| Metric | Open cell | With obstacle constraints active |
-| --- | --- | --- |
-| decorator compute p95 (whole `computeVelocityCommands`) | 1.93 ms | 4.2-9.4 ms |
-| internal QP solve p95 | 1.71 ms | 4.1-9.4 ms |
-| worst single-cycle solve (max) | 4.28 ms | up to 243 ms |
-| deadline-miss rate (compute > 50 ms budget) | 0.0 % | 0.0 % mean, nonzero on 4 of 435 runs |
-| infeasible rate (QP status != SOLVED) | 0.0 % | 0.0 % mean, nonzero on 2 of 110 ProxMPC-family runs |
-| mean SQP iterations | 1.00 | 1.00-1.06 |
+| | solve p50 | solve p95 | solve max | over 50 ms | deadline-miss | SQP iters | QP ext iters | infeasible runs | peak slack |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| reactive | 1.82 ms | 6.46 ms | 33.9 ms | **0 / 50** | 0.00 % | 1.00 | 7.5 | 14 / 50 | 1.110 m |
+| predictive | 1.46 ms | 5.24 ms | **24.7 ms** | **0 / 50** | 0.00 % | 0.98 | 7.0 | 3 / 50 | 0.493 m |
 
-The two independent instruments still agree on the open cell: the QP solve (1.71 ms p95) accounts for almost all of the measured per-cycle compute (1.93 ms p95), the small remainder being the costmap reduction and the exact footprint veto.
-Both roughly doubled against the 0.32 m keep-out (0.91 ms and 1.02 ms), and the split between them is what identifies the cause - Section 4 reads it in detail.
-The worst single open-cell cycle stays **~12x inside** the 50 ms budget, which is why ProxMPC holds 20 Hz with 0 % deadline-miss and 0 % infeasible.
-With the in-loop obstacle constraints active the per-cycle cost rises to a p95 of 4.2-9.4 ms across the ten obstacle scenarios.
+**Every cycle in 100 runs stayed inside the 50 ms budget.** This is the single largest behavioural change in this release, and it came from two defects rather than from tuning:
 
-Two populations matter here, and they are reported separately rather than blended.
-Across **all 435 b2 runs**, deadline-miss rate is nonzero on exactly **4**, one reactive and three predictive: `dynamic_circle`/ProxMPC repeat 3 at 0.31 %, `blind_multi_1`/ProxMPC-pred repeats 0 and 1 at 0.19 % and 0.44 %, and `blind_multi_2`/ProxMPC-pred repeat 2 at 0.18 %.
-Across the **110 ProxMPC-family runs** - the only runs where `solve_ms_max` is populated - a single cycle exceeded the 50 ms budget on exactly **6**: 243 ms on `dynamic_circle`/ProxMPC repeat 3 and 65 ms on `dynamic_multi`/ProxMPC repeat 4, against 260 ms and 231/244 ms on `blind_multi_2`/ProxMPC-pred repeat 2 and `blind_multi_1`/ProxMPC-pred repeats 0-1, plus 98 ms on `blind_multi_3`/ProxMPC-pred repeat 0.
-The campaign peak of **260 ms** belongs to the predictive preset on `blind_multi_2`; the reactive peak is 243 ms.
-Both presets now sit at the same keep-out, so the tail is a property of the multi-mover geometry rather than of one configuration.
+1. `max_iter_sqp` defaulted to 100. On a failed solve the loop re-linearised up to 99 more times around an iterate it had already corrupted, then braked anyway. Worst-case cycles of 300 ms were measured on three separate cells - six times the budget, and 15 cm of open-loop travel at 0.5 m/s. The default is now 1, which is what the real-time iteration scheme this controller implements actually prescribes.
+2. The QP was re-initialised from scratch every cycle. `guess: true` named a warm start that never happened, because `init()` rebuilt the workspace and discarded the previous primal/dual iterate 20 times a second. The workspace is now updated in place, which cut the worst case by a further ~40 %.
 
-That the reactive outlier moved from a two-mover cell to the orbit cell is worth stating plainly but not over-reading: one cycle in one run out of five is a tail sample, the same "boundary-sensitive" population Section 8 documents, and nothing about the wider keep-out predicts which cycle pays the full symbolic cost.
-Each cycle rebuilds the QP factorization from scratch, so any hard cycle can.
-The solver returned a feasible QP solution in time on 431 of 435 runs; where reactive ProxMPC misses on a multi cell (Section 6.4) it is the *geometry* of the convex keep-out that fails, not the solver's timing or feasibility - and Section 6.4 shows a wider keep-out does not fix that geometry.
+`SQP iters` sitting at 1.00 is the fixed real-time iteration, not a convergence report; `QP ext iters` at 7.0-7.5 against a 10 000 cap shows the QP itself converges quickly when it converges at all.
+
+**One thing this table does not explain.** The reactive preset reports `PROXQP_PRIMAL_INFEASIBLE` on 14 of 50 runs (roughly 0.1-0.3 % of cycles within them), where the published `v1.0.0`-era campaign reported none. The QP's feasible set is provably non-empty - the constant sequence `u(k) = u_prev` satisfies the control box, the rate chain and the row-0 rate anchor simultaneously, and the obstacle rows are fully soft - so every such report is a false certificate. Three candidate causes were tested and eliminated by measurement: a warm start that violated its own rate chain, the absent solver warm start, and large-magnitude bounds on unused obstacle slots. The cause is still unknown.
+
+It is benign in every way the harness can measure: the controller brakes for that cycle, the next one solves, worst-case latency stays at 33.9 ms, and no infeasible cycle has been traced to a collision. It is recorded here because it is real and unexplained, not because it is known to matter.
 
 ## 6. Obstacle avoidance
 
-The open cell cannot show avoidance, so these scenarios place obstacles across the path and let every controller perceive them through the same local and global `obstacle_layer`.
-Because the kinematic plant has no collision physics, "reaching the goal" alone does not prove avoidance - a controller can drive straight through an obstacle and still "succeed" - so the discriminating metric is the **obstacle gap** (robot-disc to obstacle-disc; negative = overlap = would-be collision).
-
-The global costmap carries an `obstacle_layer`, so NavFn routes the global plan around obstacles for every controller, and every cell uses one uniform obstacle size (`clearance 0.45`). The single-obstacle cells (Section 6.1-6.2) are within reach of the whole field and separate the controllers on *margin* and on the orbiting case; the multi-obstacle cells (Section 6.4) are where collision counts spread. Two comparisons carry the result: ProxMPC against the other optimisation- and sampling-based controllers - **DWB** and **MPPI**, its per-cycle-cost peers - and ProxMPC against the geometric pursuit controllers - **RPP**, **Graceful** and **Vector Pursuit** - which trade avoidance headroom for near-zero compute.
-
 ### 6.1 Static obstacle (`static_box`, mode b2)
 
-A 0.25 m box placed **dead-centre** on the path at `(0, 0)`; with the obstacle-routed global plan every controller has a path that already bends around it.
-The last two columns carry the per-scenario **cost of that avoidance** (the same decorator/process instruments as Section 4), so clearance and its price are read together.
+| Controller | collisions | min gap [m] | mean gap [m] | cross-track max [m] |
+| --- | --- | --- | --- | --- |
+| **ProxMPC** (reactive) | 0/5 | **+0.374** | **+0.381** | 0.737 |
+| **ProxMPC (predictive)** | 0/5 | +0.296 | +0.298 | 0.650 |
+| RPP | 0/5 | +0.208 | +0.213 | 0.568 |
+| MPPI | 0/10 | +0.205 | +0.211 | 0.586 |
+| Graceful | 0/5 | +0.198 | +0.207 | 0.571 |
+| Vector Pursuit | 0/5 | +0.113 | +0.142 | 0.551 |
+| DWB | 0/5 | +0.064 | +0.089 | 0.456 |
 
-| Controller | success | obstacle gap [m] | collision | compute p50/p95 [ms] | CPU [%] |
-| --- | --- | --- | --- | --- | --- |
-| **ProxMPC** | 5/5 | **+0.448 ± 0.001** | **0/5** | 1.53 / 4.22 | 7.6 |
-| **ProxMPC (predictive)** | 5/5 | +0.395 ± 0.000 | **0/5** | 1.08 / 3.52 | 6.8 |
-| Regulated Pure Pursuit | 5/5 | +0.223 ± 0.021 | 0/5 | 0.22 / 0.41 | 3.9 |
-| Graceful | 5/5 | +0.212 ± 0.004 | 0/5 | 0.16 / 0.27 | 4.0 |
-| MPPI | 10/10 | +0.208 ± 0.003 | 0/10 | 2.85 / 4.17 | 8.7 |
-| DWB | 5/5 | +0.087 ± 0.008 | 0/5 | 2.76 / 4.43 | 8.9 |
-| Vector Pursuit | **3/5** | +0.212 ± 0.086 | 0/5 | 0.21 / 0.37 | 4.0 |
+Every controller clears the static box - an obstacle-routed global plan does most of this work, as Section 2.1 notes.
+The separation is in *margin*: reactive ProxMPC keeps +0.374 m at its closest against DWB's +0.064 m, and it pays for that with the largest detour (0.737 m cross-track against 0.456). That trade is the in-loop keep-out doing exactly what it is asked to: `d_safe` is a hard-ish constraint the optimiser plans around, not a cost it trades away.
 
-Every controller clears the static box collision-free, so the discrimination is in the *margin*, not in whether they hit.
-**ProxMPC keeps the largest margin of the field - +0.448 m**, up from +0.350 m at the 0.32 m keep-out, and it is the tightest-clustered result in the whole campaign (± 0.001 m over five runs, individual gaps +0.446 to +0.449 m).
-That near-zero spread is the clearest single piece of evidence for how the constraint behaves: the solver rides *exactly* on `d_safe`, so the measured clearance tracks the parameter almost one-for-one - a +0.10 m increase in `safety_margin` bought +0.098 m of measured margin.
-The behaviour is unchanged - swerve wide and recover, what the in-loop keep-out constraint produces - and it still costs **~1.8x less per-cycle compute than DWB and MPPI**, down from ~2.4x.
-Predictive ProxMPC holds +0.395 m at the same 0.42 m keep-out; the tracker reports the box at ~0 velocity, so the hybrid fill treats it much like the reactive path. It sits 0.053 m inside the reactive result, which is the `costmap_cost_threshold` difference rather than prediction: at 253 it ingests only inscribed and lethal cells, so it inflates fewer of them than the reactive preset does at 200.
-Among the cost-class peers, **DWB still cuts it finest at +0.087 m** - its soft `BaseObstacle` critic rides close to the inflated edge - while MPPI holds +0.208 m; among the geometric controllers RPP and Graceful hold ~+0.21-0.22 m.
-**Vector Pursuit now completes 3 of 5 runs (was 0/5 in the previous campaign)**, with no source change on either the plugin or the harness: its own forward-collision check (`use_collision_detection`) is close enough to a decision boundary here that bring-up and discovery timing alone flip the outcome run to run. The 2 stopped-short runs report a gap of ~0.31 m (a stopped-short distance, not a steered avoidance); the 3 completed runs steer around at ~0.13-0.18 m. The blended +0.212 ± 0.086 m in the table above mixes both behaviours and should be read with that in mind, not as a single steering margin.
+### 6.2 Single moving obstacles (3 cells, mode b2)
 
-### 6.2 Single moving obstacles (mode b2, reactive)
+| Controller | collisions | min gap [m] | mean gap [m] |
+| --- | --- | --- | --- |
+| **ProxMPC (reactive)** | **0/15** | **+0.264** | +0.443 |
+| **ProxMPC (predictive)** | **0/15** | +0.114 | +0.437 |
+| MPPI | 0/30 | +0.128 | **+0.445** |
+| RPP | 1/15 | -0.048 | +0.292 |
+| Vector Pursuit | 1/15 | -0.050 | +0.340 |
+| DWB | 4/15 | -0.341 | +0.256 |
+| Graceful | 4/15 | -0.065 | +0.216 |
 
-Three single-mover scenarios - a patrol crossing the path forward (`dynamic_line_forward`) and backward (`dynamic_line_backward`) at 0.6 m/s, and an obstacle orbiting near mid-path (`dynamic_circle`) at 0.5 m/s.
-Most of the field clears these reactively; the orbiting case is where the field splits, and reactive ProxMPC has moved from the losing side of that split to the winning one:
+Both ProxMPC presets and MPPI clear all three single-mover cells collision-free; DWB and Graceful collide on 4 of 15 each.
+Reactive ProxMPC holds the largest *worst-case* margin in the field at +0.264 m - no run came closer than 26 cm - while MPPI edges it on the mean.
 
-| Scenario | metric | ProxMPC | ProxMPC-pred | DWB | MPPI | RPP | Graceful | VecPursuit |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| line_forward | collision | 0/5 | 0/5 | 0/5 | 0/10 | 0/5 | 0/5 | 0/5 |
-| | min gap [m] | **+0.59** | +0.36 | +0.47 | +0.55 | +0.40 | +0.32 | +0.46 |
-| line_backward | collision | 0/5 | 0/5 | 0/5 | 0/10 | 0/5 | 0/5 | 0/5 |
-| | min gap [m] | +0.56 | +0.37 | +0.49 | **+0.60** | +0.41 | +0.30 | +0.46 |
-| circle | collision | **0/5** | 0/5 | **5/5** | 0/10 | 1/5 | **5/5** | 0/5 |
-| | min gap [m] | +0.09 | **+0.19** | **-0.28** | +0.17 | +0.05 | **-0.07** | +0.14 |
-
-**On the two straight patrols every controller keeps a real margin (0 collisions)**, and reactive ProxMPC now holds the widest gap of the field on `line_forward` (+0.59 m, from +0.50 m) and second only to MPPI on `line_backward` (+0.56 m, from +0.54 m).
-
-**On the orbiting obstacle the reactive result reverses: ProxMPC now clears it 0/5 at +0.093 m, where at the 0.32 m keep-out it collided 3/5 at a mean gap of -0.005 m.**
-Every one of the five runs is positive (+0.009, +0.033, +0.038, +0.073, +0.310 m), so this is not a near-boundary coin flip resolving favourably - the whole distribution moved off the boundary.
-The mechanism is specific and worth stating plainly, because the previous revision of this document could not name one.
-
-The orbit failure was a *margin* problem, not a prediction problem. The keep-out is a hard constraint built from the obstacle's **current** costmap position, and the solver rides exactly on it - Section 6.1's ± 0.001 m static-box clustering is that behaviour measured directly. At `d_safe = 0.32 m` there was therefore nothing left over to absorb the obstacle's own displacement between one costmap update and the next, which on a 0.5 m/s orbiter is several centimetres per cycle - the exact size of the negative gaps recorded. Bisect established that the reactive path had previously been leaning on an *implicit* margin from a different mechanism: commit `6d12bd9` raised the endpoint footprint-veto threshold from `INSCRIBED_INFLATED_OBSTACLE` to `LETHAL_OBSTACLE`, matching upstream Nav2, and in doing so removed a veto that had been rejecting endpoints in the inflation ring. Raising `safety_margin` restores that margin in the QP keep-out, where a margin belongs, rather than in a footprint veto that was enforcing it as a side effect.
-
-This is the one place in this campaign where the wider keep-out is unambiguously the right trade. Predictive ProxMPC also widened at the matched keep-out, from +0.10 m to **+0.19 m**, and stays 0/5; reactive ProxMPC now clears the cell without a tracker, at roughly half the predictive margin. DWB (5/5) and Graceful (5/5) remain the field's clear failures here - both still commit to a trajectory the obstacle then orbits into, and the routed global plan, computed once against the obstacle's initial footprint, still does not track the moving object.
-
-The price is compute: the orbit cell is where the wider keep-out costs most among the single-obstacle cells, at 2.26 ms median (from 1.92 ms) and a p95 of 8.87 ms (from 7.75 ms), the highest single-obstacle p95 in the campaign, and it is the one single-obstacle cell where ProxMPC's process CPU (10.4 %) now exceeds DWB's and MPPI's (~9.0 %). ProxMPC stays 1.25x lighter than both at the median here, down from 1.5x.
+A single moving obstacle is where the costmap-only fill is still sufficient: the obstacle's position lag costs the controller reaction time, but the free corridor beside it is wide enough to absorb a late swerve. That stops being true with two movers, which is Section 6.4.
 
 ### 6.3 Ground-truth predictive confirmation (mode b1)
+
+> **Carried over unchanged.** This section reports the 40-run mode-(b1) campaign at commit `1e170ad`; it was not re-run in this pass. Mode (b1) drives the engine plant directly, using neither the costmap nor the Nav2 stack, so none of the changes since - the keep-out correction, the SQP and warm-start fixes, the control-box change - alters what it measures about the formulation's ceiling. Read the absolute solve times against their own session, not against Section 5.
 
 One controller-vs-tracker separation is worth recording: fed the *correct* future obstacle positions (mode b1, the engine knows the exact trajectory, orbit included), ProxMPC reaches the goal on every single moving-obstacle case for both vehicle models.
 This section was re-run when reactive ProxMPC was still colliding 3/5 on the orbit, as a ceiling check on the formulation.
@@ -304,77 +259,83 @@ Two differences from the `v1.0.0` b1 table are worth recording, neither of them 
 
 ### 6.4 Multiple simultaneous moving obstacles - where the field separates
 
-The single-obstacle cells discriminate a little more than before (Section 6.1-6.2), but the collision comparison still rests on the **multi-mover** set: `dynamic_multi` and `dynamic_multi_noise` (two hand-built simultaneous movers, the latter with sensor noise), and `blind_multi_0`-`blind_multi_3` (blind, author-independent two-mover cells, generated without hand-screening).
-Six cells, 30 runs per controller (60 for MPPI), collision per cell:
+Six cells with two simultaneous movers. Four of them (`blind_multi_0..3`) are *blind*: their geometry comes from a seeded RNG with no controller run to screen it, so no cell was kept or discarded because of how any controller performed on it.
 
-| Scenario | ProxMPC | ProxMPC-pred | DWB | MPPI | RPP | Graceful | VecPursuit |
-| --- | --- | --- | --- | --- | --- | --- | --- |
-| dynamic_multi | 4/5 | 0/5 | 1/5 | 4/10 | 0/5 | 3/5 | 2/5 |
-| dynamic_multi_noise | 5/5 | 0/5 | 2/5 | 3/10 | 0/5 | 4/5 | 1/5 |
-| blind_multi_0 | 2/5 | **3/5** | 0/5 | 10/10 | 2/5 | 2/5 | 5/5 |
-| blind_multi_1 | 1/5 | 1/5 | 0/5 | 6/10 | 1/5 | 2/5 | 0/5 |
-| blind_multi_2 | 5/5 | 0/5 | 5/5 | 0/10 | 5/5 | 5/5 | 5/5 |
-| blind_multi_3 | 2/5 | 0/5 | 0/5 | 7/10 | 0/5 | 0/5 | 2/5 |
-| **aggregate collisions** | **19/30** | **4/30** | **8/30** | **30/60** | **8/30** | **16/30** | **16/30** |
-| **aggregate success** | 30/30 | 30/30 | 30/30 | 60/60 | 30/30 | 30/30 | 29/30 |
-| **median margin [m]** | -0.062 | **+0.233** | +0.098 | +0.002 | +0.124 | -0.006 | -0.020 |
-| **runs within 0.15 m of contact** | 29/30 | **8/30** | 21/30 | 51/60 | 19/30 | 30/30 | 25/30 |
+| Controller | `dyn_multi` | `dyn_multi_noise` | `bm0` | `bm1` | `bm2` | `bm3` | total |
+|---|---|---|---|---|---|---|---|
+| **ProxMPC (predictive)** | 0/5 | 0/5 | 1/5 | 1/5 | 0/5 | 1/5 | **3/30 (10 %)** |
+| RPP | 0/5 | 0/5 | 1/5 | 1/5 | 5/5 | 0/5 | 7/30 (23 %) |
+| DWB | 2/5 | 2/5 | 1/5 | 0/5 | 5/5 | 0/5 | 10/30 (33 %) |
+| MPPI | 4/10 | 5/10 | 9/10 | 4/10 | 0/10 | 8/10 | 30/60 (50 %) |
+| Graceful | 4/5 | 4/5 | 1/5 | 0/5 | 5/5 | 1/5 | 15/30 (50 %) |
+| ProxMPC (reactive) | 1/5 | 1/5 | 5/5 | 1/5 | 4/5 | 3/5 | 15/30 (50 %) |
+| Vector Pursuit | 0/5 | 1/5 | 5/5 | 5/5 | 5/5 | 3/5 | 19/30 (63 %) |
 
-**Read the margin rows, not the collision counts.** These cells are deliberately marginal: 63-100 % of the six non-predictive controllers' runs finish within 0.15 m of contact, so a few centimetres of scheduling jitter flips a near-miss into a collision. Reactive ProxMPC is now at 29 of 30 runs inside that band, the tightest-packed of the field after Graceful. The median closest approach is the more stable statistic and is the discriminator this section rests on.
+**Predictive ProxMPC leads by more than a factor of two**: 3 collisions in 30 against 7 for the next best. It is also the only controller with no cell worse than 1/5 - every other controller has at least one cell it fails 4 or 5 times out of 5.
 
-**The wider keep-out does not help here, and slightly hurts.** This is the central negative result of the re-measurement. Raising `d_safe` from 0.32 m to 0.42 m moved reactive ProxMPC's aggregate collisions from 18/30 to **19/30** and its median margin from -0.047 m to **-0.062 m** - the wrong direction on both, though by less than the cell-to-cell noise this section documents. Per cell the changes cancel rather than accumulate: `dynamic_multi` 3/5 to 4/5, `dynamic_multi_noise` 4/5 to 5/5 and `blind_multi_3` 1/5 to 2/5 got worse, `blind_multi_0` 3/5 to 2/5 and `blind_multi_1` 2/5 to 1/5 got better, and `blind_multi_2` stayed at 5/5. The one unambiguous gain is completion: aggregate success went from 29/30 to **30/30**, so the reactive path no longer loses a run outright on these cells.
+Because these cells are deliberately marginal, the collision count alone overstates its own precision. The median closest approach is the steadier statistic:
 
-The reason a wider keep-out cannot fix these cells is the same reason it fixed the orbit, read in reverse. On the orbit there is one obstacle and one feasible side to pass it, so more margin is simply more room. On a two-mover cell the controller must choose *which side of each obstacle* to pass, and the linearised keep-out represents only one convex half-plane per obstacle per horizon node - it cannot represent the disjunction. Widening `d_safe` enlarges an already-wrong convex region rather than fixing the side-choice, and on the cells where the two movers close from opposite sides it removes feasible corridor that the narrower disc could still thread. That is a limitation of the constraint's *form*, not its size, and no value of `safety_margin` addresses it.
+| Controller | median closest approach [m] | runs within 0.15 m of the threshold |
+| --- | --- | --- |
+| **ProxMPC (predictive)** | **+0.159** | 13/30 (43 %) |
+| RPP | +0.128 | 17/30 (57 %) |
+| DWB | +0.064 | 11/30 (37 %) |
+| ProxMPC (reactive) | -0.001 | 23/30 (77 %) |
+| MPPI | -0.003 | 44/60 (73 %) |
+| Graceful | -0.008 | 24/30 (80 %) |
+| Vector Pursuit | -0.036 | 20/30 (67 %) |
 
-By margin the ordering among the five stock controllers is unchanged, since they were not re-run: **predictive ProxMPC leads the field at +0.233 m**, up from +0.157 m at the narrower keep-out, ahead of RPP (+0.124), DWB (+0.098), MPPI (+0.002), Graceful (-0.006) and Vector Pursuit (-0.020). It is by a wide margin the only controller with fewer than half its runs inside the marginal band, and that improved too (8/30, from 13/30). **Reactive ProxMPC remains the field's narrowest, now at -0.062 m**, and the gap to its nearest peers (Vector Pursuit -0.020, Graceful -0.006) widened again after having closed in the previous campaign.
+Predictive ProxMPC leads on both measures, and spends the least time near the threshold of any controller except DWB. Everything from reactive ProxMPC downward has a *negative* median - the typical run ends overlapping.
 
-Prediction therefore remains the effective answer on multi-mover cells - it moves ProxMPC from the field's narrowest margin to its widest and from 19/30 collisions to 4/30, and the cheaper intervention, more margin on the reactive path, has now been measured and does not substitute for it.
-But the wider keep-out did not help the predictive path either, and on one cell it hurt: at the matched 0.2 m keep-out predictive collisions rose from 1/30 to **4/30**, with all three of the additional collisions on `blind_multi_0` (0/5 to 3/5) and one on `blind_multi_1`.
-That its *median* margin widened at the same time (+0.157 m to +0.233 m) while its collision count rose is the same pattern the reactive path shows, and it says the two statistics are measuring different things on these cells: the typical run got safer while a particular geometry got worse.
-The two ProxMPC rows now share a keep-out but still differ in `costmap_cost_threshold` (200 against 253) and `w_weight` (100 against 1000), so the pair still does not isolate prediction (Section 8).
+**Why the reactive preset is in that lower group, and why it got worse.**
+The costmap-only fill scans a single present-time costmap around every predicted node, so a moving obstacle is constrained where it currently is rather than where it will be - an error of `v_obs * t_node`, up to a metre at the far end of a 2 s horizon. With one mover the free corridor absorbs the resulting late reaction (Section 6.2, 0/15). With two, that corridor closes.
 
-The cell where ProxMPC's reactive keep-out is weakest by margin is still `blind_multi_2`, and it got tighter rather than looser (median -0.245 m, from -0.197 m). `blind_multi_2` is also DWB's worst cell (-0.236 m) and Graceful's worst (-0.144 m) - it remains the hardest geometry for several of the field at once. Predictive ProxMPC's worst cell moved: it is now `blind_multi_0` at **-0.026 m**, the first negative per-cell median the predictive preset has recorded, where at the narrower keep-out its worst was `blind_multi_1` at +0.120 m and all six medians were positive. No controller is collision-free across the blind cells, and the winner is still cell-dependent - DWB clears three cells outright but collides 5/5 on `blind_multi_2`.
+The reactive rate also moved from 40 % in the `v1.0.0`-era campaign to 50 % here, and the cause is a deliberate change rather than a regression in the avoidance logic. Previously `allow_reversing: false` filtered only which plan pose the reference tracked; the solver's control box still admitted reverse, so the robot could back out of a closing gap. That was a defect - the parameter did not do what it said - and fixing it removed an escape the costmap-only path was relying on. Restoring reverse and changing nothing else recovers 11/30 and lifts the mean margin from -0.005 m to +0.142 m, with path length on `blind_multi_1` rising from 5.2 m to 7.0 m: the robot reversing and re-approaching, not detouring.
 
-The per-cell breakdown for every controller is in [`prox_mpc_benchmark/README.md`](../prox_mpc_benchmark/README.md) and the raw `results/`.
-In summary: ProxMPC keeps the largest static margin (Section 6.1), now clears all three single moving-obstacle cells reactively including the orbit that previously beat it (Section 6.2), and remains the narrowest of the field on the two-mover cells, where prediction rather than margin is what closes the gap - all at a per-cycle cost that the wider keep-out raised enough to erase its median advantage over DWB and MPPI on the hardest cells (Section 4).
+The shipped default stays forward-only, because a library cannot check whether an integrator's platform senses the reverse direction. `allow_reversing: true` with an explicit `model_params.v_min` is supported and measurably better on this path, and the bundled Gazebo demo enables it - the waffle's 360-degree scanner covers the rear and Nav2's Collision Monitor, already in the demo's `cmd_vel` chain, projects the footprint along the commanded twist including reverse.
+
+**What this section does not claim.** `blind_multi_2` is 5/5 for four of the seven controllers and 0/10 for MPPI; `blind_multi_0` is 5/5 for two and 1/5 for three. Individual cells swing hard, and peer controllers loading no changed code moved by 5-10 points between campaigns. The totals over 30 runs are the comparison; the per-cell columns are shown for completeness, not for ranking.
 
 ## 7. Real-stack validation (Gazebo)
 
 To confirm the plugin behaves under the full production stack and not only against a kinematic plant, ProxMPC also runs in mode (a): Gazebo Harmonic physics, a TurtleBot3 waffle, AMCL localization, costmaps, and the complete Nav2 velocity chain, headless.
 It reaches the goal (`SUCCEEDED`), tracks the path to **5.6 mm cross-track RMS**, and taps its diagnostics through the real `controller_server` (p95 solve 0.438 ms, 0 % deadline-miss, 0 % infeasible) - the same profile measured on the plant, with real sensor and physics noise.
 
-> Mode (a) was not re-run in this pass (it needs a working GPU driver, and the host used for every campaign to date renders Gazebo in software, which starves the control loop). This section still reflects the `v1.0.0` baseline and is pending its own re-validation; the b1/b2 numbers elsewhere in this document are unaffected, since neither uses Gazebo.
+> **Mode (a) was not re-run in this pass and this section still reflects the `v1.0.0` baseline.** The stack was verified to bring up and reach "managed nodes are active" at the current commit, so the plugin still loads and configures under Gazebo Harmonic; no navigation run was measured. The b1/b2 numbers elsewhere in this document are unaffected, since neither uses Gazebo. Note also that the demo's baseline config runs `max_obstacles: 0`, so the in-loop keep-out is inactive there and avoidance is delegated to Nav2's planner and costmaps; a Gazebo run that exercises the controller's own avoidance needs `predictive:=True`.
 
 ## 8. Threats to validity
 
-- **This re-validation surfaces a systematic host-timing drift between the two measurement sessions, visible on plugin code this repository never touched.** DWB, MPPI, Regulated Pure Pursuit, Graceful, and Vector Pursuit are stock Nav2/community binaries (confirmed at the same versions as the previous campaign - Nav2 1.3.12, `vector_pursuit_controller` 2.0.0), and the shared harness code (`scan_simulator.cpp`, `kinematic_plant.cpp`, every `config/` file this campaign used) is byte-identical to the previous campaign. Yet DWB and MPPI's per-cycle compute p95 rose by roughly 0.6-1.7 ms on almost every scenario, and RPP/Graceful/Vector Pursuit's CPU reading dropped by roughly 0.3-0.6 points almost everywhere. Since none of that code changed, the most defensible explanation is background load, thermal/turbo state, or scheduler variance between the two sessions on the same physical host - not a software effect. This bounds how confidently any *ProxMPC-side* shift of similar magnitude can be attributed to the intervening code changes versus the same host effect; the two per-cycle open-cell wins reported in Section 4 are large enough (halving, not shifting by tens of percent) and directionally opposite to the host drift to stand on their own, but smaller shifts should be read with this in mind.
-- **The ProxMPC rows and the other six controllers' rows come from different measurement sessions**, one day apart on the same host (see Provenance at the top). This is sound for the comparisons this document draws - the physical obstacles, plant, map, planner and instrumentation are identical, and the other controllers do not read the changed parameter - but it means any ProxMPC-versus-peer difference carries one session boundary's worth of host-timing drift on top of the parameter effect. The drift documented in the bullet above was measured at roughly 0.6-1.7 ms of p95 on stock plugin code; ProxMPC's compute shifts in Section 4 are larger than that (roughly doubling on the open cell) and are additionally explained by a traceable mechanism in the diff, so they stand. Differences of a few tenths of a millisecond between ProxMPC and a peer should not be read as real.
-- **Vector Pursuit's static-box completion flipped between campaigns on plugin code that did not change** (0/5 to 3/5, Section 6.1), and remains carried over unchanged here. It is treated as evidence that this specific decision point sits close to a boundary that run-to-run timing can cross, not as an attributed regression.
-- **The two ProxMPC rows still do not isolate prediction, though less badly than before.** Both presets now run `safety_margin: 0.2`, so the keep-out width no longer differs. Two tuning parameters still do: `costmap_cost_threshold` (200 reactive against 253 predictive) and `w_weight` (100 against 1000). The reactive-versus-predictive comparisons in Sections 4 and 6.4 are therefore configuration-versus-configuration, not prediction in isolation. The direction of the multi-mover result is large enough (4/30 against 19/30 collisions, +0.233 m against -0.062 m) that the two remaining differences do not plausibly account for it, but the compute comparison in Section 4 stays confounded: the threshold difference alone changes how many costmap cells each preset ingests and inflates.
-- **The obstacle-routed global plan does much of the single-obstacle avoidance** (Section 6). The shared global `obstacle_layer` makes NavFn route around obstacles for every controller - deliberately equal, but it favours the geometric path-followers (RPP, Graceful, Vector Pursuit) and DWB, which track the global detour closely. The single-obstacle cells therefore separate the field on margin and on the orbiting case, not on collision counts; the multi-mover cells (Section 6.4) carry the collision comparison.
-- **The multi-obstacle field is close and the sample is small** (Section 6.4). 63-100 % of runs across the six cells finish within 0.15 m of contact, so the per-cell collision counts swing by more than the gap between most controllers. Reactive ProxMPC's aggregate moved by one run (18/30 to 19/30) and its median margin by 15 mm across this change - **both inside the noise this section documents**, which is why Section 6.4 states that the wider keep-out does not help rather than that it hurts. The per-cell counts moved in both directions (three cells worse, two better, one flat), which is the signature of noise rather than a directed effect. What is *not* inside the noise is the direction of the whole-distribution shift on the orbit cell (Section 6.2), where all five runs moved off the boundary together.
-- **A five-repeat sample cannot resolve a 15 mm median shift.** Section 6.4's conclusion that margin is the wrong lever for multi-mover cells rests on the mechanism (a convex keep-out cannot represent the which-side disjunction) and on the absence of improvement, not on the sign of the 15 mm change. Distinguishing "slightly worse" from "unchanged" on these cells would need more repeats than this campaign runs.
-- **Collision uses a strict min-gap** - any instant of disc overlap over the whole run counts as a collision, so a brief graze is flagged the same as a harder hit; the reported min gap distinguishes the two.
-- **The per-cycle cost of the wider keep-out is measured on this map's geometry, and does not generalise unchanged.** The open-cell doubling in Section 4 happens because a 0.72 m scan radius reaches the walls of a 7 x 7 m room near the start and goal. In a larger space, or with obstacles farther from the path, the same parameter change would cost less; in a tighter one it would cost more. What transfers is the mechanism and its direction, not the factor.
-- **Resources are measured on the x86 host** above (confirmed identical hardware, CPU model, and OS version to every prior campaign via `/proc/cpuinfo` and `/etc/os-release`), and process CPU/RAM is per-process (includes the shared costmap); the per-cycle compute (Section 4) is the cleaner controller-only measure, and the ranking is what transfers. The pure-geometric controllers are genuinely lighter than ProxMPC - ProxMPC is the cheapest of the controllers that solve a constrained optimisation each cycle, not the cheapest outright.
-- **MPPI is stochastic with no exposed seed** (Nav2 Jazzy), so its per-scenario variance is real; it runs 10 repeats per obstacle cell (5 on the open cell) to better characterise that variance, but this does not pin it down exactly. Its multi-obstacle median margin fell from +0.048 to +0.002 this campaign - within the same "close field, small sample" caveat as the rest of Section 6.4.
-- **Determinism vs. physics.** Modes (b1)/(b2) are deterministic plants, so their near-zero geometric std is reproducibility, not a noise estimate; mode (a) carries real Gazebo variance, and `dynamic_multi_noise` adds a Gaussian range-noise model on the scan. Mode (a) was not re-run in this pass (Section 7) and still reflects the `v1.0.0` baseline; mode (b1) was re-run (Section 6.3).
-- **`max_obstacle_slack_m` is a max over sampled cycles, so it is only as reliable as the diagnostics subscription that feeds it** (Section 6.3). On `static_box` the metric's whole run-to-run spread turned out to be whether the metrics node received control cycle 1, whose one-cycle initialisation transient is five times the steady-state peak. The metric is sound for comparing steady-state relaxation once that first cycle is excluded, but a pass/fail gate wired to it as it stands would fail on a subscription race rather than on solver behaviour. This bounds what the slack column can be used for, here and in any future campaign; it does not affect the success, geometry, feasibility, or deadline results, which are unchanged in kind from the `v1.0.0` table.
-- **b1 solve time rose on all eight cells** (median +0.4 to +2.7 ms) with no candidate cause in the diff, since mode b1 uses neither the costmap nor the Nav2 stack; it is reported as observed, consistent with the session-to-session host drift above. Every cell still solves far inside the 50 ms budget at 0 % deadline-miss and 0 % infeasible. The first-cycle transient in Section 6.3 is not the cause: measured per cycle, cycle 1 is never the slowest solve of a run.
-- **The demonstration videos under `prox_mpc_benchmark/doc/media/` were not re-recorded.** The `dynamic_circle` grid in particular now shows behaviour this document no longer reports: it was recorded with reactive ProxMPC colliding on the orbit, which at `safety_margin: 0.2` it no longer does. The `static_box` grid shows a 0.098 m narrower ProxMPC margin than the current figure. Whether and when to re-record is an open question for the maintainer, not decided by this pass.
+- **The ProxMPC rows and the peer rows come from different measurement sessions**, one day apart on the same host (see Provenance). The physical obstacles, plant, map, planner, goal checker and instrumentation are identical, and no peer controller reads a ProxMPC parameter, so the comparison is sound in kind. But a session boundary carries host-timing drift, and differences of a few tenths of a millisecond between ProxMPC and a peer should not be read as real. The compute results in Section 4 are ratios of 2-10x, which is far outside that.
+- **These collision rates are more sensitive to the keep-out than to the algorithm.** Over this work the predictive all-cells rate moved 6 % -> 10 % -> 6 % on a 15 mm change to `d_safe`, with no algorithmic change at all. Any comparison between controllers separated by less than that is not resolved by this campaign.
+- **Peer controllers moved between campaigns on code that did not change.** DWB's single-obstacle collisions went 25 % -> 20 % and Vector Pursuit's all-cells rate 32 % -> 40 % across the two matrices, on stock Nav2/community binaries at identical versions. That sets the noise floor at 5-10 points on 20-50 runs, which is the scale at which per-cell counts in Section 6.4 should be read.
+- **The two ProxMPC presets do not isolate prediction.** Both now share `d_safe = 0.320 m`, so keep-out width no longer differs, but `costmap_cost_threshold` (200 reactive against 253 predictive) and `w_weight` still do. The reactive-versus-predictive comparisons are configuration-versus-configuration. The multi-mover direction is large enough (3/30 against 15/30) that the remaining differences do not plausibly account for it; the compute comparison in Section 4 stays confounded, since the threshold alone changes how many costmap cells each preset ingests.
+- **The obstacle-routed global plan does much of the single-obstacle avoidance.** The shared global `obstacle_layer` makes NavFn route around obstacles for every controller - deliberately equal, but it favours the geometric path-followers and DWB, which track that detour closely. The single-obstacle cells therefore separate the field on margin, not on collision counts; the multi-mover cells carry the collision comparison.
+- **The multi-obstacle field is close and the sample is small.** 37-80 % of runs across the six cells finish within 0.15 m of contact, so per-cell counts swing by more than the gap between most controllers. The 30-run totals are the comparison.
+- **Collision uses a strict min-gap:** any instant of disc overlap over a whole run counts, so a brief graze scores the same as a harder hit. The reported min gap distinguishes them.
+- **Resources are x86-64 only.** Every figure in this document was measured on the dev host in Section 2. **No measurement has been taken on the arm64 target this controller is intended for**, so nothing here supports an embedded-performance claim; the ranking is what transfers, not the absolute numbers. The per-cycle compute in Section 4 is the cleaner controller-only measure, since process CPU/RSS includes the shared costmap.
+- **The pure-geometric controllers are genuinely lighter.** ProxMPC is the cheapest of the controllers that solve a constrained optimisation each cycle, not the cheapest outright.
+- **MPPI is stochastic with no exposed seed** in Nav2 Jazzy, so its per-scenario variance is real. It runs 10 repeats per obstacle cell against the others' 5, which characterises that variance without pinning it down.
+- **Determinism vs. physics.** Modes (b1)/(b2) are deterministic plants, so their near-zero geometric std is reproducibility, not a noise estimate. Mode (a) carries real Gazebo variance and was not re-run (Section 7). `dynamic_multi_noise` adds a Gaussian range-noise model on the scan.
+- **Fifteen of 435 matrix runs did not reach the goal and were re-run once**, uniformly and without pre-filtering (see Provenance). Thirteen cleared, two reproduced. The procedure can move results in either direction and did: one MPPI run cleared into a collision it had not previously recorded.
+- **An unexplained solver report remains open.** Reactive ProxMPC emits `PROXQP_PRIMAL_INFEASIBLE` on 14 of 50 runs against none in the previous campaign, on a QP whose feasible set is provably non-empty (Section 5). Three candidate causes were tested and eliminated. It has no measured consequence, but it is not understood.
+- **The demonstration videos under `prox_mpc_benchmark/doc/media/` were not re-recorded** and show behaviour this document no longer reports. They are mode-(b2) screen captures, not Gazebo.
 
 ## 9. Conclusion on ProxMPC
 
-On a like-for-like, fairly-tuned suite, ProxMPC matches the best stock Nav2 controller on tracking, holds the largest static-obstacle margin of the field, and - with the reactive keep-out widened to `d_safe = 0.42 m` - now clears every single moving-obstacle cell reactively, including the orbit that beat it at 0.32 m. The cost is per-cycle compute, which rose on all eleven cells and erased its median advantage over DWB and MPPI on the hardest ones. On simultaneous two-mover cells margin is not the lever; prediction is.
+On a like-for-like, fairly-tuned suite, **predictive ProxMPC is the most reliable obstacle avoider in the field** - 3 collisions in 50 obstacle runs (6 %) against 8 for the next best (RPP, 16 %) - while computing its command 2-10x faster than the two controllers in its own cost class. Its worst-case cycle is now bounded well inside the real-time budget, which was not true of the previous release.
 
-- **Per-cycle compute and process resources (measured, all eleven cells):** ProxMPC computes a command in **0.65 ms median / 1.93 ms p95** on the open cell - **~4.1x lighter than DWB and ~4.4x than MPPI**, down from ~7.8x/~8.4x at the narrower keep-out. It stays 1.6-1.9x lighter on the static box and the straight patrols, 1.25x on the orbit, and is **0.87-0.95x - marginally heavier than DWB** - on four of the six multi-mover cells. Process CPU is 6.2-11.9 % against their 8.6-9.4 %, so it is lighter on the easy cells and heavier on the hard ones. RSS is unchanged at 59 MB. Deadline misses remain essentially absent (4 of 435 b2 runs non-zero), but the tail grew: p95 reaches 4.2-9.4 ms on the hard cells against the samplers' steadier 3.3-5.1 ms, and **6 of 110 ProxMPC-family runs recorded one cycle above the 50 ms budget** (campaign peak 260 ms on the predictive preset's `blind_multi_2`; reactive peak 243 ms) - a direct consequence of rebuilding the QP factorization every cycle. The geometric controllers (RPP, Graceful, Vector Pursuit) are lighter still; ProxMPC's premium over them widened to ~2.3-7.9 % of one core.
-- **Tracking:** sub-millimetre (0.0002 m RMS), on par with DWB and the field, 100 % success. The wider keep-out does not measurably affect tracking on an empty line.
-- **Static-obstacle avoidance:** **ProxMPC keeps the largest real margin, +0.448 m**, up from +0.350 m and far ahead of its cost-class peers MPPI (+0.208 m) and DWB (+0.087 m) and of the geometric RPP and Graceful (~+0.21-0.22 m). The ± 0.001 m spread over five runs is the campaign's tightest and shows the solver riding exactly on `d_safe`, so measured clearance tracks the parameter almost one-for-one.
-- **Single moving obstacles:** all three cells are now cleared reactively - the two straight patrols at the field's widest or near-widest gaps (+0.59 m, +0.56 m), and **the orbit at 0/5 collisions and +0.093 m, where the 0.32 m keep-out collided 3/5 at -0.005 m**. All five orbit runs are positive, so the whole distribution moved rather than a boundary case resolving favourably. The cause is identified rather than observed: the keep-out is built from the obstacle's *current* position and the solver rides exactly on it, so at 0.32 m nothing absorbed a 0.5 m/s obstacle's displacement between costmap updates; commit `6d12bd9` had removed the implicit margin the reactive path was leaning on when it raised the endpoint footprint-veto threshold to `LETHAL_OBSTACLE`, and `safety_margin: 0.2` restores that margin in the QP keep-out where it belongs. DWB (5/5) and Graceful (5/5) remain the field's clear failures here.
-- **Multiple simultaneous moving obstacles:** margin is not the lever. Widening the keep-out moved reactive ProxMPC's aggregate collisions from 18/30 to **19/30** and its median margin from -0.047 m to **-0.062 m** - the wrong direction on both, though within the noise of cells where 63-100 % of runs finish inside 0.15 m of contact. It did lift completion to **30/30**. A convex half-plane per obstacle per node cannot represent the which-side-of-each-obstacle disjunction these cells demand, so a larger disc enlarges an already-wrong feasible region; the limitation is the constraint's form, not its size. Measured by median closest approach, **predictive ProxMPC still leads the entire field, now at +0.233 m** at the matched keep-out, ahead of RPP (+0.124), DWB (+0.098), MPPI (+0.002), Graceful (-0.006) and Vector Pursuit (-0.020), with only 8 of 30 runs inside the marginal band. Its own collision count rose from 1/30 to **4/30** over the same change, all of the increase on `blind_multi_0`, so a wider keep-out did not help the predictive path either. **Reactive ProxMPC remains the field's narrowest at -0.062 m**, and its weakest cell is still `blind_multi_2` (-0.245 m).
-- **One controller, many vehicles:** the identical plugin drives a unicycle and a bicycle by configuration alone, confirmed 40/40 in mode b1, with no model-specific result separating the two.
+- **Real-time behaviour:** **zero cycles above the 50 ms budget across 100 runs**, both presets, with worst observed cycles of 33.9 ms (reactive) and 24.7 ms (predictive). The previous release measured 300 ms worst cases on three separate cells. Two defects caused that and both are fixed: an SQP loop that re-linearised up to 99 times around a corrupted iterate after a failed solve, and a QP workspace rebuilt from scratch every cycle instead of warm-started.
+- **Per-cycle compute:** 0.30 ms median on the open cell - **9.3x lighter than DWB and 9.9x than MPPI** - narrowing to ~2.5x on single-obstacle cells and ~1.2x on the hardest multi-mover cells, because ProxMPC's cost scales with obstacle load while theirs does not. It never inverts. Process CPU is 8.5 % reactive and 7.6 % predictive across all obstacle cells against DWB's 9.3 % and MPPI's 9.1 %; peak RSS 59.7/61.0 MB against 60.2 and 64.8. The three geometric pursuit controllers remain an order of magnitude cheaper and collide 16-40 % of the time.
+- **Tracking:** 0.0001 m cross-track RMS on the open cell, 5/5, indistinguishable from the field. An empty straight line does not separate these controllers.
+- **Static obstacle:** reactive ProxMPC keeps **the largest margin in the field, +0.374 m at its closest**, against RPP's +0.208 and DWB's +0.064, and pays for it with the largest detour (0.737 m cross-track). That is the in-loop keep-out behaving as specified - `d_safe` is planned around, not traded away.
+- **Single moving obstacles:** both presets clear all three cells collision-free (0/15 each), and reactive holds the field's largest worst-case margin at +0.264 m. DWB and Graceful collide 4/15 each.
+- **Simultaneous two-mover cells - where the field separates:** predictive ProxMPC leads on both measures, at **3/30 collisions** against 7 for the next best, and **+0.159 m median closest approach** against RPP's +0.128, DWB's +0.064 and negative medians for everything below. It is the only controller with no cell worse than 1/5.
+- **The costmap-only path is a single-obstacle configuration.** Reactive ProxMPC sits at 15/30 on these cells because the fill constrains each obstacle where it *was*, not where it will be - up to a metre of error at the far end of a 2 s horizon. With one mover the free corridor absorbs that; with two it does not. This is why `predict_obstacles` now defaults to true, and why the reactive preset should be treated as validated for single-obstacle environments only.
+- **One controller, many vehicles:** the identical plugin drives a unicycle and a bicycle by configuration alone, confirmed 40/40 in mode b1 (Section 6.3, carried over from the earlier campaign).
 
-Against DWB and MPPI - its per-cycle-cost peers - ProxMPC is now roughly four times lighter per cycle on the open cell at equal tracking accuracy, holds a much larger static margin, and clears an orbiting obstacle that DWB does not; but it has given up its median compute advantage on the hardest multi-mover cells and now runs slightly heavier there. Against the geometric pursuit controllers it holds larger avoidance margins for a CPU premium that this change roughly doubled. Its one clear remaining weak point is the simultaneous two-mover geometry, where the reactive formulation is limited by the shape of its constraint rather than by its size, and where the obstacle tracker - not a wider keep-out - is what closes the gap.
+**What this release changed, honestly.** The avoidance ranking is essentially unchanged from `v1.0.0`; what changed is that the controller can no longer stall for 300 ms mid-manoeuvre, which on a robot moving at 0.5 m/s is 15 cm of open-loop travel at exactly the wrong moment. The reactive preset's multi-obstacle rate moved from 40 % to 50 %, and that is a deliberate consequence rather than a regression in avoidance: `allow_reversing: false` now genuinely forbids reverse, and backing out was an escape the costmap-only path had been relying on (Section 6.4).
+
+**What remains open:** no arm64 measurement exists, Gazebo validation still reflects `v1.0.0`, and the reactive infeasibility report in Section 5 is unexplained. None of these affect the comparisons above; all three bound what can be claimed beyond them.
 
 ---
 
