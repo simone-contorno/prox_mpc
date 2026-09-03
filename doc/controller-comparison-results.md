@@ -301,7 +301,7 @@ The shipped default stays forward-only, because a library cannot check whether a
 To confirm the plugin behaves under the full production stack and not only against a kinematic plant, ProxMPC also runs in mode (a): Gazebo Harmonic physics, a TurtleBot3 waffle, AMCL localization, costmaps, and the complete Nav2 velocity chain, headless.
 It reaches the goal (`SUCCEEDED`), tracks the path to **5.6 mm cross-track RMS**, and taps its diagnostics through the real `controller_server` (p95 solve 0.438 ms, 0 % deadline-miss, 0 % infeasible) - the same profile measured on the plant, with real sensor and physics noise.
 
-> **Mode (a) was not re-run in this pass and this section still reflects the `v1.0.0` baseline.** The stack was verified to bring up and reach "managed nodes are active" at the current commit, so the plugin still loads and configures under Gazebo Harmonic; no navigation run was measured. The b1/b2 numbers elsewhere in this document are unaffected, since neither uses Gazebo. Note also that the demo's baseline config runs `max_obstacles: 0`, so the in-loop keep-out is inactive there and avoidance is delegated to Nav2's planner and costmaps; a Gazebo run that exercises the controller's own avoidance needs `predictive:=True`.
+> **Mode (a) was not re-run in this pass and this section still reflects the `v1.0.0` baseline.** It is pending its own re-validation. The b1/b2 numbers elsewhere in this document are unaffected, since neither uses Gazebo.
 
 ## 8. Threats to validity
 
