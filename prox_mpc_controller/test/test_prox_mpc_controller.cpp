@@ -1444,10 +1444,26 @@ TEST_F(ProxMpcControllerTest, ComputeFootprintVetoBrakesWithoutFailure)
   EXPECT_EQ(c->failureCount(), 0);               // veto is not a solver failure
 }
 
-// An empty footprint skips the polygon veto (size < 3) and still commands.
+// A footprint the polygon veto cannot use (fewer than 3 points) is skipped, and
+// the command still passes through.
+//
+// The degenerate footprint is two points rather than none: nav2 1.3.13 rejects an
+// empty footprint outright ("a footprint must contain at least one point") and
+// keeps the previous one, so setting none leaves the fixture's real footprint in
+// place, the veto runs against the lethal cost below, and the command is braked -
+// which is what this test would then be asserting the opposite of. Two points
+// clears nav2's own guard while still failing the controller's `size() >= 3`, so
+// the branch under test is reached on 1.3.12 and 1.3.13 alike.
 TEST_F(ProxMpcControllerTest, ComputeSkipsVetoWithoutFootprint)
 {
-  costmap_ros_->setRobotFootprint(std::vector<geometry_msgs::msg::Point>{});
+  geometry_msgs::msg::Point a;
+  geometry_msgs::msg::Point b;
+  b.x = 0.1;
+  costmap_ros_->setRobotFootprint(std::vector<geometry_msgs::msg::Point>{a, b});
+  // The premise, asserted rather than assumed: a future nav2 that also refuses a
+  // two-point footprint must fail here, saying why, instead of as a braked command.
+  ASSERT_LT(costmap_ros_->getRobotFootprint().size(), 3u);
+
   auto c = makeConfigured({rclcpp::Parameter("FollowPath.max_obstacles", 0)});
   c->activate();
   c->setPlan(makeStraightPlan(31, 0.2));
