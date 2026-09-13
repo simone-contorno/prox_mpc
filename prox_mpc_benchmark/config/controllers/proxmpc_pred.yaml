@@ -7,6 +7,17 @@
 # prediction. A confirmed *moving* track is propagated over the horizon and bound
 # to a dynamic slot; the static box/walls still come from the costmap (hybrid).
 FollowPath:
+  # Reverse travel, and the obstacle-aware yield with its hard speed cap. Without
+  # the cap the yield only lowers a cruise target the obstacle term outweighs, and
+  # the solver swerves at full speed past a closing mover instead of slowing:
+  # measured on dynamic_circle over ten runs, this configuration passes behind the
+  # mover 10/10 against 4/10 and holds three times the worst-case clearance
+  # (+0.258 m against +0.085 m), with no collisions either way. The cap needs
+  # somewhere to go, so it is paired with reverse travel; the model pairing below
+  # sets v_min, which is what lifts the plugin's unguarded-reverse speed cap.
+  allow_reversing: true
+  obstacle_yield_band_m: 0.5
+  obstacle_yield_caps_speed: true
   plugin: "prox_mpc_controller::ProxMpcController"
   np: 20
   nc: 20

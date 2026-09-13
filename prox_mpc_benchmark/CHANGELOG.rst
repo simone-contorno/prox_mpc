@@ -2,8 +2,15 @@
 Changelog for package prox_mpc_benchmark
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-2.0.0 (2026-09-01)
+2.0.0 (2026-09-13)
 ------------------
+* ``record_scenarios.py`` cuts each clip to open as the robot first moves,
+  read from ``/odom`` at the same 1 mm threshold that releases the scenario's
+  obstacles, instead of starting a fixed clip before the goal is sent. The
+  goal delay and the stack's start-up latency are no longer dead time in the
+  clip, and a retried goal no longer shortens it. A scenario may set its own
+  clip length with ``video.duration_s``; ``dynamic_circle`` sets 25 s so the
+  orbit is seen through to the goal.
 * The mode-(b2) run index is rebuilt from the records on disk, so a re-run of a
   subset no longer leaves stale rows from a previous campaign in the index.
 * Per-run metrics record the QP status histogram and the SQP / QP external
