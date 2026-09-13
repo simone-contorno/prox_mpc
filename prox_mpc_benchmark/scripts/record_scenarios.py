@@ -15,9 +15,15 @@ tree down with the run_nav2 process-group SIGINT -> grace -> SIGKILL discipline.
 The b2 stack runs on wall/system time (no /clock publisher), so RViz and the
 robot_state_publisher use use_sim_time:=false - the opposite of the Gazebo demo.
 
-ffmpeg is the recorder. Clips are fixed-duration, so the four are length-synced and
-combine cleanly into a 2x2 grid (see combine_grid.sh). Nothing is committed:
-results/ is gitignored. The environment must already be sourced (see init.sh).
+ffmpeg is the recorder. It captures a raw window long enough to cover the stack's
+start-up latency and a goal retry, and each clip is then cut to start at the moment
+the robot first moves - the same event that releases the b2 obstacles, read from
+odom - so a clip opens on the scene coming alive rather than on seconds of a
+frozen robot. Clips are fixed-duration per scenario (a scenario may lengthen its
+own with video.duration_s), so the four controllers of one scenario are
+length-synced and combine cleanly into a 2x2 grid (see combine_grid.sh). Nothing
+is committed: results/ is gitignored. The environment must already be sourced
+(see init.sh).
 """
 
 import argparse
@@ -29,6 +35,7 @@ import shlex
 import shutil
 import subprocess
 import sys
+import threading
 import time
 
 from ament_index_python.packages import get_package_share_directory
@@ -55,6 +62,19 @@ INTER_SCENARIO_SETTLE_S = 3.0
 # as a spurious abort (a real navigation stays busy well past the probe window).
 GOAL_ATTEMPTS = 4
 GOAL_ABORT_PROBE_S = 4.0
+
+# A clip opens this long before the robot's first motion, so the robot is seen at
+# rest for an instant rather than already moving on the first frame.
+PREROLL_S = 0.3
+
+# Raw capture beyond the goal delay and the clip itself: the stack takes a few
+# seconds from goal to first motion, and a spuriously aborted goal is retried after
+# GOAL_ABORT_PROBE_S, so this covers the latency plus one retry.
+CAPTURE_MARGIN_S = 12.0
+
+# The robot counts as moving once it leaves its first pose by this much - the same
+# motion_eps the scan simulator and the obstacle publishers gate their clocks on.
+MOTION_EPS_M = 1.0e-3
 
 
 def load_run_nav2():
@@ -124,6 +144,82 @@ def write_marker_params(path: Path, rn, scn):
         yaml.safe_dump(doc, fh, default_flow_style=None, sort_keys=False)
 
 
+def clip_duration(scn, default):
+    """Clip length [s] for a scenario: its own video.duration_s, else the default."""
+    video = scn.get('video') or {}
+    return float(video.get('duration_s', default))
+
+
+def trim_offset(capture_start, motion_start, preroll):
+    """
+    Seconds into the raw capture at which the clip should begin.
+
+    Both times are on one monotonic clock. None when the robot never moved, which
+    leaves the caller to decide what to keep; otherwise the moment of first motion
+    less the preroll, clamped to the start of the capture.
+    """
+    if motion_start is None:
+        return None
+    return max(0.0, motion_start - capture_start - preroll)
+
+
+def build_trim_cmd(raw_path, offset, duration, out_path):
+    """Cut `duration` seconds from `offset` into the raw capture, re-encoded to be exact."""
+    return [
+        'ffmpeg', '-y', '-nostdin', '-v', 'error',
+        '-i', str(raw_path),
+        '-ss', f'{offset:.3f}',
+        '-t', f'{duration:.3f}',
+        '-c:v', 'libx264',
+        '-preset', 'veryfast',
+        '-pix_fmt', 'yuv420p',
+        '-movflags', '+faststart',
+        str(out_path),
+    ]
+
+
+class MotionWatch:
+    """
+    Record the monotonic time of the robot's first motion, from odom.
+
+    The b2 obstacles start on this same event, so it is the instant the scene comes
+    alive. A background executor spins the subscription while the scenario runs.
+    rclpy is imported here rather than at module level so the pure helpers above
+    stay importable without a ROS context.
+    """
+
+    def __init__(self, topic='odom', eps=MOTION_EPS_M):
+        import rclpy
+        from rclpy.executors import SingleThreadedExecutor
+        from nav_msgs.msg import Odometry
+
+        if not rclpy.ok():
+            rclpy.init()
+        self.motion_start = None
+        self._eps = eps
+        self._first = None
+        self._node = rclpy.create_node('record_scenarios_motion_watch')
+        self._node.create_subscription(Odometry, topic, self._on_odom, 20)
+        self._executor = SingleThreadedExecutor()
+        self._executor.add_node(self._node)
+        self._thread = threading.Thread(target=self._executor.spin, daemon=True)
+        self._thread.start()
+
+    def _on_odom(self, msg):
+        p = msg.pose.pose.position
+        if self._first is None:
+            self._first = (p.x, p.y)
+        elif self.motion_start is None and \
+                ((p.x - self._first[0]) ** 2 + (p.y - self._first[1]) ** 2) ** 0.5 > self._eps:
+            self.motion_start = time.monotonic()
+
+    def close(self):
+        """Stop spinning and release the node."""
+        self._executor.shutdown()
+        self._thread.join(timeout=5.0)
+        self._node.destroy_node()
+
+
 def build_ffmpeg_cmd(display, offset, resolution, framerate, duration, out_path):
     """Build the x11grab record command; -t makes the clip self-terminating."""
     ox, oy = (v.strip() for v in offset.split(','))
@@ -185,6 +281,9 @@ def record_one(scenario, args, rn, out_dir, logs_dir, description):
     write_marker_params(marker_params, rn, scn)
 
     out_path = out_dir / f'{scenario}.mp4'
+    raw_path = logs_dir / f'{scenario}.raw.mp4'
+    duration = clip_duration(scn, args.duration)
+    raw_len = args.goal_delay + CAPTURE_MARGIN_S + duration
     # A recording-only RViz profile: filled to the display, docks and the Nav2
     # panel hidden, camera framing the corridor. Resolve the installed copy first,
     # falling back to the source tree so it works before a rebuild (the script is
@@ -235,13 +334,16 @@ def record_one(scenario, args, rn, out_dir, logs_dir, description):
         'nice', '-n', '19', 'rviz2', '-d', str(rviz_cfg),
         '--ros-args', '-p', 'use_sim_time:=false'])
 
+    watch = MotionWatch()
+    capture_start = None
     try:
         time.sleep(args.warmup)  # let the lifecycle manager activate the servers
         with open(logs_dir / f'{scenario}.xdotool.log', 'w') as xlog:
             place_rviz_window(args.offset, args.resolution, xlog)
         cmd = build_ffmpeg_cmd(args.display, args.offset, args.resolution,
-                               args.framerate, args.duration, out_path)
+                               args.framerate, raw_len, raw_path)
         print(f'[record] {scenario} ffmpeg: {shlex.join(cmd)}', flush=True)
+        capture_start = time.monotonic()
         ffmpeg = launch('ffmpeg', cmd)
         time.sleep(args.goal_delay)
         goal_cmd = ['ros2', 'run', PKG, 'goal_sender.py', '--points', points,
@@ -259,7 +361,7 @@ def record_one(scenario, args, rn, out_dir, logs_dir, description):
                   f'{attempt + 1}/{GOAL_ATTEMPTS}); retrying', flush=True)
             time.sleep(1.0)
         try:
-            ffmpeg.wait(timeout=args.duration + 30.0)
+            ffmpeg.wait(timeout=raw_len + 30.0)
         except subprocess.TimeoutExpired:
             pass
     finally:
@@ -277,7 +379,27 @@ def record_one(scenario, args, rn, out_dir, logs_dir, description):
             ['pkill', '-9', '-f',
              'lib/(nav2_|prox_mpc_benchmark|prox_mpc_obstacle_tracker)/[a-z_]+ --ros-args'],
             check=False)
+        watch.close()
         time.sleep(INTER_SCENARIO_SETTLE_S)
+
+    # Cut the clip to open as the robot first moves. A robot that never moved has
+    # nothing worth trimming to; keep the head of the capture and say so, so a
+    # failed navigation is not mistaken for a good clip.
+    offset = None if capture_start is None else \
+        trim_offset(capture_start, watch.motion_start, PREROLL_S)
+    if offset is None:
+        print(f'[record] {scenario} WARNING: the robot never moved; keeping the first '
+              f'{duration:.0f} s of the capture untrimmed', flush=True)
+        offset = 0.0
+    elif offset + duration > raw_len:
+        print(f'[record] {scenario} WARNING: motion began {offset:.1f} s in, so the clip '
+              f'runs past the {raw_len:.0f} s capture and will be short', flush=True)
+    with open(logs_dir / f'{scenario}.trim.log', 'w') as tlog:
+        subprocess.run(build_trim_cmd(raw_path, offset, duration, out_path),
+                       stdout=tlog, stderr=subprocess.STDOUT, check=True)
+    raw_path.unlink(missing_ok=True)
+    print(f'[record] {scenario} clip: {duration:.0f} s from {offset:.1f} s into the capture',
+          flush=True)
     return out_path
 
 
@@ -287,7 +409,8 @@ def main() -> int:
     ap.add_argument('--scenarios', default=DEFAULT_SCENARIOS)
     ap.add_argument('--controller', default='proxmpc_pred')
     ap.add_argument('--robot', default='waffle')
-    ap.add_argument('--duration', type=float, default=20.0, help='clip length [s]')
+    ap.add_argument('--duration', type=float, default=20.0,
+                    help="clip length [s]; a scenario's video.duration_s overrides it")
     ap.add_argument('--resolution', default='1920x1080', help='grab size WxH')
     ap.add_argument('--offset', default='0,0',
                     help="grab top-left origin 'x,y' -> x11grab input :0.0+x,y")
@@ -296,7 +419,8 @@ def main() -> int:
     ap.add_argument('--warmup', type=float, default=14.0,
                     help='stack activation wait before recording [s]')
     ap.add_argument('--goal-delay', type=float, default=3.0,
-                    help='wait after recording starts before sending the goal [s]')
+                    help='wait after recording starts before sending the goal [s]; '
+                         'the clip is cut at first motion, so this is not dead time')
     ap.add_argument('--timeout', type=float, default=55.0, help='goal timeout [s]')
     ap.add_argument('--out-dir', default='', help='clip output dir')
     args = ap.parse_args()
@@ -328,6 +452,12 @@ def main() -> int:
             failed.append(scenario)
             print(f'[record] {scenario} FAILED: {exc}', flush=True)
 
+    try:
+        import rclpy
+        if rclpy.ok():
+            rclpy.shutdown()
+    except ImportError:
+        pass
     print(f'[record] done: {len(scenarios) - len(failed)}/{len(scenarios)} clips '
           f'in {out_dir}', flush=True)
     if failed:

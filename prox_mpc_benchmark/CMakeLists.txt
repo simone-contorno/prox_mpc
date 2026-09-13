@@ -164,6 +164,9 @@ if(BUILD_TESTING)
   target_include_directories(test_obstacle_field PRIVATE
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   )
+
+  find_package(ament_cmake_pytest REQUIRED)
+  ament_add_pytest_test(test_record_scenarios test/test_record_scenarios.py)
 endif()
 
 ament_package()

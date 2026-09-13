@@ -203,7 +203,8 @@ def terminate(proc):
 
 
 def record_from_disk(summary_json):
-    """Assemble one index record from a cell's files on disk.
+    """
+    Assemble one index record from a cell's files on disk.
 
     Merges the run summary with the process resource sampling and, for the
     predictive controller, the tracker's own sampling.
@@ -230,7 +231,8 @@ def record_from_disk(summary_json):
 
 
 def rebuild_index(results_dir):
-    """Derive the run index from the per-run files on disk.
+    """
+    Derive the run index from the per-run files on disk.
 
     runs/ is the source of truth and scenarios.json is a view over it, so
     deriving it fresh keeps the two from diverging: a directory assembled by
@@ -301,7 +303,7 @@ def run_cell(scn, controller, repeat, control, results_dir, robot, map_yaml,
     metrics = goal_proc = sampler = tracker_sampler = None
     try:
         time.sleep(warmup_s)  # let the lifecycle manager activate the servers
-        # Instrument the controller_server process for the embedded-resource metrics.
+        # Instrument the controller_server process for the process-resource metrics.
         pid = None
         for _ in range(10):
             pid = find_controller_pid()
