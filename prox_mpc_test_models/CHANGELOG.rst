@@ -2,7 +2,7 @@
 Changelog for package prox_mpc_test_models
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-2.0.0 (2026-09-01)
+2.0.0 (2026-09-13)
 ------------------
 * Added fault and mapping fixtures: asymmetric control bounds, a permuted planar
   mapping, and a non-finite-other-axes twist model.

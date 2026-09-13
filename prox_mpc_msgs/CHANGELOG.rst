@@ -2,7 +2,7 @@
 Changelog for package prox_mpc_msgs
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-2.0.0 (2026-09-01)
+2.0.0 (2026-09-13)
 ------------------
 * No interface change: the message definitions and their wire format are
   unchanged from 1.0.0. Version raised to keep the repository's packages

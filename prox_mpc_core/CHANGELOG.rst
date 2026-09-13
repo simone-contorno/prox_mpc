@@ -2,7 +2,7 @@
 Changelog for package prox_mpc_core
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-2.0.0 (2026-09-01)
+2.0.0 (2026-09-13)
 ------------------
 * **Breaking:** ``warm_start`` defaults to ``true``. The ProxQP workspace is
   built once and updated in place, so the factorization and the previous

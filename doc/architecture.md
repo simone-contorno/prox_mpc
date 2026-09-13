@@ -165,13 +165,29 @@ What the stack supports today, stated plainly rather than left implicit.
 - **Direction of travel.** The reference is forward-only by default: multi-pose
   plan orientations collapse into a reconstructed path tangent, and the
   reference speed is non-negative.
-  `allow_reversing` (controller parameter, default `false`) follows the plan's
-  own pose orientations into reverse travel and truncates the reference at the
-  first direction change rather than following every cusp in the plan - the
-  same bounded strategy `regulated_pure_pursuit_controller` uses.
+  `allow_reversing` (controller parameter, default `false`) is what opens the
+  reverse half of the control box, and `reverse_from_plan_orientation` (default
+  `false`) is what lets the plan's own pose orientations sign the reference into
+  reverse, truncating it at the first direction change rather than following
+  every cusp - the same bounded strategy `regulated_pure_pursuit_controller`
+  uses. The second is separate because only a planner that sets pose
+  orientations means anything by them: NavFn and Smac 2D leave every pose at the
+  identity quaternion, which is indistinguishable from a genuine straight
+  reverse plan, so trusting them would read any path running against that fixed
+  heading as a reverse traverse.
   Past the plan end the reference pose is the goal pose, orientation included,
   when the goal checker publishes a yaw tolerance it enforces; without one it
-  holds the final segment's tangent.
+  holds the final segment's tangent. Direction is a latched mode: a change is
+  accepted only from rest and only once a dwell has elapsed, so a cusp is driven
+  the way a vehicle drives one - arrive, stop, shift, pull away - rather than
+  being re-decided from the plan geometry every control cycle.
+- **The goal region.** Inside the goal-checker xy tolerance the reference is
+  pinned to the goal pose rather than tracking the robot's own projection onto
+  the plan, which the cruise taper would otherwise reduce to a stub a few
+  millimetres ahead of the projection that moves along with it. Once the
+  checker's xy condition is met and only the heading is outstanding, a platform
+  with no steering channel holds station and turns on the spot; a steering model
+  cannot, and manoeuvres out of the heading error instead.
 - **Model state layout.** Any `prox_mpc::Model` may order its state as it
   likes, with or without obstacle avoidance: every consumer of a state index,
   the obstacle-constraint assembly in `prox_mpc_core` included, reads it from

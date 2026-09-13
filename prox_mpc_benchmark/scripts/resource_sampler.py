@@ -5,8 +5,8 @@
 """
 Sample a controller process's CPU / RAM and the achieved control rate.
 
-For the mode (b2) cross-controller comparison this measures the embedded-relevant
-resource cost of one Nav2 controller: the CPU% and resident memory (RSS) of its
+For the mode (b2) cross-controller comparison this measures the runtime resource
+cost of one Nav2 controller: the CPU% and resident memory (RSS) of its
 `controller_server` process (read from /proc), and the achieved control frequency
 (the rate of commands on /cmd_vel while the robot is moving). Every controller runs
 in its own controller_server with identical surrounding config, so the differences
