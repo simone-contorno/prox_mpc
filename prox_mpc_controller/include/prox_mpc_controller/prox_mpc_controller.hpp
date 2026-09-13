@@ -241,7 +241,8 @@ protected:
     double radius{0.0};
     std::vector<std::array<double, 2>> positions;
   };
-  std::vector<PredictedObstacle> predicted_obstacles_;
+  std::vector<PredictedObstacle> predicted_obstacles_
+  RCPPUTILS_TSA_GUARDED_BY(obstacles_mutex_);
 
   nav_msgs::msg::Path global_plan_;
 
