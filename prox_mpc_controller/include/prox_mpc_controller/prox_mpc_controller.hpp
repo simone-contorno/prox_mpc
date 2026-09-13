@@ -285,10 +285,35 @@ protected:
   /// Cruise-speed reduction gain on path curvature; 0.0 disables the reduction.
   double curvature_gain_{0.0};
 
-  /// Follow a plan's own pose orientations into reverse travel. Off by default;
-  /// when on, the reference speed is signed and the reference is truncated at
-  /// the first direction change, so one horizon never spans a cusp.
+  /// Whether the solver may plan reverse travel at all. Off by default, which
+  /// narrows the model's linear control bound to [0, v_max]. Signing the
+  /// reference into reverse is a separate opt-in, below.
   bool allow_reversing_{false};
+
+  /// Whether the plan's pose orientations are trusted to encode travel
+  /// direction. NavFn and the Smac 2D planners leave every pose at the identity
+  /// quaternion, which reads as a reverse plan for any path running against it;
+  /// a cusp-emitting planner (Smac Hybrid-A*, State Lattice) means it. Defaults
+  /// false, so the reference stays forward-only unless a deployment says its
+  /// planner sets orientations.
+  bool reverse_from_plan_orientation_{false};
+
+  /// Speed [m/s] at or below which the platform counts as stopped for the
+  /// purpose of a travel-direction change. A drivetrain accepts a gear shift
+  /// only at rest, and the same gate is what keeps the switch well posed here:
+  /// the reference is held at the current arc length until the platform has
+  /// actually stopped, so reversing costs a stop rather than a control cycle.
+  double direction_switch_standstill_speed_mps_{0.05};
+
+  /// Minimum dwell [s] between two accepted direction changes. Travel direction
+  /// is a discrete mode, and a switched system whose mode is re-chosen every
+  /// cycle with no dwell time chatters; this is that dwell.
+  double direction_switch_dwell_s_{0.5};
+
+  /// Band [m] beyond the goal-checker xy tolerance that the robot must re-cross
+  /// before the terminal settle mode releases back to path tracking. Entry and
+  /// exit on one threshold would flip mode to mode on tracking noise.
+  double goal_settle_hysteresis_m_{0.10};
 
   /// Deceleration-ramp step [s] on a braking cycle; 0 measures the inter-cycle
   /// period instead, clamped into [dt_, kMaxBrakePeriodFactor * dt_].
@@ -312,6 +337,26 @@ protected:
   double obstacle_timeout_{0.5};               // [s] staleness before costmap-only
   double dynamic_speed_threshold_{0.1};        // [m/s] propagate tracks above this
   double prediction_uncertainty_growth_{0.0};  // [m/s] extra clearance per second
+  /// Forward shadow [s] cast along a tracked obstacle's own heading: the keep-out
+  /// centre is biased ahead by this many seconds of its travel and grown by the
+  /// same distance, so the space it is about to occupy costs more than the space
+  /// it is vacating. 0.0 disables it, reproducing a centred keep-out exactly.
+  double prediction_forward_shadow_s_{0.0};
+  /// Depth [m] of predicted keep-out breach over which the cruise speed is eased
+  /// to zero. When the reference path, driven at this cycle's cruise, would cut
+  /// into a tracked mover's predicted keep-out, the cruise is scaled by
+  /// 1 + breach / band, so the robot waits for the mover to clear instead of
+  /// racing it. 0.0 disables it, reproducing the obstacle-blind cruise exactly.
+  double obstacle_yield_band_m_{0.0};
+
+  /// Whether the obstacle-aware yield also caps the solver's forward speed bound,
+  /// rather than only lowering the cruise the reference asks for. The cruise is a
+  /// lightly weighted target the obstacle term can override - the solver then
+  /// swerves at full speed instead of slowing - so a yield that must actually
+  /// slow the robot has to bound the speed, not just request less of it. The cap
+  /// falls no faster than the platform can brake and leaves the reverse bound
+  /// alone, so the robot can still back away. Off by default.
+  bool obstacle_yield_caps_speed_{false};
   int max_dynamic_obstacles_{2};               // slot budget for dynamic tracks
   /// Reject tracks larger than this [m] from the predictive path (0 = no limit):
   /// a guard against extended structure (walls) reported as a moving obstacle,
@@ -382,6 +427,25 @@ protected:
   double last_cmd_w_{0.0};
   bool cancelling_{false};
   std::size_t plan_index_{0};
+
+  /// Latched travel direction: +1 forward, -1 reverse. Held across cycles so a
+  /// direction change is a deliberate transition subject to the standstill and
+  /// dwell gates above, rather than a fresh per-cycle read of the plan geometry.
+  double dir_{1.0};
+
+  /// Seconds since the last accepted direction change, advanced by the measured
+  /// cycle period. Compared against direction_switch_dwell_s_.
+  double dir_hold_s_{0.0};
+
+  /// Whether the terminal settle mode is engaged. Latched: entered inside the
+  /// goal-checker xy tolerance and released only past the hysteresis band, so
+  /// the reference does not alternate between the two modes near the goal.
+  bool settling_{false};
+
+  /// Cruise scale the obstacle-aware yield applied last cycle, in [0, 1]. It
+  /// drops at once when a breach deepens but recovers at a bounded rate, so a
+  /// breach that clears for one cycle cannot snap the cruise back to full.
+  double yield_factor_{1.0};
 
   /// Inter-cycle wall clock, read and advanced by markCycleStart() at the top of
   /// every control cycle; reset between tasks so the first cycle of a task

@@ -76,6 +76,18 @@ constexpr int kMaxScanHalfWidth = 50;
 /// slow. Naming model_params.v_min overrides it, which is how a platform with
 /// rear sensing states its real reverse envelope.
 constexpr double kDefaultReverseSpeed = 0.15;
+/// Track speed [m/s] below which no forward shadow is cast: the heading of a
+/// near-stationary track is numerically meaningless, and biasing a keep-out along
+/// it would move the disc in an arbitrary direction.
+constexpr double kMinShadowSpeed = 1e-3;
+/// Rate [1/s] at which the obstacle-aware yield may release the cruise back
+/// toward full once a breach eases: a full release takes a second. The yield
+/// itself tightens at once.
+constexpr double kYieldRecoveryPerS = 1.0;
+/// Distance [m] within which last cycle's planned trajectory must still meet the
+/// robot for the yield to trust it: its next node has to lie this close to the
+/// reference point's current position.
+constexpr double kYieldTrajMatchRadius = 0.5;
 /// Minimum strictly-positive cost weight, keeping the QP Hessian positive definite
 /// (a negative weight would make the sub-problem non-convex).
 constexpr double kMinCostWeight = 1e-9;
@@ -279,8 +291,36 @@ void ProxMpcController::configure(
   declare("curvature_gain", curvature_gain_, 0.0);
   /* Reverse travel is opt-in: the reference speed becomes signed, which the
    * speed limit and the deceleration ramp both have to carry, so a stack that
-   * does not plan reversing sections keeps the forward-only reference. */
+   * does not plan reversing sections keeps the forward-only control bound. It is
+   * also travel the plugin cannot confirm is sensed: both guards follow the
+   * predicted trajectory, so they do cover a reversing one, but they see only
+   * what the costmap holds, and whether the platform sweeps behind itself is a
+   * property of its sensor rather than of this plugin. That is why an unguarded
+   * reverse is speed-capped where the model states no reverse envelope. */
   declare("allow_reversing", allow_reversing_, false);
+  /* Whether the plan's pose orientations may put the reference into reverse.
+   * Only a planner that sets them means anything by them, and a plan cannot say
+   * whether its planner did, so this is declared rather than inferred. */
+  declare("reverse_from_plan_orientation", reverse_from_plan_orientation_, false);
+
+  /* Travel direction is a discrete mode of a switched system. Re-deciding it
+   * every control cycle from the plan geometry alone, with no cost and no dwell,
+   * is what makes a direction change free enough to alternate; the two gates
+   * below are the standard remedy, and between them they also reproduce what a
+   * real drivetrain enforces, which is that a shift is accepted only at rest.
+   * A change therefore reads: hold the arc length, stop, dwell, then reverse. */
+  declare("direction_switch_standstill_speed_mps", direction_switch_standstill_speed_mps_, 0.05);
+  declare("direction_switch_dwell_s", direction_switch_dwell_s_, 0.5);
+  /* A standstill threshold at or below zero is never met, which would freeze the
+   * reference at the first cusp; a negative dwell or band is meaningless. */
+  direction_switch_standstill_speed_mps_ = std::max(direction_switch_standstill_speed_mps_, 1e-3);
+  direction_switch_dwell_s_ = std::max(direction_switch_dwell_s_, 0.0);
+  /* Seed the dwell spent. Nothing has been switched away from before the first
+   * task, so its first direction is free; the platform is at rest there anyway,
+   * which is the other half of what a change has to wait for. */
+  dir_hold_s_ = direction_switch_dwell_s_;
+  declare("goal_settle_hysteresis_m", goal_settle_hysteresis_m_, 0.10);
+  goal_settle_hysteresis_m_ = std::max(goal_settle_hysteresis_m_, 0.0);
 
   /* Cost weights must be non-negative: a negative weight makes the QP Hessian
    * indefinite (non-convex sub-problem). Floor them at a small positive value. */
@@ -415,6 +455,9 @@ void ProxMpcController::configure(
   declare("obstacle_timeout", obstacle_timeout_, 0.5);
   declare("dynamic_speed_threshold", dynamic_speed_threshold_, 0.1);
   declare("prediction_uncertainty_growth", prediction_uncertainty_growth_, 0.0);
+  declare("prediction_forward_shadow_s", prediction_forward_shadow_s_, 0.0);
+  declare("obstacle_yield_band_m", obstacle_yield_band_m_, 0.0);
+  declare("obstacle_yield_caps_speed", obstacle_yield_caps_speed_, false);
   declare("max_dynamic_obstacles", max_dynamic_obstacles_, 2);
   declare("max_dynamic_obstacle_radius", max_dynamic_obstacle_radius_, 0.0);
 
@@ -426,6 +469,8 @@ void ProxMpcController::configure(
   clamp_low("obstacle_timeout", obstacle_timeout_, 0.0, 0.5);
   clamp_low("dynamic_speed_threshold", dynamic_speed_threshold_, 0.0, 0.1);
   clamp_low("prediction_uncertainty_growth", prediction_uncertainty_growth_, 0.0, 0.0);
+  clamp_low("prediction_forward_shadow_s", prediction_forward_shadow_s_, 0.0, 0.0);
+  clamp_low("obstacle_yield_band_m", obstacle_yield_band_m_, 0.0, 0.0);
   clamp_low("max_dynamic_obstacle_radius", max_dynamic_obstacle_radius_, 0.0, 0.0);
   if (max_dynamic_obstacles_ < 0) {
     RCLCPP_WARN(logger_, "max_dynamic_obstacles %d < 0; clamping to 0.", max_dynamic_obstacles_);
@@ -821,6 +866,10 @@ geometry_msgs::msg::TwistStamped ProxMpcController::computeVelocityCommands(
    * the reference point stale for the next one. */
   const double cycle_period_ms = markCycleStart();
 
+  /* Advance the direction-change dwell on the measured period, falling back to
+   * the nominal step on the first cycle of a task, where no period exists yet. */
+  dir_hold_s_ += std::isfinite(cycle_period_ms) ? cycle_period_ms * 1e-3 : dt_;
+
   /* Apply a speed limit requested since the last cycle. setSpeedLimit() runs on
    * the node's executor thread while this method runs on the action server's own
    * thread, so the model's inequality map is mutated here, where nothing else
@@ -1057,26 +1106,70 @@ geometry_msgs::msg::TwistStamped ProxMpcController::computeVelocityCommands(
    * what every previous release produced. With it on, the direction under the
    * robot sets the sign of the reference speed and the reference is truncated at
    * the first direction change, so one horizon never spans a cusp - the same
-   * bound upstream's regulated pure pursuit places on the same problem. */
+   * bound upstream's regulated pure pursuit places on the same problem.
+   *
+   * That reading holds only for a planner that sets those orientations, and a
+   * plan cannot say whether it does: NavFn and the Smac 2D planners leave every
+   * pose at the identity quaternion, which is indistinguishable from a genuine
+   * straight reverse plan whose poses all face the same way. With one constant
+   * pose yaw the expression below collapses to the segment's component along that
+   * fixed heading - the segment's x component in the plan frame - so every path
+   * running the other way reads as a reverse plan however the robot faces, and
+   * the robot drives the whole path backwards instead of turning around; a path
+   * whose x component changes sign flips the reference cycle to cycle. Which it
+   * is, is a property of the planner, so it is declared rather than guessed:
+   * reverse_from_plan_orientation defaults false and the reference stays
+   * forward-only, and a deployment running a cusp-emitting planner (Smac
+   * Hybrid-A*, State Lattice) sets it true to get the cusp handling above. The
+   * control box keeps whatever reverse travel allow_reversing granted either way,
+   * so the solver may still back out of a keep-out; it is just not asked to
+   * reverse along the path. */
   auto plan_direction = [&](std::size_t i) {
       const double ex = gx[i + 1] - gx[i];
       const double ey = gy[i + 1] - gy[i];
       const double yaw = quat_yaw(global_plan_.poses[i].pose.orientation) + tyaw;
       return std::cos(yaw) * ex + std::sin(yaw) * ey;
     };
-  double dir = 1.0;
   double s_end = s.back();
-  if (allow_reversing_ && v_min_ < 0.0 && best + 1 < plan_size) {
+  if (allow_reversing_ && reverse_from_plan_orientation_ && v_min_ < 0.0 &&
+    best + 1 < plan_size)
+  {
+    /* The direction the plan asks for under the robot, and the gates that decide
+     * whether this cycle may act on it. Travel direction is held in dir_ rather
+     * than re-read here, because a mode re-chosen every cycle at no cost and with
+     * no dwell is free to alternate. A change is accepted only from rest and only
+     * once the dwell has run; until both hold, the reference is pinned to the
+     * current arc length, so v_ref falls to zero and the deceleration ramp brings
+     * the platform to the standstill the change is waiting on. A cusp is then
+     * driven the way a vehicle drives one: arrive, stop, shift, pull away. */
     const double d0 = plan_direction(best);
-    dir = (d0 < 0.0) ? -1.0 : 1.0;
-    for (std::size_t i = best + 1; i + 1 < plan_size; ++i) {
-      const double d = plan_direction(i);
-      if (d != 0.0 && ((d < 0.0) != (dir < 0.0))) {
-        s_end = s[i];
-        break;
+    const double dir_cmd = (d0 < 0.0) ? -1.0 : 1.0;
+    if (dir_cmd != dir_) {
+      if (std::abs(last_cmd_v_) <= direction_switch_standstill_speed_mps_ &&
+        dir_hold_s_ >= direction_switch_dwell_s_)
+      {
+        dir_ = dir_cmd;
+        dir_hold_s_ = 0.0;
+      } else {
+        s_end = s0;
       }
     }
+    /* Truncate at the next cusp so one horizon never spans a direction change.
+     * Skipped while a change is pending, where the reference is already held. */
+    if (s_end > s0) {
+      for (std::size_t i = best + 1; i + 1 < plan_size; ++i) {
+        const double d = plan_direction(i);
+        if (d != 0.0 && ((d < 0.0) != (dir_ < 0.0))) {
+          s_end = s[i];
+          break;
+        }
+      }
+    }
+  } else {
+    /* Forward-only: leave no latched reverse state for the next task to inherit. */
+    dir_ = 1.0;
   }
+  const double dir = dir_;
 
   /* Cruise speed, tapered so the horizon does not overshoot the plan end (or the
    * cusp it stops at), and clamped by any active speed limit (goal-hold near the
@@ -1103,6 +1196,7 @@ geometry_msgs::msg::TwistStamped ProxMpcController::computeVelocityCommands(
    * Unmeasured tolerance fields come back as std::numeric_limits<double>::lowest()
    * (negative) and an all-zero quaternion, so both are screened. */
   double xy_tol = 0.0;
+  double yaw_tol = 0.0;
   bool have_xy_tol = false;
   bool have_yaw_tol = false;
   if (goal_checker != nullptr) {
@@ -1114,7 +1208,7 @@ geometry_msgs::msg::TwistStamped ProxMpcController::computeVelocityCommands(
         pose_tol.position.y > 0.0;
       const auto & qt = pose_tol.orientation;
       if (qt.x * qt.x + qt.y * qt.y + qt.z * qt.z + qt.w * qt.w > kMinQuatNorm2) {
-        const double yaw_tol = std::abs(quat_yaw(qt));
+        yaw_tol = std::abs(quat_yaw(qt));
         have_yaw_tol = std::isfinite(yaw_tol) && yaw_tol > 0.0 && yaw_tol < M_PI;
       }
     }
@@ -1169,16 +1263,76 @@ geometry_msgs::msg::TwistStamped ProxMpcController::computeVelocityCommands(
       th = std::atan2(gy[hi + 1] - gy[hi], gx[hi + 1] - gx[hi]);
     };
 
-  /* Ease the cruise speed inside the goal-checker xy tolerance so the robot
-   * settles into the goal region. */
-  if (have_xy_tol) {
+  /* Terminal settle.
+   *
+   * The cruise speed is eased to zero across the goal-checker xy tolerance, and
+   * the reference is sampled at v_ref * k * dt ahead of the robot's own
+   * projection onto the plan. Composing the two makes the horizon's arc reach
+   * remaining^2 / xy_tol, which is shorter than `remaining` for every point
+   * inside the tolerance: once the robot is in the goal region the reference
+   * collapses to a stub a few millimetres ahead of the projection, and it is
+   * carried along by the projection as the robot moves. That reference has no
+   * fixed point. Any motion re-projects the robot and re-centres the stub, so a
+   * small tracking error can be traded down as cheaply one way as the other and
+   * the solver alternates between them; and because the horizon never reaches
+   * the plan end, the goal's own orientation never enters the reference at all,
+   * which is exactly when it is the only error left to correct.
+   *
+   * Inside the tolerance the reference therefore stops tracking the projection
+   * and is pinned to the goal pose, which turns the last stretch from tracking a
+   * receding stub into regulation about a fixed setpoint: one minimiser, and a
+   * standing yaw error the solver can act on. The speed reference keeps its
+   * taper, so the approach profile that reaches this point is unchanged and mode
+   * entry introduces no step in the commanded speed.
+   *
+   * The mode is latched and released on a wider band than it is entered on, so
+   * tracking noise about the tolerance cannot flip the reference mode to mode;
+   * a goal that moves further away than the band still releases it. It is never
+   * entered on a reference truncated at a cusp, whose end is not the goal. */
+  if (have_xy_tol && s_end >= s.back()) {
+    if (settling_) {
+      settling_ = remaining <= xy_tol + goal_settle_hysteresis_m_;
+    } else {
+      settling_ = remaining <= xy_tol;
+    }
+  } else {
+    settling_ = false;
+  }
+
+  /* Pure rotation to the goal heading.
+   *
+   * Once the checker's own xy condition is met, no translation is left to do and
+   * only the heading is outstanding, which is the case the reference above still
+   * handles badly: the goal sits a fraction of the tolerance away, and as the
+   * body sweeps round, the body-frame projection of that offset changes sign, so
+   * the solver reverses and re-advances to hold a position it is already close
+   * enough to. Holding the reference at the robot's own reference point instead
+   * leaves the heading as the only standing error, and the platform turns on the
+   * spot. The distance test is the checker's, so this engages only where the
+   * translation really is finished.
+   *
+   * Restricted to a platform with no steering channel. A car-like model cannot
+   * turn on the spot at all, and pinning the position would leave it with no
+   * admissible way to correct its heading; it manoeuvres out of a terminal
+   * heading error instead, which is what allow_reversing is for. */
+  bool rotate_in_place = false;
+  if (settling_ && !has_steering_ && have_terminal_yaw && have_yaw_tol) {
+    const double dgx = gx.back() - cx;
+    const double dgy = gy.back() - cy;
+    rotate_in_place = (dgx * dgx + dgy * dgy) <= xy_tol * xy_tol &&
+      std::abs(std::remainder(terminal_yaw - ctheta, 2.0 * M_PI)) > yaw_tol;
+  }
+
+  if (rotate_in_place) {
+    v_ref = 0.0;
+  } else if (have_xy_tol) {
     v_ref *= std::clamp(remaining / xy_tol, 0.0, 1.0);
   }
 
   /* Curvature-aware cruise reduction (inert when curvature_gain_ == 0): estimate
    * the peak path curvature over the horizon from heading samples at the current
    * cruise, then taper v_ref so high-curvature segments are sampled more slowly. */
-  if (curvature_gain_ > 0.0 && v_ref > 0.0) {
+  if (curvature_gain_ > 0.0 && v_ref > 0.0 && !settling_) {
     const double ds = v_ref * dt_;
     /* Seed from the first sampled path tangent, not the robot's own yaw: seeding
      * from ctheta would make the first heading delta the robot-to-path tracking
@@ -1200,6 +1354,107 @@ geometry_msgs::msg::TwistStamped ProxMpcController::computeVelocityCommands(
     v_ref /= 1.0 + curvature_gain_ * max_kappa;
   }
 
+  /* Obstacle-aware cruise.
+   *
+   * The cruise above is obstacle-blind: the reference advances along the plan at
+   * full cruise whatever is crossing it, so the only way the solver can yield to
+   * a mover is to lag a reference that keeps moving, which the tracking cost
+   * charges as error; faced with a mover the cheaper option is nearly always to
+   * race it across. Here the reference itself yields: where the robot is heading
+   * would cut into a tracked mover's predicted keep-out, the cruise is eased in
+   * proportion to the deepest breach, reaching zero at obstacle_yield_band_m.
+   *
+   * "Where the robot is heading" is checked two ways, and the deeper breach wins.
+   * The plan, driven at this cycle's intended cruise, is one: it does not depend
+   * on any speed an earlier yield left behind, so it cannot restore full cruise by
+   * clearing the very breach that caused a reduction. The trajectory the solver
+   * actually planned last cycle is the other, because the solver does not follow
+   * the plan exactly - with light stage weights it strays from it by the better
+   * part of a metre - and a check on the plan alone then watches a path the robot
+   * is not driving. That trajectory was driven at last cycle's speed, though, so
+   * it can shorten when the robot slows and seem to clear; the plan check covers
+   * that, and the release below is rate-limited so a breach that seems to clear
+   * for one cycle cannot snap the cruise back to full.
+   *
+   * The trajectory is trusted only while it still meets this robot: before the
+   * first solve it is all zeros, and after a reset or a plan jump it belongs to a
+   * robot somewhere else. Both checks compare the model's reference point with
+   * the base_link keep-out, which is exact for a model referenced to base_link
+   * and approximate for one referenced elsewhere. The predictions are the ones
+   * the previous cycle's fill retained, on the same time base as that trajectory;
+   * with no fresh tracker message they are empty and the cruise is untouched.
+   * Skipped while settling, where the reference is already pinned to the goal. */
+  if (obstacle_yield_band_m_ > 0.0 && v_ref > 0.0 && !settling_) {
+    const MatrixXd traj = mpc_->getX();
+    const double px_now = cx + ref_offset_x_ * std::cos(ctheta) - ref_offset_y_ * std::sin(ctheta);
+    const double py_now = cy + ref_offset_x_ * std::sin(ctheta) + ref_offset_y_ * std::cos(ctheta);
+    const bool traj_ok = traj.rows() >= 2 &&
+      std::hypot(
+      traj(1, static_cast<Eigen::Index>(idx_x_)) - px_now,
+      traj(1, static_cast<Eigen::Index>(idx_y_)) - py_now) <= kYieldTrajMatchRadius;
+    double deepest = 0.0;
+    {
+      std::lock_guard<std::mutex> lock(obstacles_mutex_);
+      for (const auto & p : predicted_obstacles_) {
+        const std::size_t nodes = std::min(p.positions.size(), np_);
+        for (std::size_t k = 0; k < nodes; ++k) {
+          const double tk = static_cast<double>(k + 1) * dt_;
+          const double d_safe = robot_radius_ + p.radius + safety_margin_ +
+            prediction_uncertainty_growth_ * tk;
+          const double ox = p.positions[k][0];
+          const double oy = p.positions[k][1];
+          double rx = 0.0;
+          double ry = 0.0;
+          double rth = 0.0;
+          sample(s0 + v_ref * tk, rx, ry, rth);
+          deepest = std::max(deepest, d_safe - std::hypot(rx - ox, ry - oy));
+          const Eigen::Index row = static_cast<Eigen::Index>(k + 1);
+          if (traj_ok && row < traj.rows()) {
+            deepest = std::max(
+              deepest, d_safe - std::hypot(
+                traj(row, static_cast<Eigen::Index>(idx_x_)) - ox,
+                traj(row, static_cast<Eigen::Index>(idx_y_)) - oy));
+          }
+        }
+      }
+    }
+    const double target = std::clamp(1.0 - deepest / obstacle_yield_band_m_, 0.0, 1.0);
+    const double period_s = std::isfinite(cycle_period_ms) ? cycle_period_ms * 1e-3 : dt_;
+    yield_factor_ = (target < yield_factor_) ? target :
+      std::min(target, yield_factor_ + kYieldRecoveryPerS * period_s);
+    v_ref *= yield_factor_;
+  } else {
+    yield_factor_ = 1.0;
+  }
+
+  /* Hard speed cap. The eased cruise above is only a target, and a lightly
+   * weighted one: the control-tracking cost that carries it sits far below the
+   * path and obstacle terms, so when a mover is closing the solver overrides it
+   * and swerves at full speed rather than slowing - measured, the cruise was cut
+   * to a tenth while the robot held 0.5 m/s. Capping the forward bound by the
+   * same factor makes the yield a speed limit rather than a request, the same
+   * way a Nav2 speed limit is applied to this box.
+   *
+   * The cap never falls below the speed the platform can still reach this step:
+   * the solver bounds the first control to within its deceleration times dt of
+   * the command last applied, so a bound under that would leave the QP no
+   * feasible first control and trip the solver-failure path instead of braking.
+   * The reverse bound is left as the speed limit set it, so a robot capped to a
+   * crawl can still back away from a mover it cannot out-wait. It runs every
+   * cycle while enabled, including when the yield is idle, so the bound returns
+   * to the speed limit as soon as the cap is released. */
+  if (obstacle_yield_caps_speed_ && obstacle_yield_band_m_ > 0.0) {
+    const double v_lim = std::min(v_max_, max_linear_vel_);
+    const double reachable =
+      last_cmd_u_(static_cast<Eigen::Index>(idx_v_)) - fallback_ramp_lin_ * dt_;
+    const double v_low = std::max(v_min_, -max_linear_vel_);
+    /* A model may declare a positive minimum speed; the cap cannot go under it,
+     * and updateIneq rejects a lower bound above the upper one. */
+    const double v_cap =
+      std::max(v_low, std::min(v_lim, std::max(v_lim * yield_factor_, reachable)));
+    model_->updateIneq("u", idx_v_, v_low, v_cap);
+  }
+
   /* Sample the reference path the model's own reference point is to follow. The
    * tangent psi is kept continuous (unwrapped relative to the direction the robot
    * is expected to travel in, then node to node) so the QP tracking error never
@@ -1211,7 +1466,17 @@ geometry_msgs::msg::TwistStamped ProxMpcController::computeVelocityCommands(
     double x = 0.0;
     double y = 0.0;
     double psi = 0.0;
-    sample(s0 + v_ref * static_cast<double>(k) * dt_, x, y, psi);
+    /* Pinned to the plan end while settling, which sample() reports as the goal
+     * position and, where the checker enforces one, the goal orientation; pinned
+     * to the reference point's own position while turning on the spot, so the
+     * heading is the only error the solver is left to close. */
+    if (rotate_in_place) {
+      x = cx + ref_offset_x_ * std::cos(ctheta) - ref_offset_y_ * std::sin(ctheta);
+      y = cy + ref_offset_x_ * std::sin(ctheta) + ref_offset_y_ * std::cos(ctheta);
+      psi = terminal_yaw;
+    } else {
+      sample(settling_ ? s_end : s0 + v_ref * static_cast<double>(k) * dt_, x, y, psi);
+    }
     psi = prev_psi + std::remainder(psi - prev_psi, 2.0 * M_PI);
     prev_psi = psi;
     psi_cont[k] = psi;
@@ -1531,6 +1796,13 @@ void ProxMpcController::reset()
   cancelling_ = false;
   plan_index_ = 0;
   have_last_cycle_ = false;
+  /* A new task inherits no travel direction and no settle latch. The dwell is
+   * seeded spent rather than zero: nothing has been switched away from yet, so
+   * the task's first direction is free rather than held for the dwell. */
+  dir_ = 1.0;
+  dir_hold_s_ = direction_switch_dwell_s_;
+  settling_ = false;
+  yield_factor_ = 1.0;
 }
 
 void ProxMpcController::obstacleCallback(prox_mpc_msgs::msg::ObstacleArray::ConstSharedPtr msg)
@@ -1760,9 +2032,43 @@ void ProxMpcController::fillObstacles(
         const Eigen::Index row = static_cast<Eigen::Index>(node * k_obs + j);
         /* Written in the solver's frame: the keep-out is meant to protect
          * base_link, and the solver constrains the model's reference point. */
-        obs(row, 0) = px + shift_x[node];
-        obs(row, 1) = py + shift_y[node];
-        obs(row, 2) = d_safe;
+        double ox = px + shift_x[node];
+        double oy = py + shift_y[node];
+        double d_safe_node = d_safe;
+        /* Forward shadow. The keep-out is a disc about the predicted position and
+         * the constraint normal points from the obstacle to the robot, so nothing
+         * in the formulation distinguishes the space a mover is about to occupy
+         * from the space it is vacating; passing in front and passing behind cost
+         * the same, and the reference - which carries no obstacle term - keeps
+         * advancing, so the solver takes the front, which is the side that does
+         * not require lagging it.
+         *
+         * Biasing the disc along the track's own heading prices that difference in
+         * without leaving the one-constraint-per-slot form the RTI core solves.
+         * The centre moves forward by s and the radius grows by the same s, which
+         * keeps the obstacle's own position covered - the disc still reaches
+         * d_safe behind it - while extending the covered band to d_safe + 2s
+         * ahead. A bare shift would open a hole over the obstacle itself as soon
+         * as s passed d_safe. The disc also grows sideways by s, which is the
+         * price of keeping a disc rather than a capsule; s is a fraction of a
+         * second of travel, so that stays small.
+         *
+         * Scaled by the track's speed, so a fast mover casts a longer shadow and a
+         * near-stationary one casts none. For a curving track this follows the
+         * instantaneous heading, the same first-order reading the prediction
+         * itself uses between samples. */
+        if (prediction_forward_shadow_s_ > 0.0) {
+          const double speed = std::hypot(d.vx, d.vy);
+          if (speed > kMinShadowSpeed) {
+            const double shadow = prediction_forward_shadow_s_ * speed;
+            ox += shadow * d.vx / speed;
+            oy += shadow * d.vy / speed;
+            d_safe_node += shadow;
+          }
+        }
+        obs(row, 0) = ox;
+        obs(row, 1) = oy;
+        obs(row, 2) = d_safe_node;
         /* Exclude the obstacle's CURRENT footprint from the static scan, not its
          * predicted one: the local costmap is a now-snapshot, so the moving object's
          * occupied cells sit at its current position. Excluding the current footprint

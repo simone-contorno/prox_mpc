@@ -87,7 +87,10 @@ Each cycle the controller performs the following steps.
    arc-length offset, and sample the state/control reference `goal_x` / `goal_u`
    over the horizon. The cruise speed is tapered near the plan end, reduced on
    path curvature (optional), and clamped by any active speed limit and the
-   goal-checker tolerance.
+   goal-checker tolerance. Inside the goal-checker xy tolerance the reference is
+   pinned to the goal pose instead of tracking the projection, and travel
+   direction is a latched mode that changes only from rest - see
+   [Terminal settle and travel direction](#terminal-settle-and-travel-direction).
 3. **Fill the obstacle triples.** When obstacles are enabled (`K > 0`), fill the
    per-node `(o_x, o_y, d_safe)` matrix: predictive + hybrid when enabled and
    fresh tracking data is available, otherwise costmap-only.
@@ -127,6 +130,44 @@ sequenceDiagram
   end
   Ctrl-->>Nav2: TwistStamped (base frame)
 ```
+
+### Terminal settle and travel direction
+
+Two properties of the reference are decided across cycles rather than within
+one, because both are discrete choices that a per-cycle rule leaves free to
+alternate.
+
+**Terminal settle.** The reference is sampled at `v_ref * k * dt` ahead of the
+robot's own projection onto the plan, and `v_ref` is tapered to zero across the
+goal-checker xy tolerance. Composing the two makes the horizon's arc reach
+`remaining^2 / xy_tol`, which is shorter than `remaining` at every point inside
+the tolerance: in the goal region the tracked reference collapses to a stub a few
+millimetres ahead of the projection, and the projection carries it along as the
+robot moves. Such a reference has no fixed point - any motion re-projects the
+robot and re-centres the stub, so a small tracking error can be traded down as
+cheaply one way as the other - and its horizon never reaches the plan end, so the
+goal's own orientation never enters it, which is exactly when that orientation is
+the only error left. Inside the tolerance the reference is therefore pinned to
+the goal pose, turning the last stretch from tracking a receding stub into
+regulation about a fixed setpoint: one minimiser, and a standing yaw error the
+solver can act on. The speed reference keeps its taper, so the approach profile
+is unchanged and entering the mode introduces no step in the commanded speed. The
+mode is latched and released only past `goal_settle_hysteresis_m`, so a remaining
+distance hovering about the tolerance cannot flip the reference mode to mode; it
+is never entered on a reference truncated at a cusp, whose end is not the goal.
+
+**Travel direction.** Direction is a discrete mode of a switched system. Deciding
+it afresh each cycle from the plan geometry, at no cost and with no dwell, is
+what leaves it free to alternate. It is held instead, and a change is accepted
+only once the platform is at or below `direction_switch_standstill_speed_mps` and
+`direction_switch_dwell_s` has elapsed since the last change - the first being
+the constraint a drivetrain already imposes on a gear shift, the second bounding
+the switching rate. While a change is pending the reference is held at the arc
+length under the robot, so `v_ref` falls to zero and the deceleration ramp brings
+the platform to the standstill the change is waiting on. A cusp is then driven
+the way a vehicle drives one: arrive, stop, shift, pull away. Both gates are
+inert unless `allow_reversing` and `reverse_from_plan_orientation` are set, since
+only then can the reference be signed into reverse at all.
 
 ## Safety layers
 
@@ -187,6 +228,41 @@ an error of `v_obs * t_node`, up to a metre at the far end of a 2 s horizon.
 It is validated for single-obstacle environments, where the free corridor
 absorbs the resulting late reaction. With more than one mover that corridor
 closes, and the tracker is required rather than optional.
+
+### Keep-out enforcement against a crossing mover
+
+The obstacle row carries a slack variable, so the keep-out is a soft constraint:
+the solver may buy its way through it. Against a mover crossing the path this is
+not a corner case. Measured on an isolated crossing encounter (0.3 m/s mover,
+0.26 m/s cruise, the shipped weights and bounds, aggregated over nine meeting
+times spanning +/- 2 s), the predicted trajectory breaches the keep-out in about
+27% of control cycles, and the realised clearance consumes the whole safety
+margin - at worst a few centimetres of physical gap remain. An independent
+Gazebo measurement over the demo walker put the same figure at 27.7%, which is
+the cross-check that the two agree.
+
+The breach is not a tuning matter, and this is worth stating precisely because
+the obvious levers look like they should work:
+
+- `w_weight` has no effect. Swept from 1e3 to 1e6 - a thousandfold - the breach
+  rate moves from 26.8% to 27.2%. The solver is not trading the constraint away
+  for tracking cost; a larger penalty buys nothing.
+- `max_iter_sqp` has no effect. Rates are identical at 1, 2 and 4 iterations, so
+  the single real-time iteration is not the limitation either.
+- Compute is not the constraint. p95 solve time stays between 8 and 14 ms
+  against a 50 ms budget at 20 Hz across every arm.
+- Easing the cruise speed on a predicted breach - giving the reference an
+  obstacle term it does not have - cuts the breach *rate* to about 19% but
+  roughly doubles the worst-case depth. It trades frequent shallow breaches for
+  rarer deep ones, which is not an improvement.
+
+What remains is the formulation. With the linear control bound and a reference
+that demands full cruise straight through the crossing, no admissible trajectory
+both tracks the reference and clears the mover; the slack absorbs the
+difference. Treat the keep-out as advisory against a crossing mover rather than
+as a guarantee, and put a velocity-directed backstop (Nav2's Collision Monitor)
+behind it where a breach matters. This extends to a single mover the limitation
+previously recorded only for multi-obstacle fields.
 The propagation and the wall-rejection guard are derived in
 [control-law.md](control-law.md).
 
@@ -241,7 +317,11 @@ and fail the lifecycle transition.
 | --- | --- | --- | --- | --- |
 | `desired_linear_vel` | double | 1.0 | m/s | Cruise speed the plan is sampled at; clamped to the model's speed bound. |
 | `curvature_gain` | double | 0.0 | - | Cruise reduction on path curvature; 0.0 disables it. |
-| `allow_reversing` | bool | false | - | Follow the plan's own pose orientations into reverse travel, signing the reference speed and truncating the reference at the first direction change. Off narrows the model's linear control bound to `[0, v_max]`, so the solver cannot plan reverse travel at all. On without an explicit `model_params.v_min` caps reverse at **0.15 m/s**: nothing observes the area behind the robot, so an unguarded manoeuvre is kept slow. |
+| `allow_reversing` | bool | false | - | Whether the solver may plan reverse travel. Off narrows the model's linear control bound to `[0, v_max]`. On without an explicit `model_params.v_min` caps reverse at **0.15 m/s**: both guards follow the predicted trajectory and so do cover a reversing one, but they see only what the costmap holds, and whether the platform sweeps behind itself is a property of its sensor rather than of this plugin (see [Robot-specific tuning](#robot-specific-tuning)), so an unverified manoeuvre is kept slow. A platform that turns in place reaches every pose forward-only, so the bound is opt-in rather than a default. Inside the goal region an open reverse half used to give the solver a second, equally cheap way to trade down a small tracking error, which it alternated with the first; the terminal settle below removes that by pinning the reference to the goal pose, so the last stretch has one minimiser. |
+| `reverse_from_plan_orientation` | bool | false | - | Whether the plan's pose orientations are trusted to say which way to travel along it, signing the reference speed and truncating the reference at the first direction change. Requires `allow_reversing`. Set true only with a planner that sets those orientations (Smac Hybrid-A*, State Lattice). NavFn and Smac 2D leave every pose at the identity quaternion, which reads as a reverse plan for every path running against that one fixed heading - the robot then drives the whole path backwards rather than turning around, and a path whose heading component changes sign flips the reference cycle to cycle. A plan cannot report which planner produced it, so this is declared, not inferred. |
+| `direction_switch_standstill_speed_mps` | double | 0.05 | m/s | Speed at or below which the platform counts as stopped for a travel-direction change. Travel direction is a latched mode; a change is taken only from rest, which is the constraint a drivetrain imposes on a gear shift and the one that keeps the mode from alternating. While a change is pending the reference is held at the arc length under the robot, so the commanded speed falls to zero and the platform stops first. |
+| `direction_switch_dwell_s` | double | 0.5 | s | Minimum time between two accepted direction changes. A discrete mode re-chosen every cycle with no dwell is free to chatter however cheap each switch looks; this bounds the switching rate. |
+| `goal_settle_hysteresis_m` | double | 0.10 | m | Band beyond the goal-checker xy tolerance that the robot must re-cross before the terminal settle releases back to path tracking. Entry and release on one threshold would flip the reference mode to mode on a remaining distance hovering about the tolerance. |
 
 ### Cost weights
 
@@ -292,6 +372,9 @@ iteration caps are the only bound unless a stack sets a positive budget.
 | `obstacle_timeout` | double | 0.5 | s | Staleness before falling back to costmap-only. |
 | `dynamic_speed_threshold` | double | 0.1 | m/s | Speed above which a track is propagated (static is left to the costmap). |
 | `prediction_uncertainty_growth` | double | 0.0 | m/s | Extra `d_safe` per second of prediction. |
+| `prediction_forward_shadow_s` | double | 0.0 | s | Forward shadow cast along a tracked obstacle's own heading. The keep-out is a disc about the predicted position and the constraint normal runs from the obstacle to the robot, so the formulation does not distinguish the space a mover is about to occupy from the space it is vacating; passing in front and passing behind cost the same, and because the reference carries no obstacle term, the front is the side that does not require lagging it. This biases the disc forward by that many seconds of the track's own travel and grows the radius by the same distance, so the obstacle's own position stays covered while the disc reaches further ahead than behind. `0.0` disables it. Left at `0.0` by default: the mechanism is sound and unit-tested, but an A/B on the demo walker (n=4 per arm) was directionally favourable and statistically inconclusive. |
+| `obstacle_yield_band_m` | double | 0.0 | m | Obstacle-aware cruise, off by default. When where the robot is heading would breach a tracked mover's predicted keep-out, the cruise is scaled toward zero over this depth of breach, so the robot waits for the mover rather than racing it. Where it is heading is checked twice and the deeper breach wins: the plan at this cycle's intended cruise, which cannot restore full cruise by clearing the breach a reduction caused, and the trajectory the solver planned last cycle, which is what the robot actually drives when the solver strays from the plan. The release back to full cruise is rate-limited (`1 / s`), so a breach that seems to clear for one cycle cannot snap the cruise back. On `dynamic_circle` over ten runs with reversing on, `0.5` passed behind the mover 6/10 against 1/10 with the best closest approach (+0.100 m against +0.070 m) and no collisions, and with two movers it was no worse than off (3/30 collisions either way). Enable it together with `allow_reversing`: waiting is safe when the robot can back off. With reversing off a waiting robot is boxed in by a second mover - over thirty two-mover runs it doubled the passes closer than 0.15 m (15/30 against 7/30) - so it stays off by default. Keep the stage weights at their defaults: light stage weights (`q_pos` 1, `s_factor` 30) collided 1/10 with or without it. The figures above are for the band on its own; pair it with `obstacle_yield_caps_speed` for the shipped behaviour, which is what the predictive preset and the Gazebo demo enable. |
+| `obstacle_yield_caps_speed` | bool | false | - | Makes the obstacle-aware yield a speed limit rather than a request. On its own the yield lowers the cruise target, which carries the lightest weight in the cost (`r_weight`, against `q_pos` and `w_weight`), so when a mover is closing the obstacle term overrides it and the solver swerves at full speed instead of slowing - measured, the cruise target was cut to a tenth while the robot held 0.5 m/s. With this on, the forward bound of the speed control is capped by the same factor, the way a Nav2 speed limit is applied to it. The cap never falls below the command last applied less the model's deceleration times `dt`, since the solver bounds the first control to that and a lower cap would leave it no feasible first control; and the reverse bound is left alone, so a robot capped to a crawl can still back away. Needs `obstacle_yield_band_m > 0`. |
 | `max_dynamic_obstacles` | int | 2 | slots | Slot budget reserved for dynamic tracks. |
 | `max_dynamic_obstacle_radius` | double | 0.0 | m | Skip tracks larger than this (walls); 0 = no limit. |
 

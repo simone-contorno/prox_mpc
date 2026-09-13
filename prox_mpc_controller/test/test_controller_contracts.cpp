@@ -1036,11 +1036,278 @@ TEST_F(ControllerContractsTest, AllowReversingSignsTheReferenceSpeedNegative)
 
   auto c = makeConfigured(
     {rclcpp::Parameter("FollowPath.max_obstacles", 0),
-      rclcpp::Parameter("FollowPath.allow_reversing", true)});
+      rclcpp::Parameter("FollowPath.allow_reversing", true),
+      rclcpp::Parameter("FollowPath.reverse_from_plan_orientation", true)});
   c->activate();
   c->setPlan(plan);
   c->computeVelocityCommands(makePose(0.0, 0.0, 0.0), geometry_msgs::msg::Twist(), nullptr);
   EXPECT_LT(c->mpc()->getGoalU()(0, static_cast<Eigen::Index>(c->idxV())), 0.0);
+}
+
+// The same plan, with reversing allowed but the plan's orientations not trusted
+// (the default): the reference stays forward-only. This is what keeps a planner
+// that leaves its pose orientations at the identity - NavFn, Smac 2D - from
+// being read as asking for a reverse traverse of every path running the other
+// way, which drove the robot backwards down the whole path.
+TEST_F(ControllerContractsTest, UntrustedPlanOrientationKeepsReferenceForward)
+{
+  nav_msgs::msg::Path plan = makeStraightPlan(11, 0.2);
+  for (auto & p : plan.poses) {
+    p.pose.orientation.z = 1.0;   // yaw = pi, opposite the +x tangent
+    p.pose.orientation.w = 0.0;
+  }
+
+  auto c = makeConfigured(
+    {rclcpp::Parameter("FollowPath.max_obstacles", 0),
+      rclcpp::Parameter("FollowPath.allow_reversing", true)});
+  c->activate();
+  c->setPlan(plan);
+  c->computeVelocityCommands(makePose(0.0, 0.0, 0.0), geometry_msgs::msg::Twist(), nullptr);
+  EXPECT_GE(c->mpc()->getGoalU()(0, static_cast<Eigen::Index>(c->idxV())), 0.0);
+}
+
+// A steering (Ackermann) model on a reversing plan. Unlike a differential drive,
+// a car-like platform cannot turn in place, so reverse is the only way through a
+// cusp and the capability has to survive the orientation-trust split. `dir` also
+// signs the steering inverse, so the reference steering angle turns the opposite
+// way in reverse for the same path curvature.
+TEST_F(ControllerContractsTest, SteeringModelTracksReverseOnADirectionalPlan)
+{
+  // An arc whose poses face backwards along it, which is how a reversing plan is
+  // expressed: the body heading is the path tangent turned by pi.
+  nav_msgs::msg::Path plan;
+  plan.header.frame_id = "map";
+  const double radius = 8.0;
+  const double dphi = 0.2 / radius;
+  for (int i = 0; i < 21; ++i) {
+    const double phi = static_cast<double>(i) * dphi;
+    geometry_msgs::msg::PoseStamped ps;
+    ps.header.frame_id = "map";
+    ps.pose.position.x = radius * std::sin(phi);
+    ps.pose.position.y = radius * (1.0 - std::cos(phi));
+    const double facing = phi + M_PI;
+    ps.pose.orientation.z = std::sin(facing / 2.0);
+    ps.pose.orientation.w = std::cos(facing / 2.0);
+    plan.poses.push_back(ps);
+  }
+
+  auto c = makeConfigured(
+    {rclcpp::Parameter("FollowPath.model_plugin", std::string(kFrontAxlePlugin)),
+      rclcpp::Parameter("FollowPath.max_obstacles", 0),
+      rclcpp::Parameter("FollowPath.allow_reversing", true),
+      rclcpp::Parameter("FollowPath.reverse_from_plan_orientation", true)});
+  c->activate();
+  c->setPlan(plan);
+  c->computeVelocityCommands(makePose(0.0, 0.0, M_PI), geometry_msgs::msg::Twist(), nullptr);
+  EXPECT_LT(c->mpc()->getGoalU()(0, static_cast<Eigen::Index>(c->idxV())), 0.0);
+
+  // The same plan with the orientations untrusted keeps the reference forward,
+  // so the default protects a steering model from an orientation-less planner
+  // exactly as it protects a differential drive.
+  auto fwd = makeConfigured(
+      {rclcpp::Parameter("FollowPath.model_plugin", std::string(kFrontAxlePlugin)),
+        rclcpp::Parameter("FollowPath.max_obstacles", 0),
+        rclcpp::Parameter("FollowPath.allow_reversing", true)});
+  fwd->activate();
+  fwd->setPlan(plan);
+  fwd->computeVelocityCommands(makePose(0.0, 0.0, M_PI), geometry_msgs::msg::Twist(), nullptr);
+  EXPECT_GE(fwd->mpc()->getGoalU()(0, static_cast<Eigen::Index>(fwd->idxV())), 0.0);
+}
+
+// Travel direction is a latched mode, not a per-cycle read of the plan, and a
+// change is accepted only from rest: a drivetrain takes a gear shift at
+// standstill, and the same gate is what stops the mode alternating cycle to
+// cycle. While the change is pending the reference is pinned to the arc length
+// under the robot, so the commanded speed falls to zero and the platform coasts
+// down to the standstill the change is waiting on.
+TEST_F(ControllerContractsTest, DirectionChangeIsHeldWhileThePlatformIsMoving)
+{
+  auto c = makeConfigured(
+    {rclcpp::Parameter("FollowPath.max_obstacles", 0),
+      rclcpp::Parameter("FollowPath.allow_reversing", true),
+      rclcpp::Parameter("FollowPath.reverse_from_plan_orientation", true),
+      rclcpp::Parameter("FollowPath.direction_switch_standstill_speed_mps", 1e-3),
+      rclcpp::Parameter("FollowPath.direction_switch_dwell_s", 0.0)});
+  c->activate();
+
+  // Build forward speed first, so the platform is moving when the plan flips.
+  c->setPlan(makeStraightPlan(61, 0.2));
+  geometry_msgs::msg::TwistStamped cmd;
+  for (int i = 0; i < 5; ++i) {
+    cmd = c->computeVelocityCommands(
+      makePose(0.2 * static_cast<double>(i), 0.0, 0.0), geometry_msgs::msg::Twist(), nullptr);
+  }
+  ASSERT_GT(cmd.twist.linear.x, 1e-3) << "the platform has to be moving for the gate to bite";
+
+  nav_msgs::msg::Path reverse_plan = makeStraightPlan(61, 0.2);
+  for (auto & p : reverse_plan.poses) {
+    p.pose.orientation.z = 1.0;   // yaw = pi, opposite the +x tangent
+    p.pose.orientation.w = 0.0;
+  }
+  c->setPlan(reverse_plan);
+  c->computeVelocityCommands(makePose(1.0, 0.0, 0.0), geometry_msgs::msg::Twist(), nullptr);
+
+  // Held, not taken: the reference speed is zero rather than negative.
+  EXPECT_NEAR(c->mpc()->getGoalU()(0, static_cast<Eigen::Index>(c->idxV())), 0.0, 1e-12);
+}
+
+// The second gate. With standstill satisfied throughout, a change still waits
+// out the dwell, which is what bounds the switching rate: a mode re-chosen every
+// cycle with no dwell is free to chatter however cheap each switch looks.
+TEST_F(ControllerContractsTest, DirectionChangeIsHeldUntilTheDwellElapses)
+{
+  auto c = makeConfigured(
+    {rclcpp::Parameter("FollowPath.max_obstacles", 0),
+      rclcpp::Parameter("FollowPath.allow_reversing", true),
+      rclcpp::Parameter("FollowPath.reverse_from_plan_orientation", true),
+      rclcpp::Parameter("FollowPath.direction_switch_standstill_speed_mps", 100.0),
+      rclcpp::Parameter("FollowPath.direction_switch_dwell_s", 100.0)});
+  c->activate();
+
+  nav_msgs::msg::Path reverse_plan = makeStraightPlan(61, 0.2);
+  for (auto & p : reverse_plan.poses) {
+    p.pose.orientation.z = 1.0;
+    p.pose.orientation.w = 0.0;
+  }
+  // The first direction of a task is free: nothing has been switched away from.
+  c->setPlan(reverse_plan);
+  c->computeVelocityCommands(makePose(0.0, 0.0, 0.0), geometry_msgs::msg::Twist(), nullptr);
+  ASSERT_LT(c->mpc()->getGoalU()(0, static_cast<Eigen::Index>(c->idxV())), 0.0);
+
+  // Switching straight back is not: the dwell has just been spent.
+  c->setPlan(makeStraightPlan(61, 0.2));
+  c->computeVelocityCommands(makePose(0.0, 0.0, 0.0), geometry_msgs::msg::Twist(), nullptr);
+  EXPECT_NEAR(c->mpc()->getGoalU()(0, static_cast<Eigen::Index>(c->idxV())), 0.0, 1e-12);
+}
+
+// Inside the goal-checker xy tolerance the reference is pinned to the goal pose
+// instead of tracking the robot's own projection onto the plan. Composing the
+// cruise taper with the sampling step makes the horizon's arc reach
+// remaining^2 / xy_tol, shorter than `remaining` everywhere inside the
+// tolerance, so the tracked reference would otherwise be a stub a few
+// millimetres ahead of the projection that the robot carries along with it -- a
+// reference with no fixed point, and one whose horizon never reaches the plan
+// end, so the goal's own orientation never enters it. Pinning gives the last
+// stretch a fixed setpoint and a standing yaw error to act on.
+TEST_F(ControllerContractsTest, GoalRegionPinsTheReferenceToTheGoalPose)
+{
+  nav_msgs::msg::Path plan = makeStraightPlan(11, 0.2);   // goal at x = 2.0
+  // A goal yaw the robot is already within tolerance of, so this exercises the
+  // settle pin rather than the on-the-spot turn tested below, while still
+  // differing from the plan's own tangent (0.0) that the reference held before.
+  plan.poses.back().pose.orientation.z = std::sin(0.15);
+  plan.poses.back().pose.orientation.w = std::cos(0.15);
+
+  auto c = makeConfigured({rclcpp::Parameter("FollowPath.max_obstacles", 0)});
+  c->activate();
+  c->setPlan(plan);
+
+  StubGoalChecker goal_checker(0.5);   // xy tolerance 1.0, yaw tolerance 0.5
+  // 0.5 m short of the goal: inside the tolerance, so the settle latch engages.
+  c->computeVelocityCommands(makePose(1.5, 0.0, 0.0), geometry_msgs::msg::Twist(), &goal_checker);
+
+  // Node 0 carries the goal pose, not the projection at x = 1.5.
+  EXPECT_NEAR(c->mpc()->getGoalX()(0, static_cast<Eigen::Index>(c->idxX())), 2.0, 1e-6);
+  EXPECT_NEAR(c->mpc()->getGoalX()(0, static_cast<Eigen::Index>(c->idxY())), 0.0, 1e-6);
+  EXPECT_NEAR(c->mpc()->getGoalX()(0, static_cast<Eigen::Index>(c->idxYaw())), 0.3, 1e-6);
+}
+
+// The latch is entered on the tolerance and released only past a wider band, so
+// a remaining distance hovering about the tolerance cannot flip the reference
+// mode to mode. Within one plan the projection is forward-only and the remaining
+// distance is monotone, so the band is what a replan crosses: a goal that moves
+// a little further away holds the latch, and one that moves well away releases
+// it back to path tracking.
+TEST_F(ControllerContractsTest, GoalRegionLatchReleasesOnlyPastTheHysteresisBand)
+{
+  auto c = makeConfigured(
+    {rclcpp::Parameter("FollowPath.max_obstacles", 0),
+      rclcpp::Parameter("FollowPath.goal_settle_hysteresis_m", 0.1)});
+  c->activate();
+
+  StubGoalChecker goal_checker(0.5);   // xy tolerance 1.0, so the band ends at 1.1
+  const geometry_msgs::msg::Twist zero;
+
+  // 0.5 m from the goal at x = 2.0: inside the tolerance, so the latch engages.
+  c->setPlan(makeStraightPlan(11, 0.2));
+  c->computeVelocityCommands(makePose(1.5, 0.0, 0.0), zero, &goal_checker);
+  ASSERT_NEAR(c->mpc()->getGoalX()(0, static_cast<Eigen::Index>(c->idxX())), 2.0, 1e-6);
+
+  // Replanned 1.05 m out: past the tolerance but inside the band, so the latch
+  // holds and the reference stays pinned to the new goal rather than tracking.
+  c->setPlan(makeStraightPlan(8, 0.15));   // goal at x = 1.05
+  c->computeVelocityCommands(makePose(0.0, 0.0, 0.0), zero, &goal_checker);
+  EXPECT_NEAR(c->mpc()->getGoalX()(0, static_cast<Eigen::Index>(c->idxX())), 1.05, 1e-6);
+
+  // Replanned 2.0 m out: past the band, so tracking resumes and node 0 is the
+  // robot's own projection onto the plan again.
+  c->setPlan(makeStraightPlan(11, 0.2));   // goal at x = 2.0
+  c->computeVelocityCommands(makePose(0.0, 0.0, 0.0), zero, &goal_checker);
+  EXPECT_NEAR(c->mpc()->getGoalX()(0, static_cast<Eigen::Index>(c->idxX())), 0.0, 1e-6);
+}
+
+// Once the checker's own xy condition is met, only the heading is outstanding.
+// Pinning the reference to the goal would leave the solver holding a position it
+// is already close enough to, and reversing and re-advancing to hold it as the
+// body sweeps round and the body-frame projection of the offset changes sign.
+// The reference is therefore held at the robot's own reference point, leaving
+// heading as the only standing error, and the platform turns on the spot.
+TEST_F(ControllerContractsTest, TerminalHeadingTurnsOnTheSpot)
+{
+  nav_msgs::msg::Path plan = makeStraightPlan(11, 0.2);   // goal at x = 2.0
+  plan.poses.back().pose.orientation.z = std::sin(M_PI / 4.0);   // goal yaw = pi/2
+  plan.poses.back().pose.orientation.w = std::cos(M_PI / 4.0);
+
+  auto c = makeConfigured({rclcpp::Parameter("FollowPath.max_obstacles", 0)});
+  c->activate();
+  c->setPlan(plan);
+
+  StubGoalChecker goal_checker(0.5);   // xy tolerance 1.0, yaw tolerance 0.5
+  // 0.1 m from the goal, so the translation is done, but pi/2 of heading out.
+  c->computeVelocityCommands(makePose(1.9, 0.0, 0.0), geometry_msgs::msg::Twist(), &goal_checker);
+
+  // The reference holds station at the robot, not at the goal 0.1 m ahead...
+  EXPECT_NEAR(c->mpc()->getGoalX()(0, static_cast<Eigen::Index>(c->idxX())), 1.9, 1e-6);
+  // ...and carries the goal heading, which is the error left to close.
+  EXPECT_NEAR(c->mpc()->getGoalX()(0, static_cast<Eigen::Index>(c->idxYaw())), M_PI / 2.0, 1e-6);
+  // No reference speed: the platform is asked to turn, not to translate.
+  EXPECT_NEAR(c->mpc()->getGoalU()(0, static_cast<Eigen::Index>(c->idxV())), 0.0, 1e-12);
+}
+
+// The same geometry with the heading already inside the checker's yaw tolerance
+// is an ordinary settle: nothing is outstanding but the last of the translation,
+// so the reference stays pinned to the goal pose.
+TEST_F(ControllerContractsTest, TerminalHeadingWithinToleranceStaysPinnedToTheGoal)
+{
+  auto c = makeConfigured({rclcpp::Parameter("FollowPath.max_obstacles", 0)});
+  c->activate();
+  c->setPlan(makeStraightPlan(11, 0.2));   // goal yaw 0, matching the robot's
+
+  StubGoalChecker goal_checker(0.5);
+  c->computeVelocityCommands(makePose(1.9, 0.0, 0.0), geometry_msgs::msg::Twist(), &goal_checker);
+
+  EXPECT_NEAR(c->mpc()->getGoalX()(0, static_cast<Eigen::Index>(c->idxX())), 2.0, 1e-6);
+}
+
+// A steering model is excluded: a car-like platform cannot turn on the spot, and
+// pinning its position would leave it no admissible way to correct its heading.
+// It settles onto the goal pose and manoeuvres out of a heading error instead.
+TEST_F(ControllerContractsTest, SteeringModelDoesNotTurnOnTheSpotAtTheGoal)
+{
+  nav_msgs::msg::Path plan = makeStraightPlan(11, 0.2);
+  plan.poses.back().pose.orientation.z = std::sin(M_PI / 4.0);
+  plan.poses.back().pose.orientation.w = std::cos(M_PI / 4.0);
+
+  auto c = makeConfigured(
+    {rclcpp::Parameter("FollowPath.model_plugin", std::string(kFrontAxlePlugin)),
+      rclcpp::Parameter("FollowPath.max_obstacles", 0)});
+  c->activate();
+  c->setPlan(plan);
+
+  StubGoalChecker goal_checker(0.5);
+  c->computeVelocityCommands(makePose(1.9, 0.0, 0.0), geometry_msgs::msg::Twist(), &goal_checker);
+
+  EXPECT_NEAR(c->mpc()->getGoalX()(0, static_cast<Eigen::Index>(c->idxX())), 2.0, 1e-6);
 }
 
 TEST_F(ControllerContractsTest, ReversingOffKeepsForwardOnlyReferenceDespiteOrientation)
@@ -1085,7 +1352,8 @@ TEST_F(ControllerContractsTest, DirectionChangeCuspTruncatesTheReference)
 
   auto c = makeConfigured(
     {rclcpp::Parameter("FollowPath.max_obstacles", 0),
-      rclcpp::Parameter("FollowPath.allow_reversing", true)});
+      rclcpp::Parameter("FollowPath.allow_reversing", true),
+      rclcpp::Parameter("FollowPath.reverse_from_plan_orientation", true)});
   c->activate();
   c->setPlan(plan);
   c->computeVelocityCommands(makePose(0.0, 0.0, 0.0), geometry_msgs::msg::Twist(), nullptr);

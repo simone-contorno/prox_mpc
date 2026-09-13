@@ -11,6 +11,12 @@ diff and is not stated here.
 | --- | --- | --- | --- |
 | `model_plugin` defaults to `prox_mpc_core/Unicycle` | yes | yes | yes |
 | New `allow_reversing` parameter, default `false` | yes | yes | yes |
+| New `reverse_from_plan_orientation` parameter, default `false` | yes | yes | yes |
+| New `direction_switch_standstill_speed_mps` / `direction_switch_dwell_s` parameters | yes | yes | yes |
+| New `goal_settle_hysteresis_m` parameter, default `0.10` | yes | yes | yes |
+| New `prediction_forward_shadow_s` parameter, default `0.0` | yes | yes | yes |
+| New `obstacle_yield_band_m` / `obstacle_yield_caps_speed` parameters | yes | yes | yes |
+| The reference is pinned to the goal pose inside the goal-checker xy tolerance | yes | yes | yes |
 | New `brake_period_s` parameter, default `0.0` | yes | yes | yes |
 | `ProxMpcController` gains `readModelMapping()` and cached mapping members | yes | **no** | yes |
 | The model contract is validated at `configure()` and rejects what cannot be driven | yes | yes | yes |
@@ -167,16 +173,66 @@ constraint on the command it actually sent.
 This changes motion after a rejected cycle: the next solve no longer plans a step
 away from a command the robot never received. No configuration changes.
 
+## Terminal behaviour in the goal region
+
+This one is not behind a parameter, so it applies on upgrade.
+
+Inside the goal-checker xy tolerance the reference is now pinned to the goal
+pose instead of tracking the robot's own projection onto the plan, and once the
+checker's xy condition is met and only the heading is outstanding, a platform
+with no steering channel holds station and turns on the spot. Previously the
+cruise taper and the sampling step composed to give the reference horizon an arc
+reach of `remaining^2 / xy_tol` - shorter than `remaining` everywhere inside the
+tolerance - so the goal region was tracked against a stub a few millimetres ahead
+of the projection that moved with the robot, and the goal's own orientation never
+entered the reference at all. A deployment that relied on the controller stalling
+at a terminal heading error and a recovery behaviour taking over will now see the
+controller close that error itself.
+
+The change is source, ABI and wire compatible, and the two gates that bound
+direction switching are inert unless `reverse_from_plan_orientation` is set.
+
 ## New behaviour behind parameters
 
 | Parameter | Type | Default | Units | Meaning |
 | --- | --- | --- | --- | --- |
-| `allow_reversing` | bool | `false` | - | Follow the plan's own pose orientations into reverse travel, signing the reference speed and truncating the reference at the first direction change. |
+| `allow_reversing` | bool | `false` | - | Whether the solver may plan reverse travel; off narrows the linear control bound to `[0, v_max]`. |
+| `reverse_from_plan_orientation` | bool | `false` | - | Whether the plan's pose orientations may sign the reference into reverse and truncate it at the first direction change. Requires `allow_reversing`. |
+| `direction_switch_standstill_speed_mps` | double | `0.05` | m/s | Speed at or below which the platform counts as stopped for a travel-direction change. Inert unless `reverse_from_plan_orientation`. |
+| `direction_switch_dwell_s` | double | `0.5` | s | Minimum time between two accepted direction changes. Inert unless `reverse_from_plan_orientation`. |
+| `goal_settle_hysteresis_m` | double | `0.10` | m | Band beyond the goal-checker xy tolerance that the robot must re-cross before the terminal settle releases back to path tracking. |
+| `prediction_forward_shadow_s` | double | `0.0` | s | Biases a tracked mover's predicted keep-out forward along its own heading by this many seconds of its travel, growing the radius by the same distance so its current position stays covered. `0.0` reproduces a centred keep-out exactly. |
+| `obstacle_yield_band_m` | double | `0.0` | m | Depth of predicted keep-out breach over which the cruise is eased to zero, so the robot waits for a crossing mover instead of racing it. `0.0` reproduces the obstacle-blind cruise exactly. |
+| `obstacle_yield_caps_speed` | bool | `false` | - | Makes that yield cap the solver's forward speed bound rather than only lowering a cruise target the obstacle term can override. Requires `obstacle_yield_band_m > 0`. |
 | `brake_period_s` | double | `0.0` | s | Step the deceleration ramp advances by on a braking cycle. `0.0` measures the inter-cycle period instead and clamps it into `[dt, 2 * dt]`; a positive value overrides the measurement and is used as-is. |
 
 `allow_reversing`'s default reproduces the previous forward-only reference. With
 it on, a model that declares no reverse travel keeps the forward-only reference
 and logs a warning at `configure()`.
+
+`reverse_from_plan_orientation` is the switch that reads travel direction out of
+the plan. It defaults `false` because only a planner that sets pose orientations
+means anything by them, and a plan carries nothing that says whether its planner
+did: NavFn and Smac 2D emit the identity quaternion on every pose, which is
+byte-identical to a genuine straight reverse plan. Trusting them reads any path
+running against that one fixed heading as a reverse traverse, so the robot drives
+the whole path backwards instead of turning around, and a path whose heading
+component changes sign flips the reference from cycle to cycle. Set it true with
+a cusp-emitting planner (Smac Hybrid-A*, State Lattice); leave it false with
+NavFn or Smac 2D.
+
+The three prediction parameters are all inert at their defaults, so a 1.0.0
+deployment upgrading without touching them keeps the previous obstacle
+behaviour exactly. They are the release's avoidance work and are worth reading
+before enabling: `obstacle_yield_band_m` makes the *reference* yield to a
+crossing mover, and `obstacle_yield_caps_speed` is what turns that yield from a
+request into a speed limit - on its own the eased cruise is the lightest term in
+the cost and the solver overrides it, swerving at full speed rather than slowing.
+Enable the pair together with `allow_reversing`: waiting is safe when the robot
+can back off, and with reversing off a waiting robot is boxed in by a second
+mover. `prediction_forward_shadow_s` is unit-tested but left off, its A/B having
+been directionally favourable and statistically inconclusive. The measured
+figures for all three are in [architecture.md](architecture.md).
 
 `brake_period_s`'s default of `0.0` reproduces 1.0.0's ramp on a
 `controller_server` running at `dt`, which stepped by the configured `dt`

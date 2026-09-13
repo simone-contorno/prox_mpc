@@ -2035,6 +2035,295 @@ TEST_F(ProxMpcControllerTest, PredictiveFillPropagatesObstacleAndKeepsIdentity)
   }
 }
 
+// The forward shadow biases the keep-out along the track's own heading, so the
+// space a mover is about to occupy costs more than the space it is vacating. The
+// centre moves forward by shadow = prediction_forward_shadow_s * speed and the
+// radius grows by the same amount, which keeps the obstacle's own position
+// covered while extending the disc ahead of it.
+TEST_F(ProxMpcControllerTest, ForwardShadowBiasesTheKeepOutAheadOfTheTrack)
+{
+  auto c = makeConfigured(
+  {
+    rclcpp::Parameter("FollowPath.np", 5),
+    rclcpp::Parameter("FollowPath.nc", 5),
+    rclcpp::Parameter("FollowPath.max_obstacles", 1),
+    rclcpp::Parameter("FollowPath.predict_obstacles", true),
+    rclcpp::Parameter("FollowPath.dynamic_speed_threshold", 0.05),
+    rclcpp::Parameter("FollowPath.robot_radius", 0.5),
+    rclcpp::Parameter("FollowPath.safety_margin", 0.1),
+    rclcpp::Parameter("FollowPath.prediction_forward_shadow_s", 0.4),
+  });
+  const std::size_t np = 5;
+  const std::size_t k = 1;
+  const double dt = 0.1;
+  const double vx = 1.0;
+  const double base_d_safe = 0.5 + 0.2 + 0.1;
+  const double shadow = 0.4 * vx;        // prediction_forward_shadow_s * speed
+  const rclcpp::Time now(1000, 0, RCL_ROS_TIME);
+
+  c->injectObstacles(makeObstacleMsg(now, 2.0, 0.0, vx, 0.0, 0.2));
+
+  MatrixXd reference = MatrixXd::Zero(static_cast<Eigen::Index>(np + 1), c->nDim());
+  for (std::size_t i = 0; i <= np; ++i) {
+    reference(static_cast<Eigen::Index>(i), 0) = static_cast<double>(i) * 0.2;
+  }
+  MatrixXd obs(static_cast<Eigen::Index>(np * k), 3);
+  c->fillObstacles(reference, obs, now);
+
+  for (std::size_t node = 0; node < np; ++node) {
+    const double dt_k = static_cast<double>(node + 1) * dt;
+    const Eigen::Index row = static_cast<Eigen::Index>(node * k);
+    const double truth_x = 2.0 + vx * dt_k;   // where the obstacle actually is
+
+    // Centre biased one shadow ahead, along +x, and the radius grown to match.
+    EXPECT_NEAR(obs(row, 0), truth_x + shadow, 1e-9);
+    EXPECT_NEAR(obs(row, 1), 0.0, 1e-9);
+    EXPECT_NEAR(obs(row, 2), base_d_safe + shadow, 1e-9);
+
+    // The obstacle's own position stays inside its keep-out: a bare shift would
+    // open a hole over the object itself once the shadow passed d_safe.
+    EXPECT_LT(std::abs(obs(row, 0) - truth_x), obs(row, 2));
+
+    // And the disc is asymmetric about the obstacle: further ahead than behind.
+    const double reach_ahead = obs(row, 0) + obs(row, 2) - truth_x;
+    const double reach_behind = truth_x - (obs(row, 0) - obs(row, 2));
+    EXPECT_GT(reach_ahead, reach_behind);
+    EXPECT_NEAR(reach_ahead - reach_behind, 2.0 * shadow, 1e-9);
+    // Behind the mover the keep-out is never tighter than the unbiased one.
+    EXPECT_NEAR(reach_behind, base_d_safe, 1e-9);
+  }
+}
+
+// A track with no measurable heading casts no shadow: normalising its velocity
+// would place the disc in an arbitrary direction. Reachable because
+// dynamic_speed_threshold may itself be set to zero.
+TEST_F(ProxMpcControllerTest, ForwardShadowIgnoresATrackWithNoHeading)
+{
+  auto c = makeConfigured(
+  {
+    rclcpp::Parameter("FollowPath.np", 2),
+    rclcpp::Parameter("FollowPath.nc", 2),
+    rclcpp::Parameter("FollowPath.max_obstacles", 1),
+    rclcpp::Parameter("FollowPath.predict_obstacles", true),
+    rclcpp::Parameter("FollowPath.dynamic_speed_threshold", 0.0),
+    rclcpp::Parameter("FollowPath.robot_radius", 0.5),
+    rclcpp::Parameter("FollowPath.safety_margin", 0.1),
+    rclcpp::Parameter("FollowPath.prediction_forward_shadow_s", 0.4),
+  });
+  const rclcpp::Time now(1000, 0, RCL_ROS_TIME);
+  c->injectObstacles(makeObstacleMsg(now, 2.0, 0.0, 0.0, 0.0, 0.2));
+
+  MatrixXd reference = MatrixXd::Zero(3, c->nDim());
+  MatrixXd obs(2, 3);
+  c->fillObstacles(reference, obs, now);
+
+  for (Eigen::Index row = 0; row < 2; ++row) {
+    EXPECT_TRUE(std::isfinite(obs(row, 0)));
+    EXPECT_TRUE(std::isfinite(obs(row, 1)));
+    EXPECT_NEAR(obs(row, 0), 2.0, 1e-9);              // unmoved
+    EXPECT_NEAR(obs(row, 1), 0.0, 1e-9);
+    EXPECT_NEAR(obs(row, 2), 0.5 + 0.2 + 0.1, 1e-9);  // unbiased radius
+  }
+}
+
+// Obstacle-aware cruise. A mover whose predicted path crosses where the robot is
+// heading eases the cruise, so the robot waits for it rather than racing it. The
+// yield reads the predictions the previous cycle's fill retained, so each cycle
+// is primed with one fill before it runs.
+namespace
+{
+// Speed reference at the first control node, one entry per cycle, with a mover
+// at (1.0, -1.0) heading +y at 1 m/s - on the plan's line at t = 1 s, which is
+// where a 1 m/s reference along +x also is. `with_mover` false leaves the
+// retained predictions empty.
+  std::vector<double> cruisePerCycle(
+    const std::function<std::shared_ptr<TestableProxMpcController>(
+      const std::vector<rclcpp::Parameter> &)> & make, double band, bool with_mover, int cycles = 1)
+  {
+    auto c = make(
+    {
+      rclcpp::Parameter("FollowPath.max_obstacles", 1),
+      rclcpp::Parameter("FollowPath.predict_obstacles", true),
+      rclcpp::Parameter("FollowPath.dynamic_speed_threshold", 0.05),
+      rclcpp::Parameter("FollowPath.robot_radius", 0.3),
+      rclcpp::Parameter("FollowPath.safety_margin", 0.1),
+      rclcpp::Parameter("FollowPath.obstacle_yield_band_m", band),
+  });
+    c->activate();
+    c->setPlan(makeStraightPlan(61, 0.2));
+    const rclcpp::Time now(1000, 0, RCL_ROS_TIME);
+    const std::size_t np = c->mpc()->getNp();
+    MatrixXd reference = MatrixXd::Zero(static_cast<Eigen::Index>(np + 1), c->nDim());
+    for (std::size_t i = 0; i <= np; ++i) {
+      reference(static_cast<Eigen::Index>(i), 0) = 0.1 * static_cast<double>(i);
+    }
+    std::vector<double> v;
+    for (int i = 0; i < cycles; ++i) {
+      if (with_mover) {
+        c->injectObstacles(makeObstacleMsg(now, 1.0, -1.0, 0.0, 1.0, 0.2));
+        MatrixXd obs(static_cast<Eigen::Index>(np), 3);
+        c->fillObstacles(reference, obs, now); // prime the retained predictions
+      }
+      c->computeVelocityCommands(makePose(0.0, 0.0, 0.0), geometry_msgs::msg::Twist(), nullptr);
+      v.push_back(c->mpc()->getGoalU()(0, 0));
+    }
+    return v;
+  }
+}  // namespace
+
+TEST_F(ProxMpcControllerTest, ObstacleYieldEasesCruiseForACrossingMover)
+{
+  auto make = [this](const std::vector<rclcpp::Parameter> & o) {return makeConfigured(o);};
+  const double blind = cruisePerCycle(make, 0.0, true).front();
+  const double yielding = cruisePerCycle(make, 0.5, true).front();
+  ASSERT_GT(blind,
+    0.0) << "the obstacle-blind cruise must be moving for the comparison to mean anything";
+  EXPECT_LT(yielding, blind);
+}
+
+// With nothing predicted to cross where the robot is heading, the cruise is
+// exactly the obstacle-blind one: the feature is inert until a mover is in the way.
+TEST_F(ProxMpcControllerTest, ObstacleYieldLeavesCruiseAloneWithNoMover)
+{
+  auto make = [this](const std::vector<rclcpp::Parameter> & o) {return makeConfigured(o);};
+  EXPECT_NEAR(
+    cruisePerCycle(make, 0.5, false).front(), cruisePerCycle(make, 0.0, false).front(), 1e-12);
+}
+
+// The failure the yield has to avoid is snapping back to full cruise while the
+// mover is still there. That happens if a reduction is allowed to clear the
+// breach that caused it - a slower trajectory is a shorter one, which can stop
+// reaching the mover - and the release is instant. With the plan judged at the
+// intended cruise and the release rate-limited, a persisting mover keeps the
+// cruise below the obstacle-blind one on every cycle.
+TEST_F(ProxMpcControllerTest, ObstacleYieldHoldsWhileTheMoverPersists)
+{
+  auto make = [this](const std::vector<rclcpp::Parameter> & o) {return makeConfigured(o);};
+  const double blind = cruisePerCycle(make, 0.0, true).front();
+  for (const double v : cruisePerCycle(make, 0.5, true, 6)) {
+    EXPECT_LT(v, blind);
+  }
+}
+
+// The solver does not follow the plan exactly, so a check on the plan alone can
+// watch a path the robot is not driving. Here the plan runs clear along +x while
+// the trajectory the solver planned last cycle swings up through a mover sitting
+// 1 m off the plan: the yield has to see it on the trajectory.
+TEST_F(ProxMpcControllerTest, ObstacleYieldSeesAMoverOnThePlannedTrajectoryOffThePlan)
+{
+  auto run = [this](double band) {
+      auto c = makeConfigured(
+    {
+      rclcpp::Parameter("FollowPath.max_obstacles", 1),
+      rclcpp::Parameter("FollowPath.predict_obstacles", true),
+      rclcpp::Parameter("FollowPath.dynamic_speed_threshold", 0.05),
+      rclcpp::Parameter("FollowPath.robot_radius", 0.3),
+      rclcpp::Parameter("FollowPath.safety_margin", 0.1),
+      rclcpp::Parameter("FollowPath.obstacle_yield_band_m", band),
+      });
+      c->activate();
+      c->setPlan(makeStraightPlan(61, 0.2));
+      const rclcpp::Time now(1000, 0, RCL_ROS_TIME);
+      const std::size_t np = c->mpc()->getNp();
+      // A slow mover 1 m off the plan: clear of the plan by more than d_safe.
+      c->injectObstacles(makeObstacleMsg(now, 1.0, 1.0, 0.3, 0.0, 0.2));
+      MatrixXd reference = MatrixXd::Zero(static_cast<Eigen::Index>(np + 1), c->nDim());
+      MatrixXd obs(static_cast<Eigen::Index>(np), 3);
+      c->fillObstacles(reference, obs, now);
+      // Last cycle's trajectory heads up the diagonal, through (1.0, 1.0).
+      MatrixXd traj = MatrixXd::Zero(static_cast<Eigen::Index>(np + 1), c->nDim());
+      for (std::size_t k = 0; k <= np; ++k) {
+        traj(static_cast<Eigen::Index>(k), 0) = 0.1 * static_cast<double>(k);
+        traj(static_cast<Eigen::Index>(k), 1) = 0.1 * static_cast<double>(k);
+        traj(static_cast<Eigen::Index>(k), 2) = M_PI / 4.0;
+      }
+      c->mpc()->setX(traj);
+      c->computeVelocityCommands(makePose(0.0, 0.0, 0.0), geometry_msgs::msg::Twist(), nullptr);
+      return c->mpc()->getGoalU()(0, 0);
+    };
+  EXPECT_LT(run(0.5), run(0.0));
+}
+
+// The eased cruise is only a target the obstacle term can override, so with the
+// cap enabled the yield also bounds the forward speed the solver may command.
+namespace
+{
+// The model's current upper bound on the speed control (index 0 for the Unicycle).
+  double speedUpperBound(const TestableProxMpcController & c)
+  {
+    for (const auto & kv : c.model()->getIneq("u")) {
+      if (static_cast<std::size_t>(kv.second[0]) == 0) {return kv.second[2];}
+    }
+    return std::numeric_limits<double>::quiet_NaN();
+  }
+
+// One cycle against the crossing mover used above, with the cap on or off and
+// the previously applied speed set to `last_v`.
+  std::shared_ptr<TestableProxMpcController> capCycle(
+    const std::function<std::shared_ptr<TestableProxMpcController>(
+      const std::vector<rclcpp::Parameter> &)> & make, bool caps, double last_v)
+  {
+    auto c = make(
+    {
+      rclcpp::Parameter("FollowPath.max_obstacles", 1),
+      rclcpp::Parameter("FollowPath.predict_obstacles", true),
+      rclcpp::Parameter("FollowPath.dynamic_speed_threshold", 0.05),
+      rclcpp::Parameter("FollowPath.robot_radius", 0.3),
+      rclcpp::Parameter("FollowPath.safety_margin", 0.1),
+      rclcpp::Parameter("FollowPath.obstacle_yield_band_m", 0.5),
+      rclcpp::Parameter("FollowPath.obstacle_yield_caps_speed", caps),
+  });
+    c->activate();
+    c->setPlan(makeStraightPlan(61, 0.2));
+    const rclcpp::Time now(1000, 0, RCL_ROS_TIME);
+    const std::size_t np = c->mpc()->getNp();
+    MatrixXd reference = MatrixXd::Zero(static_cast<Eigen::Index>(np + 1), c->nDim());
+    for (std::size_t i = 0; i <= np; ++i) {
+      reference(static_cast<Eigen::Index>(i), 0) = 0.1 * static_cast<double>(i);
+    }
+    c->injectObstacles(makeObstacleMsg(now, 1.0, -1.0, 0.0, 1.0, 0.2));
+    MatrixXd obs(static_cast<Eigen::Index>(np), 3);
+    c->fillObstacles(reference, obs, now);
+    c->lastCmdU()(0) = last_v;
+    c->computeVelocityCommands(makePose(0.0, 0.0, 0.0), geometry_msgs::msg::Twist(), nullptr);
+    return c;
+  }
+}  // namespace
+
+TEST_F(ProxMpcControllerTest, ObstacleYieldCapBoundsTheForwardSpeed)
+{
+  auto make = [this](const std::vector<rclcpp::Parameter> & o) {return makeConfigured(o);};
+  auto c = capCycle(make, true, 0.0);
+  EXPECT_LT(speedUpperBound(*c), c->vMax());
+}
+
+// The cap is what makes the yield slow the robot, but it must never make the
+// first control infeasible: the solver holds that control within the model's
+// deceleration times dt of the command last applied, so a bound under that would
+// leave no admissible first control. Here the robot is doing 0.5 m/s into a
+// breach deep enough to ask for a stop, and the bound stops at what it can reach.
+TEST_F(ProxMpcControllerTest, ObstacleYieldCapNeverFallsBelowWhatTheRobotCanReach)
+{
+  auto make = [this](const std::vector<rclcpp::Parameter> & o) {return makeConfigured(o);};
+  auto c = capCycle(make, true, 0.5);
+  double decel = std::numeric_limits<double>::quiet_NaN();
+  for (const auto & kv : c->model()->getIneq("du")) {
+    if (static_cast<std::size_t>(kv.second[0]) == 0) {decel = std::abs(kv.second[1]);}
+  }
+  ASSERT_TRUE(std::isfinite(decel));
+  EXPECT_GE(speedUpperBound(*c), 0.5 - decel * c->mpc()->getdt() - 1e-12);
+  EXPECT_LT(speedUpperBound(*c), c->vMax()) << "a deep breach must still lower the bound";
+}
+
+// Without the cap the yield only lowers the cruise target; the solver's speed
+// bound is left exactly where the speed limit put it.
+TEST_F(ProxMpcControllerTest, ObstacleYieldWithoutTheCapLeavesTheBoundAlone)
+{
+  auto make = [this](const std::vector<rclcpp::Parameter> & o) {return makeConfigured(o);};
+  auto c = capCycle(make, false, 0.0);
+  EXPECT_NEAR(speedUpperBound(*c), c->vMax(), 1e-12);
+}
+
 // The hybrid fill keeps a static costmap obstacle in a remaining slot while a
 // dynamic track occupies the reserved slot.
 //
