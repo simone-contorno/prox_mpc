@@ -238,8 +238,8 @@ narrative and the conclusion on ProxMPC are in
 > dev host (Intel Core i7-10750H, 6 cores / 12 threads, 31 GiB RAM,
 > Ubuntu 24.04.4) - not on physical robot hardware and not contact-dynamics.
 > A collision is a *would-be* overlap of the robot and obstacle discs, scored
-> identically for every controller. Gazebo validation is a single open-cell run;
-> full Gazebo and hardware validation remain open.
+> identically for every controller. Gazebo validation is five runs of one open
+> cell; the full Gazebo matrix and hardware validation remain open.
 
 ## Configuration
 
@@ -381,8 +381,9 @@ committed grids + posters are under `doc/media/`.
 
 > Simulation results on a kinematic plant, not physical hardware and not
 > contact-dynamics; a collision is a *would-be* overlap of the robot and obstacle
-> discs, scored identically for every controller; Gazebo validation is a single
-> open-cell run, with full Gazebo and hardware validation still open. The full
+> discs, scored identically for every controller; Gazebo validation is five runs
+> of one open cell, with the full Gazebo matrix and hardware validation still
+> open. The full
 > statement is in the [Notes on the metrics](#notes-on-the-metrics) above and in
 > the [root README](../README.md).
 

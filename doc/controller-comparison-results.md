@@ -10,7 +10,7 @@ The mode-(b1) rows in Section 6.3 come from the 40-run core-sim matrix recorded 
 This replaces the merged two-session set published previously, and it removes the cross-session caveat entirely: there is no longer any row whose comparability depends on two campaigns being close enough.
 
 - **Tree:** the `2.0.0` release of the `test/audit-benchmark-revalidation` branch. The measured binary is the one described in Sections 5, 6.2 and 6.4, built from the sources that release carries.
-- **Mode (a)**, the Gazebo results in Section 7, was **not** re-run and still reflects the `v1.0.0` baseline; it is called out again where it appears.
+- **Mode (a)**, the Gazebo results in Section 7, was re-run on 2026-09-13 on the same host: 5 runs of the demo's open-room traverse on the shipped demo parameters.
 
 **How sensitive these numbers are.** Over this work the predictive all-cells collision rate moved 6% -> 10% -> 6% on 15 mm of keep-out, with no change to the algorithm. Re-running the identical stock binaries in this campaign moved peer controllers by up to 8 points against the previous matrix (MPPI's all-cells rate 26% -> 18%, Graceful 40% -> 36%, RPP 20% -> 16%, DWB 26% -> 30%, Vector Pursuit 22% -> 26%), on code that did not change. Read any single cell's collision count as noise; the aggregate over 30 or 50 runs is the number that carries meaning, and a gap smaller than about 8 points is not resolved by this campaign.
 
@@ -307,11 +307,28 @@ The reactive preset's shipped default stays forward-only, because a library cann
 ## 7. Real-stack validation (Gazebo)
 
 To confirm the plugin behaves under the full production stack and not only against a kinematic plant, ProxMPC also runs in mode (a): Gazebo Harmonic physics, a TurtleBot3 waffle, AMCL localization, costmaps, and the complete Nav2 velocity chain, headless.
-It reaches the goal (`SUCCEEDED`), tracks the path to **5.6 mm cross-track RMS**, and taps its diagnostics through the real `controller_server` (p95 solve 0.438 ms, 0 % deadline-miss, 0 % infeasible) - the same profile measured on the plant, with real sensor and physics noise.
+The cell is the demo's open-room traverse - spawn `(-2.0, -0.5)`, goal `(2.0, -0.5)`, about 4 m - driven by the shipped [`nav2_prox_mpc.yaml`](../prox_mpc_demo/config/nav2_prox_mpc.yaml) with only `publish_diagnostics` turned on, which is opt-in telemetry that publishes when subscribed and does not touch control.
 
-> **Mode (a) was not re-run in this pass and this section still reflects the `v1.0.0` baseline.** It is pending its own re-validation. The b1/b2 numbers elsewhere in this document are unaffected, since neither uses Gazebo.
->
-> This scopes the tracking and solve figures above, not Gazebo as a whole: the `2.0.0` reverse-travel and obstacle-yield behaviour *was* measured there, and those runs are reported in [`prox_mpc_demo/doc/nav2-simulation.md`](../prox_mpc_demo/doc/nav2-simulation.md).
+| Measure | Mode (a), 5 runs | Mode (b2) open cell, same controller |
+| --- | --- | --- |
+| Goal reached | **5/5**, 0 recoveries | 5/5 |
+| Cross-track RMS | **5.76 ± 1.23 mm** | 0.1 mm |
+| Cross-track max | 16.7 ± 4.5 mm | - |
+| Solve p50 | 0.364 ± 0.036 ms | 0.189 ± 0.016 ms |
+| Solve p95 | 1.382 ± 0.199 ms | 0.910 ± 0.082 ms |
+| Solve max (worst run) | 11.85 ms | 3.63 ms |
+| Cycles over the 50 ms budget | **0** | 0 |
+| Deadline-miss / infeasible | **0 % / 0 %** | 0 % / 0 % |
+| Mean SQP iterations | 1.00 | 1.00 |
+| QP status histogram | **966/966 `PROXQP_SOLVED`** | - |
+
+Three things this establishes. The **real-time iteration holds under real physics**: mean SQP iterations is exactly 1.00 across 966 control cycles, and not one exceeded the 50 ms budget. **Tracking survives real sensing**: 5.8 mm RMS against AMCL localization and a simulated lidar, where the kinematic plant tracks to a tenth of a millimetre against ground truth - the gap is what localization and physics cost, not controller error. And the **`PROXQP_PRIMAL_INFEASIBLE` reports discussed in Section 5 do not appear here at all**: every one of the 966 cycles returned `PROXQP_SOLVED`.
+
+Per-cycle compute is about 1.9x the mode-(b2) median for the same controller, and 1.5x at p95. That is expected rather than a regression: mode (a) runs Gazebo physics, the sensor pipeline and AMCL on the same host as the controller, while mode (b2) drives a kinematic plant. The absolute numbers stay far inside budget either way.
+
+> **Not a controlled comparison with the `v1.0.0` figures this section used to carry** (5.6 mm RMS, 0.438 ms p95). Those were measured on a different controller configuration - `max_iter_sqp: 100`, `w_weight: 100`, `safety_margin: 0.1`, no reverse travel - as well as different code, two months earlier on a thermally variable laptop. The tracking figure is unchanged within its spread; the solve-time difference is **not attributed** here, because nothing in these two runs isolates a cause.
+
+Mode (a) remains a single open-cell gate on one machine: it answers "does the plugin behave under the production stack", not "how does it compare", which is what modes (b1) and (b2) are for. The `2.0.0` reverse-travel and obstacle-yield behaviour was measured in Gazebo separately, and those runs are reported in [`prox_mpc_demo/doc/nav2-simulation.md`](../prox_mpc_demo/doc/nav2-simulation.md).
 
 ## 8. Threats to validity
 
@@ -326,7 +343,7 @@ It reaches the goal (`SUCCEEDED`), tracks the path to **5.6 mm cross-track RMS**
 - **Every figure comes from one machine.** The whole document was measured on the x86-64 dev host named in Section 2 and on no other, so the absolute numbers are that host's; what transfers to a different machine is the ranking, not the values. The per-cycle compute in Section 4 is the cleaner controller-only measure, since process CPU/RSS includes the shared costmap.
 - **The pure-geometric controllers are genuinely lighter.** ProxMPC is the cheapest of the controllers that solve a constrained optimisation each cycle, not the cheapest outright.
 - **MPPI is stochastic with no exposed seed** in Nav2 Jazzy, so its per-scenario variance is real. It runs 10 repeats per obstacle cell against the others' 5, which characterises that variance without pinning it down.
-- **Determinism vs. physics.** Modes (b1)/(b2) are deterministic plants, so their near-zero geometric std is reproducibility, not a noise estimate. Mode (a) carries real Gazebo variance and was not re-run (Section 7). `dynamic_multi_noise` adds a Gaussian range-noise model on the scan.
+- **Determinism vs. physics.** Modes (b1)/(b2) are deterministic plants, so their near-zero geometric std is reproducibility, not a noise estimate. Mode (a) carries real Gazebo variance, which is why its five runs are reported with a spread (Section 7). `dynamic_multi_noise` adds a Gaussian range-noise model on the scan.
 - **Four of 435 matrix cells failed to bring up Nav2 and were discarded and re-run**, detected by the controller never receiving a path rather than by their results (see Provenance). All 435 records in the final set show a real path delivered. Five further runs failed behaviourally and are reported as failures, not re-run.
 - **An unexplained solver report remains open.** Reactive ProxMPC emits `PROXQP_PRIMAL_INFEASIBLE` on 9 of 50 runs against none in the `v1.0.0`-era campaign, on a QP whose feasible set is provably non-empty (Section 5). Three candidate causes were tested and eliminated. It has no measured consequence, but it is not understood.
 - **`blind_multi_0` is the predictive preset's one remaining weak cell** (3/5, against 0/5 on the other five multi cells). It is not diagnosed here.
@@ -352,7 +369,7 @@ The second is that **the predictive preset's avoidance genuinely improved, and t
 
 The reactive preset moved the other way, 37 % -> 53 % on the multi-mover cells. Part of that is the deliberate reverse fix (Section 6.4) and part is within the 8-point noise band applied twice; it is reported as measured, and it is the reason the reactive preset is documented as a single-obstacle configuration.
 
-**What remains open:** every figure comes from the single x86-64 host in Section 2, Gazebo validation still reflects `v1.0.0`, the reactive infeasibility report in Section 5 is unexplained, and `blind_multi_0` remains the predictive preset's one weak cell at 3/5. None of these affect the comparisons above; all four bound what can be claimed beyond them.
+**What remains open:** every figure comes from the single x86-64 host in Section 2, Gazebo validation is a single open-cell gate rather than a comparison, the reactive infeasibility report in Section 5 is unexplained, and `blind_multi_0` remains the predictive preset's one weak cell at 3/5. None of these affect the comparisons above; all four bound what can be claimed beyond them.
 
 ---
 

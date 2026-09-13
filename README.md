@@ -68,8 +68,9 @@ the summary is below.
 > Ubuntu 24.04.4) - not on physical robot hardware and not contact-dynamics.
 > A collision is a *would-be* overlap of the robot and obstacle discs, scored
 > identically for every controller. **Every figure here was measured on that host
-> and on no other.** Gazebo validation reflects the `v1.0.0` baseline; full
-> Gazebo and hardware validation remain open.
+> and on no other.** Gazebo validation is a single open-cell gate (5 runs, all
+> reaching the goal), not a cross-controller comparison; hardware validation
+> remains open.
 
 | Controller | Tracking RMS (open) | Compute p50 / p95 (open) | Static clearance | Multi-obstacle margin | Collisions (10 cells) |
 | --- | --- | --- | --- | --- | --- |
@@ -154,7 +155,7 @@ which is the source of truth.
   dense two-mover cells the per-cycle median rises to ~2.2-2.7 ms against the
   samplers' flat ~3.0-3.2 ms, so ~1.3x rather than the ~10x of the open cell.
   **Every figure here was measured on the x86-64 host named above**, and Gazebo
-  validation still reflects `v1.0.0`.
+  validation is a single open-cell gate rather than a comparison.
 
 **In short:** ProxMPC delivers constrained, model-agnostic optimal control that
 tracks as well as the best of the field, computes a command 10x faster than the
@@ -178,9 +179,9 @@ welcome on any of it.
 
 ### Validation beyond the kinematic plant
 
-The reported comparison runs on a kinematic plant. Gazebo Harmonic coverage is a
-single open-world run rather than the full scenario matrix, and there is no
-physical-hardware validation yet. Extending both is planned; hardware results in
+The reported comparison runs on a kinematic plant. Gazebo Harmonic coverage is
+five runs of one open-world cell rather than the full scenario matrix, and there
+is no physical-hardware validation yet. Extending both is planned; hardware results in
 particular would firm up the compute and clearance numbers, which are currently
 x86-64 dev-host measurements.
 
