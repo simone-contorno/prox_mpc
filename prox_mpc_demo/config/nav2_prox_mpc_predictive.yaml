@@ -180,9 +180,32 @@ controller_server:
       predict_obstacles: true
       obstacle_topic: "tracked_obstacles"
       obstacle_timeout: 0.5
+      # Speed above which a track is propagated as a mover. Kept at 0.2 rather
+      # than lowered, though the demo walker's own tracked speed often sits under
+      # it: a lidar sees only the near arc of a compact object, so the centroid
+      # slides as the robot moves and the estimate reads well below the walker's
+      # true 0.3 m/s (measured p50 0.02, p90 0.10-0.18 m/s). Lowering the gate to
+      # catch that does not separate the two populations - the static box's own
+      # centroid noise reaches 0.12 m/s on the same runs - so it would admit the
+      # box as a mover with a fabricated velocity, which is worse than missing
+      # the walker. The estimate is what needs fixing, not the threshold.
       dynamic_speed_threshold: 0.2
       # Small hedge (m/s) against residual prediction error as the sample ages.
       prediction_uncertainty_growth: 0.05
+      # Obstacle-aware cruise: when where the robot is heading would cut into a
+      # tracked mover's predicted keep-out, ease the cruise so the robot waits for
+      # the mover rather than racing it across. Measured with this demo's
+      # reversing on: passes behind a crossing mover 6/10 against 1/10 on
+      # dynamic_circle with the best closest approach and no collisions, and no
+      # worse than off with two movers (3/30 collisions either way). Keep q_pos
+      # and s_factor at their defaults - light stage weights collided with it.
+      obstacle_yield_band_m: 0.5
+      # Make that yield a speed limit rather than a request: without it the cruise
+      # target is outweighed by the obstacle term and the robot swerves past a
+      # closing mover at full speed instead of slowing. Measured on the benchmark's
+      # orbiting-mover cell: passes behind 10/10 against 4/10, three times the
+      # worst-case clearance, and it holds its path instead of swerving.
+      obstacle_yield_caps_speed: true
       # After an association break (obstacle direction reversal) the old track
       # coasts as a phantom while the real obstacle is re-acquired as a new track;
       # with a single slot the phantom can outrank the real track and the solver
@@ -191,11 +214,17 @@ controller_server:
       max_dynamic_obstacle_radius: 0.5
 
 
-      # The waffle's 360-degree LDS sees behind the robot, and the Collision
-      # Monitor already in the cmd_vel chain projects the footprint along the
-      # commanded twist - reverse included - so backing out of a closing gap is
-      # guarded here. The shipped controller default stays forward-only, because
-      # a library cannot assume the integrator's platform has rear sensing.
+      # Whether the solver may plan reverse travel at all. False narrows the
+      # linear control bound to [0, v_max]. On, so the demo shows the robot
+      # backing up to adjust and then pursuing the path forward, the way a
+      # vehicle manoeuvres. Reverse stays capped at 0.15 m/s by the controller's
+      # own guard: both guards follow the predicted trajectory and so do cover a
+      # reversing one, but they see only what the costmap holds, and whether the
+      # platform sweeps behind itself is a property of its sensor. The waffle's
+      # lidar is 360 degrees, so the rear is covered here. The goal
+      # region no longer alternates on an open reverse bound - the reference is
+      # pinned to the goal pose there, and the robot turns on the spot for the
+      # last of the heading. See doc/nav2-simulation.md.
       allow_reversing: true
 
       log_level: "info"
