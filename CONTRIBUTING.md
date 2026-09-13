@@ -62,9 +62,12 @@ that pattern.
 
 ## Commit conventions
 
-- **Branching follows GitHub Flow**: `main` is the stable branch, `dev` is the
-  integration branch, and topic work happens on `feat/*`, `fix/*`, `chore/*`,
-  or `test/*` branches merged in via pull request.
+- **Branching follows GitHub Flow**: `main` is the stable branch, and topic work
+  happens on `feat/*`, `fix/*`, `chore/*`, or `test/*` branches merged in via
+  pull request. A release is prepared on a `release/<version>` branch, which is
+  squash-merged into `main` so that `main` carries one commit per release; the
+  release branch is kept, not deleted, because it is where that release's
+  reviewable and bisectable history lives.
 - **Commit messages follow Conventional Commits**, scoped to the package or
   area they touch, matching real history in this repo, for example:
   - `feat(controller): predictive dynamic-obstacle avoidance and model speed-cap forwarding`
