@@ -78,6 +78,7 @@ decision.
 ```text
 ament_cmake
 ament_cmake_gtest
+ament_cmake_pytest
 ament_cmake_python
 ament_index_python
 ament_lint_auto
