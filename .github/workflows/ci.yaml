@@ -93,6 +93,91 @@ jobs:
           name: lcov-report
           path: /ros_ws/coverage_filtered.info
 
+  # AddressSanitizer + UndefinedBehaviorSanitizer. EIGEN_NO_DEBUG is defined at
+  # directory scope in every package (kept there for every ordinary build, to
+  # keep the solver hot path fast), which silently disables Eigen's own bounds
+  # assertions. This job rebuilds Debug (Release and RelWithDebInfo both define
+  # NDEBUG, which Eigen treats as EIGEN_NO_DEBUG on its own) and cancels the
+  # directory-scope define with a later -U in CMAKE_CXX_FLAGS, so both Eigen's
+  # assertions and the sanitizers are live at once.
+  sanitizers:
+    runs-on: ubuntu-24.04
+    container:
+      image: ros:jazzy-ros-base-noble
+
+    # Leak detection stays on. The only leaks the suite reports come from
+    # rosidl's one-time static type-support registration, reached through
+    # rcl_node_init when a test brings up a node, so those two frames are
+    # suppressed by name rather than the detector being switched off - a leak in
+    # this repository's own allocations still fails the job.
+    #
+    # The suppressions path goes in LSAN_OPTIONS, not ASAN_OPTIONS: ASan parses
+    # its own suppressions file against interceptor_name, interceptor_via_fun,
+    # interceptor_via_lib and odr_violation only, so a leak: entry there makes
+    # every sanitized process die with "failed to parse suppressions".
+    #
+    # The path is the symlink the "Create colcon workspace" step below plants,
+    # because neither shorthand for the checkout directory survives here: an env
+    # value is not shell-expanded, so $GITHUB_WORKSPACE would stay literal, and
+    # ${{ github.workspace }} expands to the runner host's path rather than the
+    # container's /__w mount (actions/runner#2058). An unreadable suppressions
+    # file is fatal, so a wrong path fails every sanitized process rather than
+    # degrading quietly.
+    env:
+      ASAN_OPTIONS: detect_leaks=1
+      LSAN_OPTIONS: suppressions=/ros_ws/src/prox_mpc/.github/asan.supp
+      UBSAN_OPTIONS: print_stacktrace=1
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+
+      - name: Install dependencies
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            python3-colcon-common-extensions
+          rosdep update
+          rosdep install --from-paths . --ignore-src -y
+
+      - name: Create colcon workspace
+        run: |
+          mkdir -p /ros_ws/src
+          ln -s "$GITHUB_WORKSPACE" /ros_ws/src/prox_mpc
+
+      - name: Build with AddressSanitizer and UndefinedBehaviorSanitizer
+        working-directory: /ros_ws
+        run: |
+          . /opt/ros/jazzy/setup.sh
+          colcon build \
+            --symlink-install \
+            --cmake-args \
+              -DCMAKE_BUILD_TYPE=Debug \
+              -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
+              -DCMAKE_CXX_FLAGS="-UEIGEN_NO_DEBUG -fsanitize=address,undefined -fno-omit-frame-pointer -fno-sanitize-recover=all -O1 -g" \
+              -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=address,undefined" \
+              -DCMAKE_SHARED_LINKER_FLAGS="-fsanitize=address,undefined" \
+            --no-warn-unused-cli
+
+      # Reads the flags actually reaching the compiler back out of
+      # compile_commands.json, so a future reordering of the flags above
+      # cannot silently turn this job back into a decoration.
+      - name: Verify Eigen assertions are live and NDEBUG is unset
+        working-directory: /ros_ws
+        run: python3 src/prox_mpc/.github/scripts/check_no_eigen_debug.py "build/*/compile_commands.json"
+
+      - name: Test under AddressSanitizer and UndefinedBehaviorSanitizer
+        working-directory: /ros_ws
+        run: |
+          . /opt/ros/jazzy/setup.sh
+          . install/setup.sh
+          colcon test --return-code-on-test-failure
+
+      - name: Display test results
+        if: always()
+        working-directory: /ros_ws
+        run: colcon test-result --verbose
+
   # Static analysis with Clang Thread Safety Analysis (the controller and tracker
   # share state across the executor; TSA catches unguarded access).
   clang-tsa:
@@ -125,5 +210,5 @@ jobs:
           CC=clang CXX=clang++ colcon build \
             --symlink-install \
             --cmake-args \
-              -DCMAKE_CXX_FLAGS="-Wthread-safety" \
+              -DCMAKE_CXX_FLAGS="-Wthread-safety -Werror=thread-safety" \
             --no-warn-unused-cli

@@ -13,12 +13,15 @@ controller_server:
       # editing the core or this list; the controller configures it after loading.
       # The model must declare a bound on its speed input (u[0]) and control-rate
       # (du) bounds for both channels: they set the speed cap and the deceleration
-      # ramp, and a model missing either fails configure().
-      model_plugin: "prox_mpc_core/Bicycle"
+      # ramp, and a model missing either fails configure(). Bundled names are
+      # prox_mpc_core/Unicycle, prox_mpc_core/BicycleFrontAxle and
+      # prox_mpc_core/BicycleRearAxle; prox_mpc_core/Bicycle is a deprecated
+      # alias for the front-axle model.
+      model_plugin: "prox_mpc_core/Unicycle"
       model_params:        # forwarded to Model::configure(); absent keys keep the literals
-        L: 1.6             # wheelbase [m]
+        L: 1.6             # wheelbase [m], used by the bicycle models
         v_max: 0.0         # [m/s] forward input bound; forwarded only when > 0, else the model literal
-        v_min: 0.0         # [m/s] reverse input bound; used only alongside a positive v_max (< 0, else -v_max)
+        v_min: 0.0         # [m/s] reverse input bound; negative forwards on its own, else -v_max
 
       # Horizons and step (couple via Np / dt / T).
       np: 20
@@ -28,16 +31,53 @@ controller_server:
       # Reference tracking. Cruise speed the global plan is sampled at to build
       # the state/control reference; tapered toward zero near the plan end and
       # clamped by any active speed limit. Must not exceed the model's speed
-      # bound (the bundled Bicycle/Unicycle default v_max to 3.0 m/s).
+      # bound (every bundled model defaults v_max to 3.0 m/s).
       desired_linear_vel: 1.0   # [m/s]
       curvature_gain: 0.0       # cruise reduction on path curvature; 0.0 disables it
+      # Narrows the linear control bound to [0, v_max] when false, so the solver
+      # cannot plan reverse travel. When true without an explicit v_min above,
+      # reverse is capped at 0.15 m/s, because whether the platform senses the
+      # reverse direction is not something this plugin can check.
+      allow_reversing: false
+
+      # Whether the plan's pose orientations are trusted to say which way to
+      # travel along it, so the reference can be signed into reverse and
+      # truncated at the first direction change. Set true only with a planner
+      # that sets those orientations, such as Smac Hybrid-A* or State Lattice.
+      # Planners that leave every pose at the identity quaternion (NavFn, Smac
+      # 2D) say nothing by them, and are read as a reverse plan for any path
+      # running against that fixed heading.
+      reverse_from_plan_orientation: false
+
+      # Travel direction is a latched mode, not a per-cycle read of the plan. A
+      # change is taken only once the platform is at or below the standstill
+      # speed and the dwell since the last change has elapsed; until then the
+      # reference is held at the arc length under the robot, so the commanded
+      # speed falls to zero and the platform stops first. A cusp is therefore
+      # driven the way a vehicle drives one -- arrive, stop, shift, pull away --
+      # and the switching rate is bounded rather than free-running.
+      direction_switch_standstill_speed_mps: 0.05   # [m/s]
+      direction_switch_dwell_s: 0.5             # [s]
+
+      # Band beyond the goal-checker xy tolerance that the robot must re-cross
+      # before the terminal settle mode releases. Inside the tolerance the
+      # reference is pinned to the goal pose instead of tracking the robot's own
+      # projection onto the plan, which gives the last stretch a fixed setpoint
+      # and puts the goal's orientation into the reference; the band keeps a
+      # remaining distance hovering about the tolerance from flipping the two.
+      goal_settle_hysteresis_m: 0.10   # [m]
+
+      # Step the deceleration ramp advances by on a braking cycle. 0 measures the
+      # inter-cycle period instead and clamps it into [dt, 2*dt]; a positive
+      # value overrides the measurement and is used as-is.
+      brake_period_s: 0.0   # [s]
 
       # Cost weights (assembled as in the demo).
       q_pos: 10.0
       q_theta: 1.0
       s_factor: 2.0
       r_weight: 0.1
-      w_weight: 100.0
+      w_weight: 1000.0
 
       # Solver limits (defaults match the core). The three iteration caps must be
       # >= 1: 0 is rejected by ProxQP and a negative value wraps to an unbounded
@@ -45,10 +85,13 @@ controller_server:
       # QP that can never converge.
       max_int_iter_qp: 1500
       max_ext_iter_qp: 10000
-      max_iter_sqp: 100
+      max_iter_sqp: 1
       max_solve_time: 0.0   # [s] wall-clock budget for the SQP loop; 0 = disabled (iteration caps only)
       qp_type: false        # false = sparse, true = dense
       guess: true           # true = ProxQP equality-constrained initial guess per QP; false = no initial guess
+      # Reuse the QP workspace and previous primal/dual iterate across cycles
+      # instead of rebuilding the solver every cycle.
+      warm_start: true
 
       # Consecutive non-converged solves tolerated before the controller raises a
       # recovery; each failure decelerates toward zero at the robot's limit.
@@ -72,11 +115,51 @@ controller_server:
       # across nodes, so the NMPC avoids where each obstacle will be; the rest of
       # the K slots are filled from the costmap (hybrid). predict_obstacles=false
       # (and any stale/missing tracking data) reproduces the costmap-only fill.
-      predict_obstacles: false              # opt-in; false selects the costmap-only obstacle fill
+      predict_obstacles: true               # false selects the costmap-only obstacle fill
       obstacle_topic: "tracked_obstacles"   # prox_mpc_msgs/ObstacleArray input
       obstacle_timeout: 0.5                 # [s] staleness before costmap-only fallback
       dynamic_speed_threshold: 0.1          # [m/s] speed above which a track is propagated
       prediction_uncertainty_growth: 0.0    # [m/s] extra d_safe per second of prediction
+
+      # Forward shadow cast along a tracked obstacle's own heading. The keep-out
+      # is a disc about the predicted position and the constraint normal points
+      # from the obstacle to the robot, so nothing in the formulation tells the
+      # space a mover is about to occupy from the space it is vacating; passing
+      # in front and passing behind cost the same, and since the reference
+      # carries no obstacle term, the front is the side that does not require
+      # lagging it. This biases the disc forward by that many seconds of the
+      # track's own travel, growing the radius by the same distance so the
+      # obstacle stays covered. 0.0 disables it, which is the default: the
+      # mechanism is sound but its effect has not been measured with enough
+      # runs to justify a non-zero default. See doc/architecture.md.
+      prediction_forward_shadow_s: 0.0   # [s]
+
+      # Obstacle-aware cruise (off by default). When where the robot is heading
+      # would cut into a tracked mover's predicted keep-out, the cruise is eased
+      # toward zero over this depth of breach, so the robot waits for the mover
+      # instead of racing it. "Where it is heading" is both the plan at this
+      # cycle's intended cruise and the trajectory the solver planned last cycle,
+      # whichever breaches deeper; the release back to full cruise is
+      # rate-limited. Measured on dynamic_circle over ten runs with reversing on:
+      # 0.5 passes behind the mover 6/10 against 1/10, with the best closest
+      # approach (+0.100 m against +0.070 m) and no collisions. Enable it together
+      # with allow_reversing: waiting is safe when the robot can back off. With
+      # reversing off, a waiting robot is boxed in by a second mover - over thirty
+      # two-mover runs it doubled the passes closer than 0.15 m (15/30 against
+      # 7/30), which is why it stays off by default. Keep the stage weights at
+      # their defaults: light stage weights (q_pos 1, s_factor 30) let the robot
+      # stray far from its path and collided 1/10, with or without it.
+      obstacle_yield_band_m: 0.0   # [m]
+
+      # Make the obstacle-aware yield a speed limit, not a request. Without it the
+      # yield only lowers the cruise target, which carries the lightest weight in
+      # the cost, so when a mover is closing the obstacle term overrides it and
+      # the robot swerves at full speed instead of slowing. With it the solver's
+      # forward speed bound is capped by the same factor - lowered no faster than
+      # the platform can brake, so the solver always has a feasible command, and
+      # with the reverse bound left alone, so the robot can still back away.
+      # Needs obstacle_yield_band_m > 0 to do anything.
+      obstacle_yield_caps_speed: false
       max_dynamic_obstacles: 2              # slot budget reserved for dynamic tracks
       max_dynamic_obstacle_radius: 0.0      # [m] skip tracks larger than this (walls); 0 = no limit
 

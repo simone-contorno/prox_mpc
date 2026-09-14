@@ -13,6 +13,7 @@
 #include <rclcpp/rclcpp.hpp>
 #include <rclcpp_lifecycle/lifecycle_node.hpp>
 #include <rclcpp_lifecycle/lifecycle_publisher.hpp>
+#include <rcpputils/thread_safety_annotations.hpp>
 #include <sensor_msgs/msg/laser_scan.hpp>
 #include <tf2_ros/buffer.h>
 #include <tf2_ros/transform_listener.h>
@@ -84,21 +85,25 @@ private:
   // samples). The other IMM/CTRV parameters live only in Tracker::Params.
   double prediction_dt_{0.1};
 
-  // ROS interfaces.
+  // ROS interfaces. scan_sub_ is written only from the executor thread that runs
+  // the lifecycle transitions (on_activate/on_deactivate/teardown), which never
+  // overlaps a scan callback because the subscription itself does not exist yet
+  // or has already been reset by the time this member changes, so it is not
+  // part of the state_mutex_-guarded set below.
   rclcpp::Subscription<sensor_msgs::msg::LaserScan>::SharedPtr scan_sub_;
   std::shared_ptr<rclcpp_lifecycle::LifecyclePublisher<prox_mpc_msgs::msg::ObstacleArray>>
-  obstacle_pub_;
-  std::shared_ptr<tf2_ros::Buffer> tf_buffer_;
-  std::shared_ptr<tf2_ros::TransformListener> tf_listener_;
+  obstacle_pub_ RCPPUTILS_TSA_GUARDED_BY(state_mutex_);
+  std::shared_ptr<tf2_ros::Buffer> tf_buffer_ RCPPUTILS_TSA_GUARDED_BY(state_mutex_);
+  std::shared_ptr<tf2_ros::TransformListener> tf_listener_ RCPPUTILS_TSA_GUARDED_BY(state_mutex_);
 
-  std::unique_ptr<Tracker> tracker_;
+  std::unique_ptr<Tracker> tracker_ RCPPUTILS_TSA_GUARDED_BY(state_mutex_);
   std::atomic<bool> active_{false};
 
   /// Mutually-exclusive group for the scan callback so it never overlaps itself,
   /// and a mutex serializing the scan callback against lifecycle teardown so the
-  /// shared perception state (tracker_, obstacle_pub_, tf_buffer_) is never used
-  /// after reset. This makes the node safe to compose into a MultiThreadedExecutor
-  /// as well as to run standalone (SingleThreadedExecutor).
+  /// shared perception state (tracker_, obstacle_pub_, tf_buffer_, tf_listener_)
+  /// is never used after reset. This makes the node safe to compose into a
+  /// MultiThreadedExecutor as well as to run standalone (SingleThreadedExecutor).
   rclcpp::CallbackGroup::SharedPtr scan_callback_group_;
   std::mutex state_mutex_;
 };

@@ -144,12 +144,24 @@ Two further virtual hooks let a model be loaded and used generically:
 
 ### Model selection
 
-`prox_mpc::Model` is a `pluginlib` base type, and `Bicycle` and `Unicycle` are
-registered as plugins named `prox_mpc_core/Bicycle` and `prox_mpc_core/Unicycle`.
+`prox_mpc::Model` is a `pluginlib` base type. The bundled models are registered
+as `prox_mpc_core/BicycleFrontAxle`, `prox_mpc_core/BicycleRearAxle` and
+`prox_mpc_core/Unicycle`, with `prox_mpc_core/Bicycle` kept as a deprecated alias
+for the front-axle model.
 A consumer loads a model with a `pluginlib::ClassLoader<prox_mpc::Model>`, calls
-`configure(...)`, and passes the instance to `MPC::init(...)`. Adding a new model
-therefore requires no change to this library: a model only needs to derive from
-`Model`, implement the three Jacobian hooks, and be registered as a plugin.
+`configure(...)`, and passes the instance to `MPC::init(...)`. Adding a new
+model therefore requires no change to this library: a model only needs to
+derive from `Model`, implement the three Jacobian hooks, and be registered as a
+plugin. That holds with obstacle avoidance on as well. The obstacle-constraint
+assembly is the one part of the solver that has to know where the planar
+position sits in the state vector, and it reads that from the model's declared
+`getPlanarMapping()` rather than assuming a layout, so a model whose state is
+ordered any other way is constrained on the axes it declares.
+
+`ProxQP::init()` reads those two indices once, alongside the obstacle-active
+flag, and rejects a model that maps either position outside its own state
+vector or maps both to the same index. The check lives here rather than only in
+a consumer because a direct library user has no other screening.
 
 The residual and Jacobian formulas for the bundled models are given in
 [nmpc.md](nmpc.md).

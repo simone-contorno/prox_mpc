@@ -10,9 +10,20 @@ if(NOT CMAKE_BUILD_TYPE)
   set(CMAKE_BUILD_TYPE "Release")
 endif()
 
-# Compiler warnings
-if(CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
-  add_compile_options(-Wall -Wextra -Wpedantic)
+# Compiler warnings, matching upstream Nav2's package-level policy
+# (nav2_common/cmake/nav2_package.cmake) so this package is held to the same
+# bar as every other Nav2 plugin it ships alongside.
+if(CMAKE_CXX_COMPILER_ID MATCHES "GNU" OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+  add_compile_options(-Wall -Wextra -Wpedantic -Werror -Wdeprecated -fPIC -Wshadow -Wnull-dereference)
+  # GCC 13 raises -Wnull-dereference inside libstdc++'s own <regex> headers
+  # (stl_algobase.h, reached through regex_traits::transform_primary) once
+  # --coverage changes its inlining decisions, which is how the coverage build
+  # hits it and an ordinary build does not. The report is attributed to the
+  # translation unit that instantiates the template, so -Wno-system-headers
+  # does not reach it. Keep the diagnostic, but do not let a false positive in
+  # the standard library fail the build.
+  add_compile_options(-Wno-error=null-dereference)
+  add_compile_options("$<$<COMPILE_LANGUAGE:CXX>:-Wnon-virtual-dtor>")
 endif()
 
 # Remove Eigen's internal assertions in the hot path (safe under Release)
@@ -27,6 +38,7 @@ find_package(prox_mpc_msgs REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(rclcpp_components REQUIRED)
 find_package(rclcpp_lifecycle REQUIRED)
+find_package(rcpputils REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(tf2 REQUIRED)
 find_package(tf2_ros REQUIRED)
@@ -61,6 +73,7 @@ ament_target_dependencies(${PROJECT_NAME}_component
   rclcpp
   rclcpp_components
   rclcpp_lifecycle
+  rcpputils
   sensor_msgs
   tf2
   tf2_ros

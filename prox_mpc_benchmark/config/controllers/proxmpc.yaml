@@ -13,16 +13,21 @@ FollowPath:
   q_theta: 1.0
   s_factor: 2.0
   r_weight: 0.1
-  w_weight: 100.0
+  w_weight: 1000.0
   max_int_iter_qp: 1500
   max_ext_iter_qp: 10000
-  max_iter_sqp: 100
+  max_iter_sqp: 1
   qp_type: false
   guess: true
   max_solver_failures: 3
   max_obstacles: 4
-  safety_margin: 0.1
-  robot_radius: 0.22
+  # 0.085 with robot_radius 0.235 keeps d_safe at 0.320 m. robot_radius is a
+  # geometric fact (the footprint's circumscribed radius) and safety_margin is
+  # the discretionary part, so the correction to the first is absorbed by the
+  # second rather than widening the keep-out: 0.335 m measured worse on the
+  # multi-obstacle cells, where a gap needs 2*d_safe to stay feasible.
+  safety_margin: 0.085
+  robot_radius: 0.235
   cbf_gamma: 1.0
   costmap_cost_threshold: 200
   obstacle_cluster_radius: 0.3

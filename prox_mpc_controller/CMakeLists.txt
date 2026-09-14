@@ -10,9 +10,20 @@ if(NOT CMAKE_BUILD_TYPE)
   set(CMAKE_BUILD_TYPE "Release")
 endif()
 
-# Compiler warnings
-if(CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
-  add_compile_options(-Wall -Wextra -Wpedantic)
+# Compiler warnings, matching upstream Nav2's package-level policy
+# (nav2_common/cmake/nav2_package.cmake) so this package is held to the same
+# bar as every other Nav2 plugin it ships alongside.
+if(CMAKE_CXX_COMPILER_ID MATCHES "GNU" OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+  add_compile_options(-Wall -Wextra -Wpedantic -Werror -Wdeprecated -fPIC -Wshadow -Wnull-dereference)
+  # GCC 13 raises -Wnull-dereference inside libstdc++'s own <regex> headers
+  # (stl_algobase.h, reached through regex_traits::transform_primary) once
+  # --coverage changes its inlining decisions, which is how the coverage build
+  # hits it and an ordinary build does not. The report is attributed to the
+  # translation unit that instantiates the template, so -Wno-system-headers
+  # does not reach it. Keep the diagnostic, but do not let a false positive in
+  # the standard library fail the build.
+  add_compile_options(-Wno-error=null-dereference)
+  add_compile_options("$<$<COMPILE_LANGUAGE:CXX>:-Wnon-virtual-dtor>")
 endif()
 
 # Remove Eigen's internal assertions in the hot path (safe under Release)
@@ -36,6 +47,7 @@ find_package(nav_msgs REQUIRED)
 find_package(pluginlib REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(rclcpp_lifecycle REQUIRED)
+find_package(rcpputils REQUIRED)
 find_package(tf2 REQUIRED)
 find_package(tf2_ros REQUIRED)
 find_package(visualization_msgs REQUIRED)
@@ -63,6 +75,7 @@ ament_target_dependencies(${PROJECT_NAME}
   pluginlib
   rclcpp
   rclcpp_lifecycle
+  rcpputils
   tf2
   tf2_ros
   visualization_msgs
@@ -103,6 +116,7 @@ ament_export_dependencies(
   pluginlib
   rclcpp
   rclcpp_lifecycle
+  rcpputils
   tf2
   tf2_ros
   visualization_msgs
@@ -118,13 +132,22 @@ if(BUILD_TESTING)
   ament_lint_auto_find_test_dependencies()
 
   find_package(ament_cmake_gtest REQUIRED)
+  # Used only to capture the robot_radius/footprint mismatch warning's exact
+  # text in the configure() test, via a custom rcutils_logging_output_handler.
+  find_package(rcutils REQUIRED)
 
   # The wrapper unit tests bring up a LifecycleNode, a tf2 buffer, and a
   # Costmap2DROS, then drive the plugin's public interface and fail-safe
   # branches; the test owns rclcpp init/shutdown via its own main.
+  #
+  # Both binaries in this package stand up a node per case, which does not fit
+  # inside CTest's 60 s default once AddressSanitizer instrumentation is linked
+  # in; without the raised timeout the sanitizer job reports a timeout rather
+  # than a real defect.
   ament_add_gtest(test_prox_mpc_controller
     test/test_prox_mpc_controller.cpp
-    SKIP_LINKING_MAIN_LIBRARIES)
+    SKIP_LINKING_MAIN_LIBRARIES
+    TIMEOUT 300)
   target_link_libraries(test_prox_mpc_controller
     ${PROJECT_NAME}
     Eigen3::Eigen
@@ -140,9 +163,39 @@ if(BUILD_TESTING)
     prox_mpc_msgs
     rclcpp
     rclcpp_lifecycle
+    rcutils
     tf2
     tf2_ros
     visualization_msgs
+  )
+
+  # Controller-facing contract tests: transactional-solve wiring,
+  # SolverDiagnostics' gate-aware converged field and its publisher, the
+  # model/Nav2 adapter contract (Model::getPlanarMapping()), and
+  # terminal-heading/reverse-travel tracking. The fault-injection fixtures it
+  # loads by name through pluginlib come from prox_mpc_test_models, already a
+  # <test_depend> above.
+  ament_add_gtest(test_controller_contracts
+    test/test_controller_contracts.cpp
+    SKIP_LINKING_MAIN_LIBRARIES
+    TIMEOUT 300)
+  target_link_libraries(test_controller_contracts
+    ${PROJECT_NAME}
+    Eigen3::Eigen
+    proxsuite::proxsuite
+  )
+  ament_target_dependencies(test_controller_contracts
+    geometry_msgs
+    nav2_core
+    nav2_costmap_2d
+    nav_msgs
+    pluginlib
+    prox_mpc_core
+    prox_mpc_msgs
+    rclcpp
+    rclcpp_lifecycle
+    tf2
+    tf2_ros
   )
 endif()
 

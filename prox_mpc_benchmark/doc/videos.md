@@ -135,10 +135,18 @@ ros2 run prox_mpc_benchmark record_scenarios.py \
 ```
 
 For each scenario the recorder waits `--warmup` seconds for lifecycle activation,
-starts a fixed-length ffmpeg x11grab recording, sends the scenario goal after
-`--goal-delay` seconds, waits for ffmpeg to reach its `--duration`, then tears the
-whole process tree down with a process-group `SIGINT` (graceful) escalating to
-`SIGKILL`.
+starts an ffmpeg x11grab capture, sends the scenario goal after `--goal-delay`
+seconds, waits for the capture to finish, then tears the whole process tree down
+with a process-group `SIGINT` (graceful) escalating to `SIGKILL`.
+
+The capture runs longer than the clip: it has to cover the goal delay, the few
+seconds the stack takes from goal to first motion, and a spuriously aborted goal's
+retry. The clip is then cut to open 0.3 s before the robot first moves, which the
+recorder reads from `/odom` - the same event, at the same 1 mm threshold, that
+releases the scenario's obstacles. A clip therefore opens on the scene coming alive
+rather than on a frozen robot, however long the stack took to start. If the robot
+never moves, the recorder keeps the head of the capture and prints a warning, so a
+failed navigation is not mistaken for a good clip.
 The exact ffmpeg command is printed for every clip.
 One scenario failing does not abort the rest; the exit code is non-zero if any
 scenario failed.
@@ -217,13 +225,13 @@ All artifacts land under `results/videos/` (gitignored):
 | `--scenarios` | `nav2_open,static_box,dynamic_line_forward,dynamic_circle` | scenario basenames to record |
 | `--controller` | `proxmpc_pred` | controller preset injected into `FollowPath` |
 | `--robot` | `waffle` | robot shown (URDF + model pairing) |
-| `--duration` | `20` | clip length in seconds (self-terminating via `-t`) |
+| `--duration` | `20` | clip length in seconds; a scenario's `video.duration_s` overrides it (`dynamic_circle` sets 25) |
 | `--resolution` | `1920x1080` | grab size `WxH` |
 | `--offset` | `0,0` | grab top-left origin `x,y` -> x11grab input `:0.0+x,y` |
 | `--display` | `$DISPLAY` or `:0` | X display to capture and render on |
 | `--framerate` | `30` | capture frame rate |
 | `--warmup` | `14` | activation wait before recording starts [s] |
-| `--goal-delay` | `3` | wait after recording starts before the goal is sent [s] |
+| `--goal-delay` | `3` | wait after the capture starts before the goal is sent [s]; the clip is cut at first motion, so this is not dead time in the clip |
 | `--timeout` | `55` | goal timeout passed to `goal_sender.py` [s] |
 | `--out-dir` | `results/videos` | clip output directory |
 
@@ -250,8 +258,10 @@ All artifacts land under `results/videos/` (gitignored):
   region; when absent the recorder simply grabs the full region.
 - ffmpeg `drawtext` requires an ffmpeg built with libfreetype (the stock Ubuntu
   `ffmpeg` package qualifies); the label filter fails otherwise.
-- Clip length is fixed by `--duration`, so the four clips stay length-synced and
-  xstack combines them cleanly.
+- Clip length is fixed per scenario (`--duration`, or the scenario's own
+  `video.duration_s`), and every clip opens at first motion, so the four
+  controllers of one scenario stay length-synced and start together, and xstack
+  combines them cleanly.
 
 ## License
 

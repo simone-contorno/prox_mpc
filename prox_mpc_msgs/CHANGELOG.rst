@@ -2,6 +2,14 @@
 Changelog for package prox_mpc_msgs
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
+2.0.0 (2026-09-13)
+------------------
+* No interface change: the message definitions and their wire format are
+  unchanged from 1.0.0. Version raised to keep the repository's packages
+  aligned.
+* Added a wire-compatibility test for ``SolverDiagnostics``.
+* Contributors: Simone Contorno
+
 1.0.0 (2026-07-28)
 ------------------
 * Initial release: ``Obstacle`` and ``ObstacleArray`` messages for tracked

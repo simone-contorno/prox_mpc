@@ -9,4 +9,41 @@
       exercise the controller's non-finite-command fail-safe. Test fixture only.
     </description>
   </class>
+  <class
+    name="prox_mpc_test_models/AsymmetricBounds"
+    type="prox_mpc_test_models::AsymmetricBoundsModel"
+    base_class_type="prox_mpc::Model">
+    <description>
+      Fixture model with an asymmetric range on every declared bound (state
+      [x, y, theta], control [v, omega]): reverse speed capped tighter than
+      forward speed, and a harder braking rate than accelerating rate. Used to
+      test that the controller preserves bound asymmetry instead of assuming
+      symmetry. Test fixture only.
+    </description>
+  </class>
+  <class
+    name="prox_mpc_test_models/NonFiniteTwistOtherAxes"
+    type="prox_mpc_test_models::NonFiniteTwistOtherAxesModel"
+    base_class_type="prox_mpc::Model">
+    <description>
+      Fault-injection test model: finite linear dynamics (state [x, y, theta],
+      control [v, omega]) but a toTwist() that deliberately fills linear.y and
+      angular.x (not linear.x, which NonFiniteTwist already covers) with
+      non-finite values, exercising the controller's command validation on the
+      four Twist components a planar consumer never reads. Test fixture only.
+    </description>
+  </class>
+  <class
+    name="prox_mpc_test_models/PermutedPlanarMapping"
+    type="prox_mpc_test_models::PermutedPlanarMappingModel"
+    base_class_type="prox_mpc::Model">
+    <description>
+      Fixture model whose state vector is ordered [theta, x, y] instead of
+      [x, y, theta], so its declared planar mapping is idx_yaw = 0, idx_x = 1,
+      idx_y = 2. Obstacle avoidance is on, so it also covers the in-loop
+      keep-out term against a permuted state. Used to test that the controller
+      and the solver drive a model through its declared mapping rather than
+      through the bundled state ordering. Test fixture only.
+    </description>
+  </class>
 </library>

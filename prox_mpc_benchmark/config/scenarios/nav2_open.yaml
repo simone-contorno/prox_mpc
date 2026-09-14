@@ -13,5 +13,5 @@ scenario:
     - {x: 2.5, y: 0.0, yaw: 0.0}
   obstacles: []
   models: [unicycle]                                                        # diff-drive waffle / Unicycle
-  controllers: [proxmpc, dwb, mppi, regulated_pure_pursuit, graceful, vector_pursuit]   # cross-controller set
+  controllers: [proxmpc_pred, proxmpc, dwb, mppi, regulated_pure_pursuit, graceful, vector_pursuit]   # cross-controller set
   run: {repeats: 5, timeout_s: 60, seed: 0}

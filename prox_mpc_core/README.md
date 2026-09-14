@@ -25,9 +25,9 @@ This package contains **no ROS node**: it is the reusable library that [prox_mpc
 ## Overview
 
 The core owns the SQP/QP assembly, the tracking cost, the state/control/rate constraints, the disc-based obstacle math, and the `prox_mpc::Model` vehicle interface.
-It never needs editing to gain a new vehicle model: a model is a `pluginlib` plugin loaded by name.
+It never needs editing to gain a new vehicle model: a model is a `pluginlib` plugin loaded by name, and every part of the assembly that has to know where a quantity sits in the state vector - the obstacle constraints included - reads it from the model's declared planar mapping rather than from a fixed layout.
 
-See [doc/architecture.md](doc/architecture.md) for the design overview, [doc/nmpc.md](doc/nmpc.md) for the NMPC/SQP/QP math, and [doc/obstacle-avoidance.md](doc/obstacle-avoidance.md) for the obstacle constraints.
+See [doc/architecture.md](doc/architecture.md) for the design overview, [doc/nmpc.md](doc/nmpc.md) for the NMPC/SQP/QP math, and [doc/obstacle-avoidance.md](doc/obstacle-avoidance.md) for the obstacle constraints. [doc/migration.md](doc/migration.md) records what changed on the released surface since 1.0.0.
 
 ## Public API
 
@@ -40,22 +40,24 @@ Everything lives in the `prox_mpc` C++ namespace.
 | `prox_mpc/proxqp.hpp` | `ProxQP`: QP assembly and solve wrapper |
 | `prox_mpc/mpc.hpp` | `MPC`: SQP driver and configuration |
 | `prox_mpc/utils.hpp` | free functions (`normalizeAngle`, `optimPath`), Eigen/ROS aliases |
-| `prox_mpc/models/bicycle.hpp`, `prox_mpc/models/unicycle.hpp` | reference kinematic models |
+| `prox_mpc/models/bicycle_front_axle.hpp`, `prox_mpc/models/bicycle_rear_axle.hpp`, `prox_mpc/models/unicycle.hpp` | reference kinematic models (`bicycle.hpp` holds the deprecated `Bicycle` alias) |
 
 ## Models
 
 A model derives from `Model` and implements three pure virtual hooks that supply the Euler linearization (`updateA`, `updateB`, `updatec`).
 Two optional hooks make it loadable and usable generically: `configure(params)` sets its constants by name after construction, and `toTwist(u)` maps a control vector to a `geometry_msgs/msg/Twist`.
 
-`Model` is a `pluginlib` base type, and the bundled models are registered as `prox_mpc_core/Bicycle` and `prox_mpc_core/Unicycle`.
-A consumer can load a model by name with a `pluginlib::ClassLoader<prox_mpc::Model>` and pass it to `MPC::init`, so adding a model requires no change to this library.
+`Model` is a `pluginlib` base type, and the bundled models are registered as `prox_mpc_core/BicycleFrontAxle`, `prox_mpc_core/BicycleRearAxle` and `prox_mpc_core/Unicycle`, with `prox_mpc_core/Bicycle` kept as a deprecated alias for the front-axle model.
+A consumer can load a model by name with a `pluginlib::ClassLoader<prox_mpc::Model>` and pass it to `MPC::init`, so adding a model that does not enable obstacle avoidance requires no change to this library; see [Overview](#overview) for the state-layout precondition on a model that does.
 
-| Plugin name | Class | State | Control |
-| --- | --- | --- | --- |
-| `prox_mpc_core/Bicycle` | `prox_mpc::Bicycle` | `[x, y, theta, delta]` (n=4) | `[v, delta_dot]` (m=2) |
-| `prox_mpc_core/Unicycle` | `prox_mpc::Unicycle` | `[x, y, theta]` (n=3) | `[v, omega]` (m=2) |
+| Plugin name | Class | State | Control | Reference point |
+| --- | --- | --- | --- | --- |
+| `prox_mpc_core/BicycleFrontAxle` | `prox_mpc::BicycleFrontAxle` | `[x, y, theta, delta]` (n=4) | `[v, delta_dot]` (m=2) | front axle, `(L, 0)` in `base_link` |
+| `prox_mpc_core/BicycleRearAxle` | `prox_mpc::BicycleRearAxle` | `[x, y, theta, delta]` (n=4) | `[v, delta_dot]` (m=2) | rear axle, the `base_link` origin |
+| `prox_mpc_core/Bicycle` | `prox_mpc::Bicycle` | `[x, y, theta, delta]` (n=4) | `[v, delta_dot]` (m=2) | deprecated alias for `BicycleFrontAxle` |
+| `prox_mpc_core/Unicycle` | `prox_mpc::Unicycle` | `[x, y, theta]` (n=3) | `[v, omega]` (m=2) | the `base_link` origin |
 
-Both models enable obstacle avoidance; they differ in their `toTwist` mapping, because the bicycle's second control is a steering rate and derives the yaw rate from the current steering state as `omega = v*sin(delta)/L`, while the unicycle's control is already a body twist and uses the base identity mapping.
+Every model enables obstacle avoidance; they differ in their `toTwist` mapping, because a bicycle's second control is a steering rate and the yaw rate follows from the current steering state, while the unicycle's control is already a body twist and uses the base identity mapping. Each model also declares its state and control layout, its reference point and its wheelbase through `getPlanarMapping()`, so a consumer reads them rather than assuming a layout.
 Both are exported to `pluginlib` via [prox_mpc_core_plugins.xml](prox_mpc_core_plugins.xml).
 
 ## Prerequisites
@@ -90,7 +92,7 @@ After building and sourcing the overlay, list the models this package registers 
 ros2 plugin list --package prox_mpc_core
 ```
 
-This reports `prox_mpc_core/Bicycle` and `prox_mpc_core/Unicycle` under the `prox_mpc::Model` base.
+This reports `prox_mpc_core/BicycleFrontAxle`, `prox_mpc_core/BicycleRearAxle`, `prox_mpc_core/Bicycle` and `prox_mpc_core/Unicycle` under the `prox_mpc::Model` base.
 
 </details>
 
@@ -117,6 +119,7 @@ The full class diagram, the mathematical formulation, and the solve data flow ar
 prox_mpc_core/
 ├── doc/
 │   ├── architecture.md
+│   ├── migration.md
 │   ├── nmpc.md
 │   └── obstacle-avoidance.md
 ├── include/prox_mpc/
@@ -127,6 +130,8 @@ prox_mpc_core/
 │   ├── utils.hpp
 │   └── models/
 │       ├── bicycle.hpp
+│       ├── bicycle_front_axle.hpp
+│       ├── bicycle_rear_axle.hpp
 │       └── unicycle.hpp
 ├── src/
 │   ├── model.cpp

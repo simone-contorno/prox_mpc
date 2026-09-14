@@ -26,7 +26,7 @@ public:
 
   /* Initialization */
 
-  void init(std::shared_ptr<Model> model);
+  void init(std::shared_ptr<Model> new_model);
 
   /* ProxQP configuration */
 
@@ -34,29 +34,62 @@ public:
 
   /* Solving */
 
+  /*!
+   * Run one SQP cycle and commit its result, the entry point this class shipped
+   * with. Equivalent to solveCandidate() followed by retaining the candidate
+   * whatever its status, with u0 advanced only on a converged solve.
+   */
   std::tuple<MatrixXd, MatrixXd> solve();
+
+  /*!
+   * Run one SQP cycle without retaining anything: x, u, w and u0 keep the values
+   * they had on entry, and the caller commits with commitCandidate() once its own
+   * acceptance gates have passed. This is the transactional entry point.
+   */
+  std::tuple<MatrixXd, MatrixXd> solveCandidate();
+
+  /*!
+   * Retain the candidate produced by the last solveCandidate(), advancing x, u, w
+   * and u0. It is a no-op returning false unless that candidate both converged
+   * and is finite over the whole horizon, so a caller that never commits simply
+   * does not advance.
+   */
+  bool commitCandidate();
+
+  /* Whether the last solveCandidate() produced finite x, u and w over the whole
+   * horizon. False before the first solveCandidate(). */
+  bool getCandidateFinite();
 
   /* Set */
 
-  void setX(MatrixXd x);
-  void setQ(MatrixXd Q);
-  void setR(MatrixXd R);
-  void setS(MatrixXd S);
-  void setW(MatrixXd W);
-  void setNp(size_t Np);
-  void setNc(size_t Nc);
-  void setdt(double dt);
-  void setT(double T);
-  void setPose(VectorXd pose);
-  void setGoalX(MatrixXd goal_x);
-  void setGoalU(MatrixXd goal_u);
+  void setX(MatrixXd new_x);
+
+  /*!
+   * Set the previous control input the next cycle's rate constraint is anchored
+   * on. A caller that overrides the command this class produced - a deceleration
+   * ramp on a rejected cycle, say - sets it here so the anchor is the control
+   * actually applied rather than one that was never sent.
+   */
+  void setU0(VectorXd new_u0);
+  void setQ(MatrixXd new_Q);
+  void setR(MatrixXd new_R);
+  void setS(MatrixXd new_S);
+  void setW(MatrixXd new_W);
+  void setNp(size_t new_Np);
+  void setNc(size_t new_Nc);
+  void setdt(double new_dt);
+  void setT(double new_T);
+  void setPose(VectorXd new_pose);
+  void setGoalX(MatrixXd new_goal_x);
+  void setGoalU(MatrixXd new_goal_u);
   void setMaxIntIterQP(size_t max_iter);
   void setMaxExtIterQP(size_t max_iter);
   void setMaxIterSQP(size_t max_iter);
   void setMaxSolveTime(double seconds);
-  void setGuess(bool guess);
-  void setQPtype(bool qp_type);
-  void setCbfGamma(double cbf_gamma);
+  void setGuess(bool new_guess);
+  void setWarmStart(bool new_warm_start);
+  void setQPtype(bool new_qp_type);
+  void setCbfGamma(double new_cbf_gamma);
 
   /* Get */
 
@@ -85,8 +118,8 @@ public:
 
   /* Obstacle avoidance */
 
-  void setMaxObs(size_t max_obs);
-  void setObs(MatrixXd obs);
+  void setMaxObs(size_t new_max_obs);
+  void setObs(MatrixXd new_obs);
 
   /* Access the underlying QP solver, exposing the assembled problem for inspection. */
   std::shared_ptr<ProxQP> getSolver() {return proxqp;}
@@ -113,12 +146,24 @@ protected:
   VectorXd pose;      // Current vehicle pose.
   MatrixXd goal_x;    // State's goals.
   MatrixXd goal_u;    // Control's goals.
-  bool guess = true;  // Use (true) / don't use (false) warm start for initial guesses.
+  bool guess = true;        // ProxQP cheap-start policy selector.
+  bool warm_start = true;   // Cross-cycle QP warm start (workspace + iterate reuse).
+
+  /* Staged result of the last solveCandidate(), retained only by commitCandidate(). */
+  MatrixXd cand_x;              // Candidate states.
+  MatrixXd cand_u;              // Candidate controls.
+  VectorXd cand_w;              // Candidate slack.
+  VectorXd cand_u0;             // Candidate first control input.
+  bool cand_solved = false;     // Whether the candidate's last QP converged.
+  bool cand_finite = false;     // Whether the candidate is finite over the whole horizon.
+
+  /* Set by init(); the structural setters reject a call made after it. */
+  bool initialized = false;
 
   /* Default solver limits (centralized; override via the setters) */
   static constexpr size_t kDefaultMaxExtQP = 10000;  // Max QP external iterations.
   static constexpr size_t kDefaultMaxIntQP = 1500;   // Max QP internal iterations (proximal op).
-  static constexpr size_t kDefaultMaxIterSQP = 100;  // Max SQP iterations.
+  static constexpr size_t kDefaultMaxIterSQP = 1;  // Max SQP iterations (real-time iteration).
 
   /* ProxQP */
   std::shared_ptr<ProxQP> proxqp;        // QP solver.
@@ -129,9 +174,14 @@ protected:
   /* SQP */
   size_t max_iter_sqp = kDefaultMaxIterSQP;  // Max SQP iterations.
 
-  /* Optional wall-clock budget for the whole SQP loop [s]; 0 disables it (the
-   * iteration caps are then the only bound). When exceeded the loop stops early,
-   * leaving qp_info.status != PROXQP_SOLVED so the caller's fail-safe runs. */
+  /* Optional soft wall-clock budget for the SQP loop [s]; 0 disables it. It is
+   * tested between SQP iterations, so it caps how many further QP sub-problems
+   * start and cannot interrupt one in flight - proxsuite offers no time-based
+   * stop. A loop that exceeds it stops early with whatever status the last QP
+   * returned, which is PROXQP_SOLVED when that QP converged, so this is not a
+   * worst-case latency bound and does not by itself route the caller to its
+   * fail-safe. The per-cycle bound is the iteration caps (max_iter_sqp = 1 for a
+   * bounded real-time iteration). */
   double max_solve_time = 0.0;
 
   /* Discrete-time CBF rate forwarded to ProxQP (1.0 = pointwise obstacle term). */

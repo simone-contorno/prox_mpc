@@ -8,6 +8,9 @@ These are fault-injection models that exercise controller fail-safe paths the bu
 They are registered against the same `prox_mpc::Model` base as the core models, so [prox_mpc_controller](../prox_mpc_controller) loads them through its ordinary `pluginlib` path during testing - no test-only seam in production code.
 
 > **Not for production use.** This package exists only to drive tests.
+> Its plugin and class names are not a stable interface: a fixture may be
+> renamed, replaced, or removed without notice, unlike the released
+> `prox_mpc_core` models it is registered alongside.
 
 ## Table of Contents
 
@@ -21,7 +24,7 @@ They are registered against the same `prox_mpc::Model` base as the core models, 
 
 ## Overview
 
-The package is a header-and-plugin fixture: it contributes one deliberately faulty `prox_mpc::Model` implementation and its `pluginlib` registration, with no executable and no ROS node.
+The package is a header-and-plugin fixture: it contributes `prox_mpc::Model` implementations the bundled production models cannot stand in for (a deliberately faulty one, an asymmetric-bounds one, a permuted-state one) and their `pluginlib` registration, with no executable and no ROS node.
 It is a `<test_depend>` of [prox_mpc_controller](../prox_mpc_controller), so it is present only when that package's tests are built.
 
 ## Models
@@ -29,9 +32,21 @@ It is a `<test_depend>` of [prox_mpc_controller](../prox_mpc_controller), so it 
 | Plugin name | Class | Purpose |
 | --- | --- | --- |
 | `prox_mpc_test_models/NonFiniteTwist` | `prox_mpc_test_models::NonFiniteTwistModel` | Finite linear dynamics (state `[x, y, theta]`, control `[v, omega]`) so the QP converges and reports `PROXQP_SOLVED` with a finite first control, but `toTwist()` deliberately returns a non-finite command (`linear.x = NaN`). |
+| `prox_mpc_test_models/AsymmetricBounds` | `prox_mpc_test_models::AsymmetricBoundsModel` | Same finite linear dynamics as `NonFiniteTwist`, but every declared bound is asymmetric (reverse speed capped tighter than forward speed; braking rate harder than accelerating rate). Both bundled production models declare symmetric bounds, so this is the only fixture that can show the controller preserving an asymmetric range instead of assuming symmetry. |
+| `prox_mpc_test_models/NonFiniteTwistOtherAxes` | `prox_mpc_test_models::NonFiniteTwistOtherAxesModel` | Same finite linear dynamics as `NonFiniteTwist`, but `toTwist()` fills `linear.y` and `angular.x` with non-finite values instead of `linear.x` -- the four `Twist` components a planar Nav2 consumer never reads, so nothing exercises the controller's validation of them without this fixture. |
+| `prox_mpc_test_models/PermutedPlanarMapping` | `prox_mpc_test_models::PermutedPlanarMappingModel` | Unicycle dynamics written against a state vector ordered `[theta, x, y]`, so its declared planar mapping is `idx_yaw = 0`, `idx_x = 1`, `idx_y = 2`, with obstacle avoidance on so the in-loop keep-out term is covered against a permuted state too. Every bundled model maps its position to columns 0 and 1, so this is the only fixture that can show the controller and the solver honouring the declared mapping rather than the ordering they assumed before the mapping hook existed. |
 
 The `NonFiniteTwist` model is the only seam that reaches the controller's non-finite-command fail-safe: a finite-mapping model cannot produce a non-finite twist from a finite control, so this fixture is required to cover that branch.
 The controller test asserts the controller brakes at the model deceleration limit and then escalates to `nav2_core::NoValidControl` once the failure budget is spent.
+
+The `AsymmetricBounds` model is the only seam that reaches the controller's asymmetry-preserving speed-limit and brake-ramp logic, for the same reason: a model with symmetric bounds cannot show a controller defect that only discards sign asymmetry.
+
+The `PermutedPlanarMapping` model is the only seam that reaches the controller's use of the declared mapping in its own assembly steps, for the same reason again: a model whose state is already `[x, y, theta]` cannot show a controller that ignores the mapping and indexes by position.
+
+A fixture that overrides `toTwist()` with a finite mapping must also override `fromTwist()`.
+The controller seeds its deceleration ramp from every control channel the inverse reports as determined, so a fixture that inherits the base `fromTwist()` while emitting its own twist hands that ramp the inverse of a mapping it does not use, and the resulting wrong value looks like a plausible control rather than an obvious fault.
+`NonFiniteTwistModel` and `NonFiniteTwistOtherAxesModel` are the exception, and deliberately so: their whole purpose is to emit a non-finite twist, which cannot round-trip through any inverse, so they override neither and are excluded from the bundled models' round-trip check (`FromTwistAgreesWithToTwistOnEveryDeterminedChannel` in `prox_mpc_core`).
+A new fixture with a finite twist mapping is not exempt.
 
 ## How It Is Used
 
@@ -61,7 +76,10 @@ ros2 plugin list --package prox_mpc_test_models   # lists prox_mpc_test_models/N
 ```text
 prox_mpc_test_models/
 ├── include/prox_mpc_test_models/
-│   └── non_finite_twist_model.hpp
+│   ├── asymmetric_bounds_model.hpp
+│   ├── non_finite_twist_model.hpp
+│   ├── non_finite_twist_other_axes_model.hpp
+│   └── permuted_planar_mapping_model.hpp
 ├── src/
 │   └── plugins.cpp
 ├── CHANGELOG.rst

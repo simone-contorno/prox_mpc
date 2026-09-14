@@ -223,6 +223,26 @@ ros2 run ros_gz_sim create -name walker \
   -file $DEMO/models/prox_mpc_dynamic_actor/model.sdf -x 0.8 -y -1.6 -z 0.5
 ```
 
+> **The two obstacles together do not exercise predictive avoidance.** The box
+> sits on the path at `(0.0, -0.5)` and the walker circles beyond it, so for
+> about 71% of the approach the box lies between the robot and the walker and
+> hides it from the lidar. Replaying the tracker's own clustering over recorded
+> scans, the walker is detected in 19% of scans with the box present against 55%
+> without it; at that hit rate a track rarely survives `confirm_count: 3` to be
+> published at all, and across ten runs of this pair no moving track was ever
+> published. What the robot avoids here is the box, from the costmap.
+>
+> To watch the predictive path actually run, spawn the walker on its own -
+> omit the `path_box` line above. The walker is then tracked within a few
+> seconds and the controller plans against its predicted positions.
+>
+> Moving the walker is not a fix on its own: shifting it further along the path
+> (`-x 1.8`) raises occlusion to 78%, and every spawn that lowers it either
+> brings the walker within the tracker's `cluster_gap` of the box or puts its
+> orbit on top of the robot's start pose. Separating the two properly is a
+> scenario redesign - a smaller orbit, or more room between start, box and
+> crossing - not a coordinate tweak.
+
 Terminal C - send the same goal:
 
 ```bash
@@ -282,6 +302,54 @@ against the live loop:
   avoidance is delegated entirely to Nav2's planner + costmaps (global replanning
   around marked obstacles), the standard Nav2 architecture. Keep it for
   path-tracking runs that should behave as plain Nav2 navigation.
+- `allow_reversing: true` - the solver may plan reverse travel, so the linear
+  control bound keeps its negative half and the robot backs up to adjust before
+  pursuing the path forward, the way a vehicle manoeuvres. Reverse is capped at
+  0.15 m/s by the controller's own guard. Both guards follow the predicted
+  trajectory, so they do cover a reversing one, but they see only what the
+  costmap holds, and whether a platform sweeps behind itself is a property of its
+  sensor rather than of the controller. The waffle carries a 360-degree lidar, so
+  the rear is covered here; naming `model_params.v_min` is how a platform states
+  the reverse envelope its own sensing supports.
+
+  An earlier release shipped this `false`. Reverse was not the problem: inside
+  the goal-checker xy tolerance the reference collapsed to a stub a few
+  millimetres ahead of the robot's own projection onto the plan, which the
+  projection then carried along, so a small tracking error could be traded down
+  as cheaply one way as the other and an open reverse bound gave the solver a
+  second way to do it. Pinning the reference to the goal pose in that region, and
+  turning on the spot for the last of the heading, removes the degeneracy at
+  source; with that in place reverse measures better than forward-only on every
+  scenario. Same goals, same configuration otherwise, measured over the commanded
+  `cmd_vel_nav`, headless:
+
+  | Scenario | Before the fix (reverse on) | Forward-only | Now (reverse on) |
+  | --- | --- | --- | --- |
+  | East 4 m then west 4.5 m | 1 change, 41.1 s, 73% reversing | 0 changes, 38.6 s | 2 changes, 27.8 s |
+  | Static box + circling walker | 28 changes, 59.8 s | 0 changes, 19.8 s | 0 changes, 12.2 s |
+  | North, 90 degree turn | 35 changes, 68.8 s | 0 changes, 21.7 s | 1 change, 9.5 s |
+
+  Nav2 logged 9 `Failed to make progress` events across the three "before"
+  runs and 2 across the forward-only runs, where the controller stalled on a
+  terminal heading error and a recovery behaviour took over; it logs none now.
+  The direction changes that remain are single deliberate manoeuvres - back up,
+  then drive forward - rather than an alternation.
+
+  `reverse_from_plan_orientation` stays at its `false` default: this demo plans
+  with NavFn, which leaves every plan pose at the identity quaternion, so those
+  orientations carry no travel direction to read (see
+  [prox_mpc_controller/doc/architecture.md](../../prox_mpc_controller/doc/architecture.md)).
+  The standstill and dwell gates on a direction change are inert while it is off.
+- `obstacle_yield_band_m: 0.5` (predictive file only) - when where the robot is
+  heading would cut into a tracked mover's predicted keep-out, the cruise eases
+  so the robot waits for the mover rather than racing it. Without it the robot
+  tends to pass in front of a mover heading for its path, because the global
+  planner picks the side from where the obstacle is now and knows nothing of
+  where it is going. Measured with this demo's reversing on, over ten
+  `dynamic_circle` runs: passes behind 6/10 against 1/10, with the best closest
+  approach and no collisions; with two movers it is no worse than off (3/30
+  collisions either way). It is absent from the non-predictive file, which runs
+  no tracker and so has no predictions to act on.
 - `docking_server` block is kept from the stock params because the navigation
   lifecycle manager brings it up and aborts the whole bringup if its `dock_plugins`
   is unset.
@@ -301,10 +369,13 @@ What it changes from the baseline (the rest of the stack is identical):
 - `max_obstacles: 4`, `cbf_gamma: 1.0` - the in-loop NMPC obstacle term runs
   alongside Nav2, with four slots so the box and the adjacent wall cells are all
   captured. `cbf_gamma: 1.0` is the pointwise keep-out, which is what this config
-  targets: the open-world single-obstacle and dynamic cells. A dense obstacle field
-  is the case that may instead want a lower gamma, where the discrete-time CBF
-  coupling (`cbf_gamma < 1`) lets the safety margin decay gradually rather than
-  binding at every node.
+  targets: the open-world single-obstacle and dynamic cells. A dense obstacle
+  field is a case the discrete-time CBF coupling (`cbf_gamma < 1`) is meant for
+  - decaying the safety margin gradually rather than binding at every node -
+  but its effect at the shipped slack weight has not yet been benchmarked (see
+  [control-law.md](../../prox_mpc_controller/doc/control-law.md#discrete-time-control-barrier-coupling)),
+  so treat a lower gamma as a tunable option to measure, not a settled
+  recommendation for this scenario.
 - `predict_obstacles: true`, `max_dynamic_obstacles: 2` - a confirmed *moving*
   track is propagated over the horizon along its tracker-sampled predicted
   trajectory (a constant-velocity ray when no samples are provided) and bound to a

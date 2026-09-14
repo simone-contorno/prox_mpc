@@ -62,67 +62,67 @@ bool Model::getObsFlag() {return obs_flag;}
 
 /*!
  * Set the model name.
- * @param name name.
+ * @param new_name name.
  */
-void Model::setName(std::string name) {this->name = name;}
+void Model::setName(std::string new_name) {this->name = new_name;}
 
 /*!
  * Set the state vector dimension.
- * @param n dimension (> 0).
+ * @param new_n dimension (> 0).
  */
-void Model::setN(size_t n)
+void Model::setN(size_t new_n)
 {
-  if (n == 0) {throw std::invalid_argument("Model::setN: n must be > 0");}
-  this->n = n;
-  this->x = VectorXd::Zero(n);
+  if (new_n == 0) {throw std::invalid_argument("Model::setN: n must be > 0");}
+  this->n = new_n;
+  this->x = VectorXd::Zero(new_n);
 }
 
 /*!
  * Set the control vector dimension.
- * @param m dimension (> 0).
+ * @param new_m dimension (> 0).
  */
-void Model::setM(size_t m)
+void Model::setM(size_t new_m)
 {
-  if (m == 0) {throw std::invalid_argument("Model::setM: m must be > 0");}
-  this->m = m;
-  this->u = VectorXd::Zero(m);
+  if (new_m == 0) {throw std::invalid_argument("Model::setM: m must be > 0");}
+  this->m = new_m;
+  this->u = VectorXd::Zero(new_m);
 }
 
 /*!
  * Set the model parameters.
- * @param params vector of parameters.
+ * @param new_params vector of parameters.
  */
-void Model::setParams(const VectorXd & params) {this->params = params;}
+void Model::setParams(const VectorXd & new_params) {this->params = new_params;}
 
 /*!
  * Set local function approximation.
- * @param c
+ * @param new_c
  */
-void Model::setc(const VectorXd & c) {this->c = c;}
+void Model::setc(const VectorXd & new_c) {this->c = new_c;}
 
 /*!
  * Set the state matrix.
- * @param A state matrix n x n.
+ * @param new_A state matrix n x n.
  */
-void Model::setA(const MatrixXd & A) {this->A = A;}
+void Model::setA(const MatrixXd & new_A) {this->A = new_A;}
 
 /*!
  * Set the control matrix.
- * @param B control matrix n x m.
+ * @param new_B control matrix n x m.
  */
-void Model::setB(const MatrixXd & B) {this->B = B;}
+void Model::setB(const MatrixXd & new_B) {this->B = new_B;}
 
 /*!
  * Set the state vector.
- * @param x
+ * @param new_x
  */
-void Model::setX(const VectorXd & x) {this->x = x;}
+void Model::setX(const VectorXd & new_x) {this->x = new_x;}
 
 /*!
  * Set the control vector.
- * @param u
+ * @param new_u
  */
-void Model::setU(const VectorXd & u) {this->u = u;}
+void Model::setU(const VectorXd & new_u) {this->u = new_u;}
 
 /*!
  * Set inequality constraint.
@@ -136,6 +136,14 @@ void Model::setIneq(std::string var, size_t idx_vec, double low, double upp)
   if (low > upp) {throw std::invalid_argument("Model: low must be <= upp");}
   if (var != "x" && var != "u" && var != "du" && var != "w") {
     throw std::invalid_argument("Model: var must be 'x', 'u', 'du' or 'w'");
+  }
+  // n/m may not be set yet (setN/setM run first in every bundled model, but the
+  // check is skipped rather than assumed until they are known).
+  if (var == "x" && n > 0 && idx_vec >= n) {
+    throw std::invalid_argument("Model::setIneq: idx_vec out of range for state dimension n");
+  }
+  if ((var == "u" || var == "du") && m > 0 && idx_vec >= m) {
+    throw std::invalid_argument("Model::setIneq: idx_vec out of range for control dimension m");
   }
 
   std::vector<double> bounds;
@@ -196,28 +204,31 @@ void Model::updateIneq(std::string var, size_t idx_vec, double low, double upp)
       if (ineq_w[i][0] == idx_vec) {idx = i; found = true;}}
     if (found) {ineq_w[idx] = bounds;}
   }
+  if (!found) {
+    throw std::invalid_argument("Model::updateIneq: no existing bound for idx_vec");
+  }
 }
 
 /*!
  * Declare whether the model supports obstacle avoidance.
- * @param obs_flag true if the model participates in obstacle avoidance.
+ * @param new_obs_flag true if the model participates in obstacle avoidance.
  */
-void Model::setObsAvoid(bool obs_flag)
+void Model::setObsAvoid(bool new_obs_flag)
 {
-  this->obs_flag = obs_flag;
+  this->obs_flag = new_obs_flag;
 }
 
 /*!
  * Override one inequality bound from a configure() params map, keeping the
  * current value for any side whose key is absent.
- * @param params configure() params map.
+ * @param config_params configure() params map.
  * @param var "x", "u", "du" or "w".
  * @param idx_vec vector index whose bound is overridden.
  * @param key_low params key for the lower bound (kept current if absent).
  * @param key_upp params key for the upper bound (kept current if absent).
  */
 void Model::overrideBound(
-  const std::map<std::string, double> & params, std::string var, size_t idx_vec,
+  const std::map<std::string, double> & config_params, std::string var, size_t idx_vec,
   std::string key_low, std::string key_upp)
 {
   /* Read the current bound so an absent key keeps the constructor literal. */
@@ -234,8 +245,8 @@ void Model::overrideBound(
   }
   if (found == false) {return;}
 
-  if (params.count(key_low) > 0) {low = params.at(key_low);}
-  if (params.count(key_upp) > 0) {upp = params.at(key_upp);}
+  if (config_params.count(key_low) > 0) {low = config_params.at(key_low);}
+  if (config_params.count(key_upp) > 0) {upp = config_params.at(key_upp);}
   updateIneq(var, idx_vec, low, upp);
 }
 

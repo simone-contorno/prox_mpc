@@ -7,6 +7,17 @@
 # prediction. A confirmed *moving* track is propagated over the horizon and bound
 # to a dynamic slot; the static box/walls still come from the costmap (hybrid).
 FollowPath:
+  # Reverse travel, and the obstacle-aware yield with its hard speed cap. Without
+  # the cap the yield only lowers a cruise target the obstacle term outweighs, and
+  # the solver swerves at full speed past a closing mover instead of slowing:
+  # measured on dynamic_circle over ten runs, this configuration passes behind the
+  # mover 10/10 against 4/10 and holds three times the worst-case clearance
+  # (+0.258 m against +0.085 m), with no collisions either way. The cap needs
+  # somewhere to go, so it is paired with reverse travel; the model pairing below
+  # sets v_min, which is what lifts the plugin's unguarded-reverse speed cap.
+  allow_reversing: true
+  obstacle_yield_band_m: 0.5
+  obstacle_yield_caps_speed: true
   plugin: "prox_mpc_controller::ProxMpcController"
   np: 20
   nc: 20
@@ -22,13 +33,18 @@ FollowPath:
   w_weight: 1000.0
   max_int_iter_qp: 1500
   max_ext_iter_qp: 10000
-  max_iter_sqp: 100
+  max_iter_sqp: 1
   qp_type: false
   guess: true
   max_solver_failures: 3
   max_obstacles: 4
-  safety_margin: 0.1
-  robot_radius: 0.22
+  # 0.085 with robot_radius 0.235 keeps d_safe at 0.320 m. robot_radius is a
+  # geometric fact (the footprint's circumscribed radius) and safety_margin is
+  # the discretionary part, so the correction to the first is absorbed by the
+  # second rather than widening the keep-out: 0.335 m measured worse on the
+  # multi-obstacle cells, where a gap needs 2*d_safe to stay feasible.
+  safety_margin: 0.085
+  robot_radius: 0.235
   cbf_gamma: 1.0
   # 253 (inscribed + lethal only, not the reactive preset's 200): the static
   # fill adds robot_radius + safety_margin around every cell it ingests, so

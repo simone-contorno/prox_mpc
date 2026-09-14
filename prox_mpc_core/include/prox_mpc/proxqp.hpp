@@ -28,51 +28,61 @@ public:
 
   /* Initialization */
 
-  void init(std::shared_ptr<Model> model);
+  void init(std::shared_ptr<Model> new_model);
 
   /* Solving */
 
   std::tuple<MatrixXd, MatrixXd, VectorXd, proxsuite::proxqp::Info<double>> solve(
-    MatrixXd x, MatrixXd u, const VectorXd & u_prev, VectorXd w, const MatrixXd & goal_x,
-    const MatrixXd & goal_u);
+    MatrixXd x_in, MatrixXd u_in, const VectorXd & u_prev, VectorXd w_in,
+    const MatrixXd & goal_x, const MatrixXd & goal_u);
 
   /* Set */
 
   void setH();
   void setc(
-    const MatrixXd & x, const MatrixXd & u, const VectorXd & w, const MatrixXd & goal_x,
-    const MatrixXd & goal_u);
-  void setE(const MatrixXd & x, const MatrixXd & u);
-  void setb(const MatrixXd & x, const MatrixXd & u);
-  void setC(const MatrixXd & x);
-  void setd(const MatrixXd & x, const MatrixXd & u, const VectorXd & u_prev, const VectorXd & w);
+    const MatrixXd & x_in, const MatrixXd & u_in, const VectorXd & w_in,
+    const MatrixXd & goal_x, const MatrixXd & goal_u);
+  void setE(const MatrixXd & x_in, const MatrixXd & u_in);
+  void setb(const MatrixXd & x_in, const MatrixXd & u_in);
+  void setC(const MatrixXd & x_in);
+  void setd(
+    const MatrixXd & x_in, const MatrixXd & u_in, const VectorXd & u_prev,
+    const VectorXd & w_in);
 
-  void setQ(MatrixXd Q);
-  void setR(MatrixXd R);
-  void setS(MatrixXd S);
-  void setW(MatrixXd W);
-  void setNp(size_t Np);
-  void setNc(size_t Nc);
-  void setdt(double dt);
-  void setNEq(size_t n_eq);
-  void setNIneq(size_t n_ineq);
-  void setMaxInIter(size_t max_inn_iter);
-  void setMaxOutIter(size_t max_out_iter);
-  void setQPType(bool qp_type);
-  void setGuess(bool guess);
+  void setQ(MatrixXd new_Q);
+  void setR(MatrixXd new_R);
+  void setS(MatrixXd new_S);
+  void setW(MatrixXd new_W);
+  void setNp(size_t new_Np);
+  void setNc(size_t new_Nc);
+  void setdt(double new_dt);
+  void setNEq(size_t new_n_eq);
+  void setNIneq(size_t new_n_ineq);
+  void setMaxInIter(size_t new_max_inn_iter);
+  void setMaxOutIter(size_t new_max_out_iter);
+  void setQPType(bool new_qp_type);
+  void setGuess(bool new_guess);
+  void setWarmStart(bool new_warm_start);
 
-  /// Initial-guess policy handed to proxsuite for each QP sub-problem.
+  /// Initial-guess policy for a solve that updates a surviving workspace.
   proxsuite::proxqp::InitialGuessStatus initialGuessPolicy() const;
-  void setCbfGamma(double cbf_gamma);
+
+  /// Initial-guess policy for a solve that (re)builds the workspace.
+  proxsuite::proxqp::InitialGuessStatus coldGuessPolicy() const;
+
+  /// Declare the fixed sparsity structure the workspace is built against.
+  void declarePattern();
+  void setCbfGamma(double new_cbf_gamma);
 
   /* Obstacle avoidance */
 
-  void setMaxObs(size_t max_obs);
-  void setObs(MatrixXd obs);
+  void setMaxObs(size_t new_max_obs);
+  void setObs(MatrixXd new_obs);
 
   /* Accessors for the assembled inequality system (valid after a solve()). */
   const MatrixXd & getC() const {return C;}
   const std::vector<size_t> & getIneqIdx() const {return ineq_idx;}
+  const VectorXd & getLow() const {return low;}
   size_t getWStart() const {return w_start;}
   size_t getNDvars() const {return n_dvars;}
   size_t getMaxObs() const {return max_obs;}
@@ -129,12 +139,14 @@ private:
 
   /* Settings (mirror the MPC defaults; MPC overwrites them all before init()). */
   bool qp_type = false;         // Sparse (false) / dense (true) problem.
-  bool guess = true;            // Use (true) / don't use (false) warm start for initial guesses.
+  bool guess = true;            // ProxQP cheap-start policy selector.
+  bool warm_start = true;       // Reuse the workspace and previous iterate across cycles.
   size_t max_out_iter = 10000;  // Maximum number of outer iterations.
   size_t max_inn_iter = 1500;   // Maximum number of inner iterations (proximal operator).
 
   /* Results */
   proxsuite::proxqp::sparse::Vec<double> result_x;       // Optimal decision variables.
+  bool qp_ready{false};  // Workspace built; later cycles update it in place.
   // Info is a plain aggregate with no default member initializers; value-initialize
   // it so a read before the first solve() is not indeterminate. The zero-valued
   // QPSolverOutput enumerator is PROXQP_SOLVED, so the constructor overrides the
@@ -144,6 +156,15 @@ private:
   /* Obstacle avoidance: linearized signed-distance half-plane, K slots per node. */
   size_t max_obs = 0;             // Capacity K of obstacle slots per predicted node (0 = disabled).
   bool obstacle_active = false;   // Cached in init(): model declares avoidance and max_obs > 0.
+
+  /* State indices the model declares its planar position at, read once from
+   * Model::getPlanarMapping() in init() and validated there. The obstacle rows
+   * are the only place the solver needs to know where the position sits, so
+   * they are cached rather than queried per row: setC() writes Np*K of them
+   * every SQP iteration. The defaults are the canonical layout every bundled
+   * model declares. */
+  size_t idx_pos_x = 0;
+  size_t idx_pos_y = 1;
   MatrixXd obs;                   // Per (node, slot) obstacle triples (Np*K) x [o_x, o_y, d_safe].
 
   // Discrete-time control-barrier-function rate (Zeng et al., ACC 2021):

@@ -10,6 +10,12 @@ design see [architecture.md](architecture.md).
 
 At each predicted node `k` the robot has a planar position
 $p_k = (x_k, y_k)$.
+Where those two components sit inside the model's state vector is the model's
+own business: the assembly reads their indices from `Model::getPlanarMapping()`,
+so a state ordered `[x, y, yaw, ...]` and one ordered `[yaw, x, y]` are both
+constrained on their real position axes.
+`ProxQP::init()` reads the pair once, and rejects a model that places either
+index outside its own state vector or places both at the same index.
 An obstacle is reduced to a point $o = (o_x, o_y)$ with a required clearance
 $d_\text{safe}$, which already folds in the robot radius, the obstacle inflation,
 and a safety margin.
@@ -188,33 +194,76 @@ Instead of demanding absolute safety at every node, this only requires the safet
 margin to **decay no faster than the rate $\gamma$**, which stays feasible while
 the robot advances and removes the stay-put local optimum. With $\gamma = 1$ it
 reduces exactly to the pointwise constraint $h(p_{k+1}) \ge 0$, so the parameter
-default preserves the original behavior bit-for-bit.
+default preserves the original behavior bit-for-bit - the coupling below is
+skipped altogether at that default rather than merely evaluating to zero, so it
+adds nothing to the assembled QP's sparsity pattern.
 
-In increment form, with the slack and the previous-node signed distance $h(p_k)$
-held constant per SQP iteration (only the constrained node $k+1$ is linearized;
-the re-linearization across iterations recovers the exact value):
+Both sides of the coupling depend on a position, so both are linearized to
+first order about the current SQP iterate. In increment form, with the slack
+held constant per SQP iteration:
 
 $$
-n^\top \Delta p_{k+1} + \Delta w \ge (1 - \gamma)\, h(p_k) - h(p_{k+1}) - w.
+n_{k+1}^\top \Delta p_{k+1} - (1 - \gamma)\, n_k^\top \Delta p_k + \Delta w
+\ge (1 - \gamma)\, h(p_k) - h(p_{k+1}) - w.
 $$
 
 ```text
 setC : obs_h_prev = ||p_k - o_k|| - d_safe   (signed distance at the previous node)
+       C(row, p_k)  += -(1 - cbf_gamma) * n_k   (previous-node gradient block, node >= 1)
 setd : low(row) = (1 - cbf_gamma) * obs_h_prev - obs_h - w
 ```
 
-Here $o_k$ is the obstacle position **at the previous node's time**: with a static
-fill $o_k = o_{k+1}$, but with the predictive (moving) fill each node carries a
-different obstacle position, so $h(p_k)$ uses the previous node's obstacle slot
-(`obs[slot - max_obs]`). Node $k = 0$ is the fixed current pose, so it reuses the
-node-1 obstacle. Only the constrained node's gradient $n^\top \Delta p_{k+1}$ enters
-$C$; the previous node's signed distance is held constant per SQP iteration, which is
-exact at convergence.
+Here $o_k$ is the obstacle position **at the previous node's time**: with a
+static (costmap) fill $o_k = o_{k+1}$ for every slot, because the controller
+binds each scanned object to a fixed slot across every node it appears at
+rather than re-selecting independently per node; with the predictive (moving)
+fill each node already carries a different, tracked position for the same
+slot. Node $k = 0$ is the fixed current pose, for which the obstacle matrix
+carries no dedicated block; its position is reconstructed by extrapolating the
+first two blocks backward, $o_0 = 2\,o(\text{block }0) - o(\text{block }1)$,
+exact for both the static and the constant-velocity fill.
+
+That extrapolation amplifies whatever error the two blocks carry, as
+$2 e_1 - e_2$, so it is applied only where the two blocks describe motion
+rather than noise.
+The test is the implied inter-block displacement: above `kMaxObsSpeed * dt`, a
+compile-time constant fixed at `10.0` m/s in `proxqp.cpp`, the step is treated
+as noise and the first block is used unchanged, which is the pre-reconstruction
+behaviour for that slot.
+The bound is a sanity limit rather than a tuning knob - nothing this controller
+plans around, tracked or scanned, closes at ten metres per second - and it is
+deliberately far above any real obstacle speed so that it never rejects genuine
+motion.
+The fallback is silent: it is a per-slot, per-cycle decision on the QP assembly
+hot path, so it emits no log line, and a tracker publishing an apparent step
+above the bound is corrected by the constraint's own conservatism rather than
+reported.
+The previous-node gradient term $n_k^\top \Delta p_k$ is written only for
+$k \ge 1$: $\Delta p_0$ is pinned to zero by the initial-state equality, so a
+node-0 gradient column could never influence the solution and would only
+enlarge the constraint matrix's sparsity pattern for no benefit.
+Below `1.0` the core also guards against a degenerate pairing: if either
+node's obstacle slot holds the unused-slot far sentinel, the previous-node
+terms (value and gradient alike) are left at zero and the row falls back to
+the plain pointwise constraint for that node, rather than comparing a real
+obstacle against an out-of-range placeholder.
+
+Because the SQP loop exits as soon as one QP sub-problem reports `SOLVED` (see
+[nmpc.md](nmpc.md)), a control cycle typically performs exactly one linearize
+step rather than iterating within the cycle: the coupling above is first-order
+exact in both nodes' positions **at the current iterate**, and that iterate is
+refined cycle to cycle through the warm start rather than by re-linearizing
+within one call.
 
 The rate $\gamma$ is the `cbf_gamma` parameter, forwarded from the controller
 through `MPC::setCbfGamma`. This lets the predictive NMPC obstacle term run
 alongside Nav2's planner/costmaps: Nav2 replans the global path while the MPC
 predicts the robot against per-node obstacles over the horizon.
+The coupling is enforced through the slack penalty like every other obstacle
+row, not as a hard barrier: at the shipped `w_weight`, whether a value of
+`cbf_gamma` below `1.0` measurably changes a trajectory has not yet been
+benchmarked (see [control-law.md](../../prox_mpc_controller/doc/control-law.md)
+for the controller-side guidance this implies).
 
 ## Bounded capacity and the far sentinel
 
@@ -240,9 +289,10 @@ coupling on whatever positions it is handed.
 Two fills exist on the controller side, both writing the same `setObs` contract:
 
 - **static (costmap)** - the default. For each node the controller scans the
-  local costmap around the robot's *reference* position and emits the nearest
-  occupied cells. The obstacle position varies across nodes only because the robot
-  moves, so the term constrains the robot against where obstacles are *now*.
+  local costmap around the robot's *nominal predicted* position for that node
+  and emits the nearest occupied cells. The obstacle position varies across
+  nodes only because the robot moves, so the term constrains the robot against
+  where obstacles are *now*.
 - **predictive (tracked obstacles)** - opt-in. A dynamic track is propagated
   along its tracker-sampled predicted trajectory (the IMM CV+CTRV forward
   prediction), or a constant-velocity ray $o_{k,j} = p_j + v_j\,\Delta t_k$ as the
@@ -255,17 +305,18 @@ Because both fills produce identical `(node, slot)` triples, the CBF coupling an
 the rest of this derivation are unchanged. The predictive fill is specified in the
 controller's [control-law.md](../../prox_mpc_controller/doc/control-law.md).
 
-## Footprint: disc here, exact polygon elsewhere
+## Footprint: disc here, polygon elsewhere
 
 The core treats the robot as a **disc** whose radius is folded into
 $d_\text{safe}$.
 A disc is rotation-invariant, so the half-plane needs only the position, not the
 heading, which keeps the constraint simple and convex.
-Exact polygon-footprint collision checking is intentionally **not** done in the
+Polygon-footprint collision checking is intentionally **not** done in the
 optimizer; it belongs to a separate safety layer (for example a collision monitor
 or a footprint collision checker) that can veto a command the optimizer produced.
 Separating an approximate, fast, convex avoidance term in the optimizer from an
-exact, conservative safety check is the conventional division of responsibility.
+outline-only footprint check outside it is the conventional division of
+responsibility.
 
 ## Why this is the common choice
 
@@ -295,8 +346,14 @@ ProxMPC is.
 
 ## Numerical guard
 
-When the predicted position coincides with the obstacle, $\lVert p_k - o \rVert$
-is zero and the normal $n = (p_k - o) / \lVert p_k - o \rVert$ is undefined.
-The norm is therefore floored at a small constant before the division, which
-avoids injecting `NaN` into the QP at the cost of an arbitrary (but bounded)
-normal direction in that degenerate instant.
+When the predicted position coincides with, or nearly coincides with, the
+obstacle, $\lVert p_k - o \rVert$ is at or near zero and the normal
+$n = (p_k - o) / \lVert p_k - o \rVert$ carries no reliable escape direction:
+dividing by a merely-floored norm would still emit a near-zero or non-unit
+vector, silently down-scaling the constraint row instead of fixing it.
+Below the same small-norm threshold the code therefore substitutes a
+deterministic unit fallback direction ($n = (1, 0)$) rather than dividing at
+all. The constraint row still carries a full-magnitude, if arbitrary, escape
+direction in that degenerate instant, and the slack is what actually resists a
+collision until the robot's own motion breaks the coincidence and a real
+gradient returns.

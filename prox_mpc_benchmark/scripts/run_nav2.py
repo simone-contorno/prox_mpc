@@ -202,6 +202,58 @@ def terminate(proc):
             pass
 
 
+def record_from_disk(summary_json):
+    """
+    Assemble one index record from a cell's files on disk.
+
+    Merges the run summary with the process resource sampling and, for the
+    predictive controller, the tracker's own sampling.
+    """
+    rec = json.load(open(summary_json))
+    rec['status'] = 'ok'
+    stem = str(summary_json)[:-len('.json')]
+    resource_json = Path(stem + '.resource.json')
+    if resource_json.exists():
+        try:
+            rec.update(json.load(open(resource_json)))
+        except (json.JSONDecodeError, OSError):
+            pass
+    tracker_resource_json = Path(stem + '.tracker_resource.json')
+    if tracker_resource_json.exists():
+        try:
+            tr = json.load(open(tracker_resource_json))
+            rec['tracker_cpu_mean_pct'] = tr.get('cpu_mean_pct')
+            rec['tracker_cpu_peak_pct'] = tr.get('cpu_peak_pct')
+            rec['tracker_rss_peak_mb'] = tr.get('rss_peak_mb')
+        except (json.JSONDecodeError, OSError):
+            pass
+    return rec
+
+
+def rebuild_index(results_dir):
+    """
+    Derive the run index from the per-run files on disk.
+
+    runs/ is the source of truth and scenarios.json is a view over it, so
+    deriving it fresh keeps the two from diverging: a directory assembled by
+    hand, or copied without its index, aggregates to what it actually
+    contains rather than to whatever a stale index happened to hold.
+    """
+    runs_dir = Path(results_dir) / 'runs'
+    if not runs_dir.is_dir():
+        return []
+    index = []
+    for summary_json in sorted(runs_dir.glob('*.json')):
+        if (summary_json.name.endswith('.resource.json') or
+                summary_json.name.endswith('.tracker_resource.json')):
+            continue
+        try:
+            index.append(record_from_disk(summary_json))
+        except (json.JSONDecodeError, OSError):
+            continue
+    return index
+
+
 def run_cell(scn, controller, repeat, control, results_dir, robot, map_yaml,
              warmup_s, timeout_s, oracle=False):
     runs_dir = results_dir / 'runs'
@@ -251,7 +303,7 @@ def run_cell(scn, controller, repeat, control, results_dir, robot, map_yaml,
     metrics = goal_proc = sampler = tracker_sampler = None
     try:
         time.sleep(warmup_s)  # let the lifecycle manager activate the servers
-        # Instrument the controller_server process for the embedded-resource metrics.
+        # Instrument the controller_server process for the process-resource metrics.
         pid = None
         for _ in range(10):
             pid = find_controller_pid()
@@ -314,22 +366,7 @@ def run_cell(scn, controller, repeat, control, results_dir, robot, map_yaml,
         time.sleep(3.0)  # let DDS discovery settle before the next cell
 
     if summary_json.exists():
-        rec = json.load(open(summary_json))
-        rec['status'] = 'ok'
-        if resource_json.exists():
-            try:
-                rec.update(json.load(open(resource_json)))
-            except (json.JSONDecodeError, OSError):
-                pass
-        if predictive and tracker_resource_json.exists():
-            try:
-                tr = json.load(open(tracker_resource_json))
-                rec['tracker_cpu_mean_pct'] = tr.get('cpu_mean_pct')
-                rec['tracker_cpu_peak_pct'] = tr.get('cpu_peak_pct')
-                rec['tracker_rss_peak_mb'] = tr.get('rss_peak_mb')
-            except (json.JSONDecodeError, OSError):
-                pass
-        return rec
+        return record_from_disk(summary_json)
     return {
         'scenario': scn['name'], 'model': scn.get('models', ['unicycle'])[0],
         'mode': 'b2', 'controller': controller, 'repeat': repeat,
@@ -368,12 +405,7 @@ def main() -> int:
     results_dir.mkdir(parents=True, exist_ok=True)
 
     index_path = results_dir / 'scenarios.json'
-    index = []
-    if index_path.exists():
-        try:
-            index = json.load(open(index_path))
-        except json.JSONDecodeError:
-            index = []
+    index = rebuild_index(results_dir)
 
     rep_indices = ([int(x) for x in args.repeat_indices.split(',') if x != '']
                    if args.repeat_indices else list(range(repeats)))

@@ -39,8 +39,14 @@ three hooks (`updateA`, `updateB`, `updatec`):
 - `updatec(dt, x_next)` fills the residual $c_k$ of the Euler step,
   $c_k = x_k - x_{k+1} + \Delta t\, f(x_k, u_k)$.
 
-For the kinematic bicycle with state $x = [p_x, p_y, \theta, \delta]^\top$ and
-input $u = [v, \dot{\delta}]^\top$ (wheelbase $L$), the residual is
+`prox_mpc_core` ships two internally-consistent bicycle plugins that differ in
+which point of the vehicle the state $(p_x, p_y)$ refers to.
+
+For `prox_mpc_core/BicycleFrontAxle`, with state
+$x = [p_x, p_y, \theta, \delta]^\top$ and input $u = [v, \dot{\delta}]^\top$
+(wheelbase $L$), $(p_x, p_y)$ is the **front-axle** centre and $v$ is the
+front-wheel speed, so the front wheel travels along $\theta + \delta$ and the
+residual is
 
 $$
 c_k =
@@ -53,11 +59,24 @@ x_k^{(3)} - x_{k+1}^{(3)} + \Delta t\, \dot{\delta}_k
 $$
 
 and $A_k$, $B_k$ are its analytic Jacobians.
-The yaw-rate term uses $v_k \sin(\delta_k)/L$ by design, not the textbook
-$v_k \tan(\delta_k)/L$: this is a deliberate modeling choice, applied consistently
-across `updatec`, `updateA`, `updateB`, and `toTwist`, so it is not a typo - the
-two agree for small steering angles and the analytic Jacobians match the $\sin$
-form exactly.
+With the position propagated as $v \cos(\theta + \delta)$,
+$v \sin(\theta + \delta)$, the yaw-rate term $v_k \sin(\delta_k)/L$ is the
+**exact** front-axle yaw rate of that same parameterization, not a small-angle
+approximation of anything: the front wheel's own heading is $\theta + \delta$,
+and $L$ is the distance from $(p_x, p_y)$ back to the point the yaw pivots
+about.
+
+`prox_mpc_core/BicycleRearAxle` instead references $(p_x, p_y)$ to the
+**rear-axle** centre, so $v$ is the rear-axle (body) speed, the rear axle
+travels along $\theta$ alone, and the residual uses $v_k \cos(\theta_k)$,
+$v_k \sin(\theta_k)$, and the textbook $v_k \tan(\delta_k)/L$ - exact for that
+parameterization by the same reasoning, with $\sin$ and $\tan$ swapped because
+the reference point moved from the front axle to the rear.
+
+Both plugins are internally consistent end to end: `getPlanarMapping()`
+declares which physical point $(p_x, p_y)$ refers to (`ref_offset_x = L` for
+the front axle, `0` for the rear axle), and `toTwist()` reports the resulting
+`base_link` twist for that same point rather than mixing conventions.
 A purely linear model returns constant $A$, $B$ and a trivial residual; the SQP
 then converges in a single QP solve.
 
@@ -161,18 +180,41 @@ w \mathrel{+}= \Delta w,
 \qquad \text{until } \texttt{status} = \text{SOLVED} \text{ or } k \ge k_{\max}.
 $$
 
-The retry count is bounded by `max_iter_sqp` (100 by default) and, when set, by
-the `max_solve_time` wall-clock budget, so a failing sub-problem cannot overrun
-the control cycle. Because the loop terminates on the first converged QP rather
-than on an increment-norm test, it is a real-time-iteration scheme: each cycle
-contributes one linearization, and a nonlinear model refines its linearization
-across successive control cycles through the warm start rather than within a
-single call.
+The retry count is bounded by `max_iter_sqp` (1 by default, the real-time
+iteration) and, when set, by the `max_solve_time` wall-clock budget.
+A retry cap above 1 multiplies the cost of a non-converged sub-problem by that
+cap within the one cycle, because the loop re-solves rather than deferring to
+the next control period.
+The budget is tested only between SQP sub-problem solves, never while one is in
+flight, so it cannot interrupt a slow QP and does not bound worst-case cycle
+latency in either direction: a loop that exceeds it simply stops early with
+whatever status the last QP returned, which is `PROXQP_SOLVED` when that QP
+itself converged.
+The bound that genuinely holds every cycle is the iteration caps, not the
+wall-clock budget.
+Because the loop terminates on the first converged QP **sub-problem** rather
+than on a nonlinear increment-norm, KKT, or merit-function test, the nominal
+cycle described above - one linearize-solve-update pass - is a real-time-
+iteration scheme: each such cycle contributes one linearization, and a
+nonlinear model refines its linearization across successive control cycles
+through the warm start rather than within a single call.
+`max_iter_sqp = 1` makes that scheme unconditional, independent of
+`max_solve_time`: exactly one QP sub-problem per cycle, whether or not it
+converges.
 
 ### Convergence and failure reporting
 
-After the loop, `qp_info.status` equals `PROXQP_SOLVED` only when the SQP
-converged; `sqp_iter` and `qp_iter_ext` report the iteration counts.
+After the loop, `qp_info.status` equals `PROXQP_SOLVED` when the last QP
+**sub-problem** converged - a statement about that one convex QP, not about
+nonlinear convergence of the original problem.
+No nonlinear residual, KKT, merit-function, or increment-norm test exists
+anywhere in the loop, so `PROXQP_SOLVED` is the only convergence signal the
+caller can observe.
+It is also what `prox_mpc_msgs/SolverDiagnostics`'s `converged` field is
+derived from, gated further by the controller's own finiteness and
+command-acceptance checks before publication (see
+[`prox_mpc_controller/doc/architecture.md`](../../prox_mpc_controller/doc/architecture.md)).
+`sqp_iter` and `qp_iter_ext` report the iteration counts.
 On non-convergence `MPC::solve` takes **no safety action**: it returns the last
 (non-converged) iterate, keeps the previous command as the warm-start reference,
 and leaves the fallback to the caller.
@@ -205,8 +247,31 @@ sequenceDiagram
 
 The QP is solved in **sparse** mode by default (`qp_type = false`); a dense path
 exists for small problems (`qp_type = true`).
-The QP is re-initialized with fresh matrices each solve, and `guess` selects
-between ProxQP's own cheap starts: the equality-constrained guess (`true`, the
-default) or no initial guess (`false`).
-The trajectory-level warm start in `MPC::solve` slides the previous solution
+There are two warm starts, at different levels, and they are independent.
+
+The **trajectory-level** warm start in `MPC::solve` slides the previous solution
 forward one step before re-linearizing.
+It is always on and is what makes the real-time iteration scheme work.
+
+The **solver-level** warm start is `warm_start` (`true` by default).
+With it on, the ProxQP workspace is built once and updated in place, so the
+factorization and the previous primal/dual iterate survive between cycles and
+ProxQP starts from the previous solution rather than from scratch.
+With it off, the QP is re-initialized with fresh matrices each solve and only
+ProxQP's own cheap starts apply, which is what `guess` selects between: the
+equality-constrained guess (`true`, the default) or no initial guess (`false`).
+`guess` also selects the policy on the update path, where `true` means
+`WARM_START` and `false` still means no guess.
+
+`WARM_START` is used rather than `WARM_START_WITH_PREVIOUS_RESULT` because the
+latter also carries the proximal step sizes across solves; unused obstacle slots
+are padded with a far sentinel whose rows are ~1e6 in magnitude, so step sizes
+tuned against that scaling would cripple the next solve.
+
+In-place update requires the sparsity structure to stay fixed - ProxQP silently
+ignores an update whose pattern moved, which would drop the keep-out rows.
+The structure is therefore declared once at `init()` from the positions `setE`
+and `setC` write, and the values are written into it each cycle, structural
+zeros included.
+A pattern taken from `sparseView()` would not do: the half-plane normals and the
+model Jacobians pass through zero as the trajectory evolves.

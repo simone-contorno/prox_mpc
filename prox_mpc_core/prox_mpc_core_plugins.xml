@@ -1,11 +1,32 @@
 <library path="prox_mpc_core_models">
   <class
+    name="prox_mpc_core/BicycleFrontAxle"
+    type="prox_mpc::BicycleFrontAxle"
+    base_class_type="prox_mpc::Model">
+    <description>
+      Kinematic bicycle referenced to the front axle: state [x, y, theta, delta]
+      (n=4), control [v, delta_dot] (m=2), with (x, y) at the front-axle centre
+      and v the front-wheel speed. Bundled prox_mpc::Model plugin.
+    </description>
+  </class>
+  <class
+    name="prox_mpc_core/BicycleRearAxle"
+    type="prox_mpc::BicycleRearAxle"
+    base_class_type="prox_mpc::Model">
+    <description>
+      Kinematic bicycle referenced to the rear axle: state [x, y, theta, delta]
+      (n=4), control [v, delta_dot] (m=2), with (x, y) at the rear-axle centre
+      (the base_link origin) and v the body speed. Bundled prox_mpc::Model plugin.
+    </description>
+  </class>
+  <class
     name="prox_mpc_core/Bicycle"
     type="prox_mpc::Bicycle"
     base_class_type="prox_mpc::Model">
     <description>
-      Kinematic bicycle reference model: state [x, y, theta, delta] (n=4),
-      control [v, delta_dot] (m=2). Bundled prox_mpc::Model plugin.
+      Deprecated alias for prox_mpc_core/BicycleFrontAxle, kept so an existing
+      configuration keeps loading; it warns once on load and is removed in the
+      next major release. Select BicycleFrontAxle or BicycleRearAxle instead.
     </description>
   </class>
   <class

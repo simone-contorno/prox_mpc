@@ -16,10 +16,12 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <cstdint>
 #include <fstream>
 #include <functional>
 #include <future>
 #include <limits>
+#include <map>
 #include <memory>
 #include <numeric>
 #include <sstream>
@@ -200,6 +202,18 @@ public:
     os << "  \"mean_sqp_iters\": " << num(mean_sqp) << ",\n";
     os << "  \"mean_qp_iters_ext\": " << num(mean_qp) << ",\n";
     os << "  \"infeasible_rate\": " << num(infeas_rate) << ",\n";
+    os << "  \"max_sqp_iters\": " << sqp_max_ << ",\n";
+    os << "  \"max_qp_iters_ext\": " << qp_ext_max_ << ",\n";
+    os << "  \"status_counts\": {";
+    {
+      bool first = true;
+      for (const auto & [code, count] : status_counts_) {
+        if (!first) {os << ", ";}
+        os << "\"" << static_cast<int>(code) << "\": " << count;
+        first = false;
+      }
+    }
+    os << "},\n";
     os << "  \"max_obstacle_slack_m\": " << num(slack_max_) << ",\n";
     os << "  \"recoveries\": " << recoveries_ << ",\n";
     os << "  \"num_pose_samples\": " << pose_samples_ << ",\n";
@@ -250,6 +264,13 @@ private:
     }
     sqp_sum_ += static_cast<double>(msg->sqp_iters);
     qp_ext_sum_ += static_cast<double>(msg->qp_iters_ext);
+    /* Retain the per-cycle maxima and the status histogram, not only the means:
+     * a single cycle that exhausts the QP iteration budget and then succeeds on
+     * an SQP retry is averaged away by the means and reported as converged, so
+     * the worst latency event in a run leaves no trace in infeasible_rate. */
+    sqp_max_ = std::max(sqp_max_, static_cast<std::size_t>(msg->sqp_iters));
+    qp_ext_max_ = std::max(qp_ext_max_, static_cast<std::size_t>(msg->qp_iters_ext));
+    status_counts_[msg->status]++;
     if (msg->deadline_missed) {deadline_miss_++;}
     if (msg->status != prox_mpc_msgs::msg::SolverDiagnostics::STATUS_SOLVED) {infeasible_++;}
     slack_max_ = std::max(slack_max_, msg->max_obstacle_slack);
@@ -380,6 +401,8 @@ private:
 
   // Diagnostics accumulators.
   std::size_t diag_count_{0}, deadline_miss_{0}, infeasible_{0};
+  std::size_t sqp_max_{0}, qp_ext_max_{0};
+  std::map<std::uint8_t, std::size_t> status_counts_;
   double sqp_sum_{0.0}, qp_ext_sum_{0.0}, slack_max_{0.0};
   std::vector<double> solve_ms_;
   std::size_t nonfinite_solve_{0};

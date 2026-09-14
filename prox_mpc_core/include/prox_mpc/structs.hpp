@@ -53,6 +53,51 @@ struct ModelInfo
   VectorXd c;        // Local function approximation.
 };
 
+/* How a model's state and control vectors map onto the planar quantities a Nav2
+ * consumer drives. Declared by Model::getPlanarMapping() and read once at the
+ * consumer's configuration time, never on the control path.
+ *
+ * Validation is split by who indexes what. The core validates only the indices
+ * it dereferences itself: today that is idx_x and idx_y, checked in
+ * ProxQP::init() when obstacle avoidance is active. idx_yaw and the steering
+ * indices are deliberately unchecked there, because no core path reads them -
+ * a two-state holonomic model doing obstacle avoidance through the core
+ * directly is legitimate, and its out-of-range idx_yaw default harms nothing.
+ * The Nav2 controller validates all of them at readModelMapping(), for its own
+ * use of them.
+ *
+ * Whoever first makes a core path index the heading or a steering channel must
+ * extend the check in ProxQP::init() to cover it: EIGEN_NO_DEBUG turns an
+ * out-of-range read into silent garbage rather than an abort. */
+struct PlanarMapping
+{
+  /* Index value meaning "this model does not carry that quantity". */
+  static constexpr size_t kNoIndex = static_cast<size_t>(-1);
+
+  size_t idx_x{0};                // State index of the x position [m].
+  size_t idx_y{1};                // State index of the y position [m].
+  size_t idx_yaw{2};              // State index of the heading [rad].
+  size_t idx_speed{0};            // Control index of the signed longitudinal speed [m/s].
+  size_t idx_steering{kNoIndex};  // State index of the steering angle [rad], or kNoIndex.
+
+  /* Control index of the steering-angle rate [rad/s], or kNoIndex. Meaningful
+   * only alongside idx_steering: it is the channel whose declared bound sets how
+   * fast a consumer may move its belief about the steering angle. */
+  size_t idx_steer_rate{kNoIndex};
+
+  /* Position of the point the state's x/y refer to, expressed in base_link
+   * [m]: (0, 0) when the model is referenced to base_link itself, (L, 0) for a
+   * model referenced to the front axle of a vehicle whose base_link sits on the
+   * rear axle. A consumer transforms the model's pose by this offset before any
+   * check defined about base_link, such as a footprint collision test. */
+  double ref_offset_x{0.0};
+  double ref_offset_y{0.0};
+
+  /* Wheelbase L [m] the steering geometry is defined on. 0.0 means undeclared,
+   * which a consumer must reject for a model that carries a steering angle. */
+  double wheelbase{0.0};
+};
+
 /* Problem constraints. */
 struct Constraints
 {

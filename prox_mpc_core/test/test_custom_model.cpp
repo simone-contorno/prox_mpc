@@ -9,6 +9,7 @@
 
 #include <cmath>
 #include <memory>
+#include <stdexcept>
 
 #include <gtest/gtest.h>
 
@@ -260,6 +261,25 @@ TEST(CustomModel, TerminalControlBlockCarriesTheControlWeight)
       EXPECT_NEAR(u(k, j), kGoalU, 1e-3) << "control row " << k << ", column " << j;
     }
   }
+}
+
+// setIneq() validates the bound index against the model's declared state/control
+// dimension where it is known, instead of writing an out-of-range row when the
+// QP is assembled.
+TEST(CustomModel, SetIneqRejectsIndexOutOfRange)
+{
+  DummyLinear model;   // n = 2, m = 2
+  EXPECT_THROW(model.setIneq("x", 5, -1.0, 1.0), std::invalid_argument);
+  EXPECT_THROW(model.setIneq("u", 5, -1.0, 1.0), std::invalid_argument);
+  EXPECT_NO_THROW(model.setIneq("x", 1, -1.0, 1.0));   // in range
+}
+
+// updateIneq() reports a bound it cannot find instead of silently doing nothing.
+TEST(CustomModel, UpdateIneqReportsMissingBound)
+{
+  DummyLinear model;   // declares "u" bounds only, no "x" bound
+  EXPECT_THROW(model.updateIneq("x", 0, -1.0, 1.0), std::invalid_argument);
+  EXPECT_NO_THROW(model.updateIneq("u", 0, -1.5, 1.5));   // existing bound
 }
 
 // Negative compile check: a model that omits an override stays abstract and

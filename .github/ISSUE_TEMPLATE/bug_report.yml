@@ -76,7 +76,7 @@ body:
     id: platform
     attributes:
       label: Platform
-      description: OS, architecture, and hardware (x86-64 dev host, Jetson Orin, ...).
+      description: OS, architecture, and hardware.
       placeholder: Ubuntu 24.04, x86-64
     validations:
       required: true

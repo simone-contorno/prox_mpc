@@ -8,7 +8,9 @@
 // reference values. A divergence beyond the tolerance indicates a change in the
 // obstacle-off solver path.
 
+#include <limits>
 #include <memory>
+#include <stdexcept>
 #include <tuple>
 
 #include <gtest/gtest.h>
@@ -17,10 +19,12 @@
 
 #include <prox_mpc/mpc.hpp>
 #include <prox_mpc/models/bicycle.hpp>
+#include <prox_mpc/models/unicycle.hpp>
 
 using prox_mpc::Bicycle;
 using prox_mpc::MPC;
 using prox_mpc::Model;
+using prox_mpc::Unicycle;
 
 namespace
 {
@@ -216,4 +220,96 @@ TEST(MoveBlocking, NcLessThanNpSolvesAndAdvances)
   EXPECT_GT(u(0, 0), 0.0);           // accelerates forward toward the goal
   EXPECT_GT(x(20, 0), x(0, 0));      // the predicted trajectory advances in +x
   EXPECT_TRUE(x.allFinite());
+}
+
+// Nc == 1 exercises the warm-start control shift's guarded branch (there is no
+// previous control row to shift into). This does not prove memory safety --
+// EIGEN_NO_DEBUG hides an out-of-range Eigen read rather than crashing on it --
+// only that the guarded path solves repeatedly without throwing and stays finite.
+TEST(MoveBlocking, NcEqualsOneWarmStartDoesNotCrash)
+{
+  auto model = std::make_shared<Bicycle>();
+  const size_t n = model->getN();
+  const size_t m = model->getM();
+
+  VectorXd q_diag = VectorXd::Constant(n, 1.0);
+  q_diag(0) = 10.0;
+  q_diag(1) = 10.0;
+  MatrixXd Q = q_diag.asDiagonal();
+
+  auto mpc = std::make_shared<MPC>();
+  mpc->setNp(20);
+  mpc->setNc(1);   // Nc == 1: no previous control row to shift into
+  mpc->setdt(0.1);
+  mpc->setQ(Q);
+  mpc->setS(2.0 * Q);
+  mpc->setR(0.1 * MatrixXd::Identity(m, m));
+  mpc->setW(MatrixXd::Constant(1, 1, 100.0));
+  mpc->init(model);
+
+  MatrixXd goal_x = MatrixXd::Zero(21, n);
+  for (size_t k = 0; k <= 20; k++) {
+    goal_x(k, 0) = 5.0;
+  }
+  MatrixXd goal_u = MatrixXd::Zero(1, m);
+  goal_u(0, 0) = 1.0;
+  mpc->setGoalX(goal_x);
+  mpc->setGoalU(goal_u);
+  mpc->setPose(VectorXd::Zero(n));
+
+  // Two solves: the second exercises the warm-start shift with Nc == 1.
+  EXPECT_NO_THROW(mpc->solve());
+  MatrixXd x;
+  MatrixXd u;
+  EXPECT_NO_THROW((std::tie(x, u) = mpc->solve()));
+  EXPECT_TRUE(x.allFinite());
+  EXPECT_TRUE(u.allFinite());
+}
+
+// Nc > Np is rejected whichever setter runs second. Either horizon may still
+// be at its unset sentinel (0) when the first one runs, so that call defers the
+// comparison rather than accepting the pair; the second call makes it.
+TEST(MoveBlocking, HorizonBoundRejectedByEitherSetter)
+{
+  MPC mpc;
+  mpc.setNp(5);
+  EXPECT_THROW(mpc.setNc(6), std::invalid_argument);
+  EXPECT_NO_THROW(mpc.setNc(5));
+  EXPECT_NO_THROW(mpc.setNc(1));
+
+  MPC mpc2;
+  EXPECT_NO_THROW(mpc2.setNc(10));   // Np unknown yet: deferred
+  EXPECT_THROW(mpc2.setNp(5), std::invalid_argument);
+  EXPECT_NO_THROW(mpc2.setNp(20));
+}
+
+// The pair is checked once more at init(), which is what closes the setters'
+// remaining gap: MPC derives publicly from ProbDim, so Np and Nc are public
+// data members a caller can assign past the setters entirely. init() is the
+// last point that sizes anything from them.
+TEST(MoveBlocking, InitRejectsNcGreaterThanNp)
+{
+  MPC mpc;
+  mpc.setNp(10);
+  mpc.setNc(10);
+  mpc.setdt(0.1);
+  mpc.Nc = 20;   // straight past setNc, which would have rejected it
+  EXPECT_THROW(mpc.init(std::make_shared<Unicycle>()), std::invalid_argument);
+
+  MPC ok;
+  ok.setNp(10);
+  ok.setNc(10);
+  ok.setdt(0.1);
+  EXPECT_NO_THROW(ok.init(std::make_shared<Unicycle>()));
+}
+
+// setdt() must reject a non-finite step in addition to a non-positive one: a
+// bare "dt <= 0.0" comparison is false for NaN, silently accepting it.
+TEST(MoveBlocking, SetdtRejectsNonFiniteAndNonPositive)
+{
+  MPC mpc;
+  EXPECT_THROW(mpc.setdt(0.0), std::invalid_argument);
+  EXPECT_THROW(mpc.setdt(-0.1), std::invalid_argument);
+  EXPECT_THROW(mpc.setdt(std::numeric_limits<double>::quiet_NaN()), std::invalid_argument);
+  EXPECT_NO_THROW(mpc.setdt(0.1));
 }

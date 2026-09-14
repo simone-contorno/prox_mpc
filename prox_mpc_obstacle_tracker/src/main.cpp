@@ -23,16 +23,18 @@
 namespace
 {
 
-/// Lock-free stop flag set by the signal handler; a second signal force-quits.
+/// Lock-free stop flag set by the signal handler; repeat signals are idempotent.
 std::atomic<bool> g_stop{false};
 static_assert(
   std::atomic<bool>::is_always_lock_free, "stop flag must be lock-free for async-signal safety");
 
+// One shutdown reaches this process through two independent paths: a process-group
+// signal hits the node directly, and the launch parent then forwards its own signal
+// to each child. Treating the second as an impatient-user force-quit would skip the
+// finalize ladder on an ordinary shutdown, so repeats only re-assert the flag; the
+// supervisor's SIGKILL escalation remains the hard backstop for a genuine hang.
 void on_signal(int /*sig*/)
 {
-  if (g_stop.load(std::memory_order_relaxed)) {
-    std::_Exit(EXIT_FAILURE);  // second signal: force-quit, skip teardown
-  }
   g_stop.store(true, std::memory_order_relaxed);
 }
 

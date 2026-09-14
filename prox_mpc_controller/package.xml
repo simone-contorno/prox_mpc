@@ -2,7 +2,7 @@
 <?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
 <package format="3">
   <name>prox_mpc_controller</name>
-  <version>1.0.0</version>
+  <version>2.0.0</version>
   <description>Nav2 nav2_core::Controller plugin built on the ProxMPC core: it
   builds the reference from the global plan, reduces the local costmap (and,
   optionally, tracked dynamic obstacles) to the solver's constraints, solves one
@@ -27,6 +27,7 @@
   <depend version_gte="0.6.5">proxsuite</depend>
   <depend>rclcpp</depend>
   <depend>rclcpp_lifecycle</depend>
+  <depend>rcpputils</depend>
   <depend>tf2</depend>
   <depend>tf2_ros</depend>
   <depend>visualization_msgs</depend>
@@ -35,6 +36,7 @@
   <test_depend>ament_lint_auto</test_depend>
   <test_depend>ament_lint_common</test_depend>
   <test_depend>prox_mpc_test_models</test_depend>
+  <test_depend>rcutils</test_depend>
 
   <export>
     <build_type>ament_cmake</build_type>

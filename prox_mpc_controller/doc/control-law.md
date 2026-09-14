@@ -54,10 +54,23 @@ turns the short way rather than spinning the long way around.
 
 ### Bicycle steering reference
 
-For a model with a steering state ($n > 3$) the reference steering is
-pre-positioned to the per-node path curvature $\kappa_k = d\theta/ds$,
-$\delta_k^\text{ref} = \arctan(L\,\kappa_k)$, using the configured wheelbase $L$.
-A model without a steering state (the unicycle, $n = 3$) keeps the go-straight
+For a model that declares a steering state through `getPlanarMapping()`, the
+reference steering is pre-positioned from the per-node path curvature
+$\kappa_k = d\theta/ds$ and the model's declared reference-point offset $a$
+from `base_link` along the body x axis (`0` for `BicycleRearAxle`, the
+wheelbase $L$ for `BicycleFrontAxle`):
+
+$$
+\delta_k^\text{ref} = \arctan(L\,z_k), \qquad
+z_k = \frac{\kappa_k}{\sqrt{1 - (a\,\kappa_k)^2}}.
+$$
+
+At $a = 0$ (the rear axle) this reduces to the textbook rear-axle inverse
+$\delta_k^\text{ref} = \arctan(L\,\kappa_k)$; at $a = L$ (the front axle) it is
+algebraically the front-axle inverse $\delta_k^\text{ref} = \arcsin(L\,\kappa_k)$,
+expressed as an `arctan` of the offset-adjusted $z_k$ so both plugins share one
+formula.
+A model with no steering state (the unicycle, $n = 3$) keeps the go-straight
 default.
 The control reference `goal_u` carries $v_\text{ref}$ in the speed channel and
 zero elsewhere.
@@ -177,19 +190,43 @@ The controller owns the reaction so the policy stays decoupled from the engine.
 
 On a non-converged cycle the controller does **not** command a hard zero, which
 would be an instantaneous, dynamically infeasible stop.
-Instead it decelerates toward zero at the robot's deceleration limit, read as the
-magnitude of the model's control-rate (`du`) bounds for the speed and yaw
-channels, $a_\text{dec} = \lvert a_\text{min} \rvert$, so over one step
+Instead it ramps the model's own controls toward zero under the model's own
+control-rate (`du`) bounds, respecting each bound's sign asymmetry, and maps
+the ramped controls through the model's `toTwist()` - the same seam the
+accepted command path uses, rather than writing `angular.z` directly.
+This matters because the bicycle's second control is a steering rate, not a
+body yaw rate: `du[1]` bounds `delta_dot` (a steering acceleration, not a yaw
+acceleration), so only a control-space ramp maps correctly for that model,
+while the unicycle's second control already *is* a body yaw rate and the two
+forms coincide for it.
 
-$$
-v_\text{cmd} = \max\!\big(0,\; v_\text{prev} - a_\text{dec}\, \Delta t\big),
-$$
+Each control channel ramps down from the velocity the `controller_server`
+measured for this cycle (RPP/MPPI style), so the brake tracks the robot's
+actual motion rather than a stale command.
+The measurement is a `base_link` twist and the channels are model controls, so
+it is carried across by the model's own `fromTwist()` inverse rather than
+written in directly: for a front-axle-referenced model the speed control is a
+front-wheel speed, which only the linear and angular components together
+determine.
+That inverse states, per channel, what a body twist determines, and the
+controller seeds exactly the channels it reports as determined; it names no
+channel of its own.
+A channel reported undetermined - a steering rate, which a twist shows the
+effect of but not the value of - keeps its last commanded value, and so does one
+whose measurement is itself non-finite (NaN or $\pm\infty$), so a broken
+velocity estimate decelerates the last command instead of entering the ramp and
+an infinite measured velocity can never reach the published command.
+Each step advances by `brake_period_s` when the operator set a positive value,
+otherwise by the measured inter-cycle period, clamped between the configured
+`dt` and twice `dt` so a server running slower than `dt` still brakes at the
+model's declared rate while a stale measurement cannot collapse the ramp into
+one step.
+A model that declares a steering state has its belief decayed toward zero at
+its own declared steering-rate bound on every rejected cycle, rather than
+frozen at the last accepted value, so the next solve does not linearize about
+an angle a downstream twist-to-steering converter has already moved the wheels
+away from under the braking command.
 
-and the yaw rate is ramped toward zero the same way (respecting its sign).
-$v_\text{prev}$ is the velocity the `controller_server` measured for this cycle,
-not the previous command, so the ramp starts from the robot's actual speed; a
-non-finite measurement (NaN or $\pm\infty$) yields exactly zero, so an infinite
-measured velocity can never be ramped into the published command.
 Because a zero deceleration limit would leave the ramp stuck at the current
 velocity forever, a model that declares no `du` bound for either channel (or no
 `u[0]` bound for the speed cap) fails `configure` with a
@@ -209,11 +246,23 @@ solver-failure budget, though a veto persisting beyond that same budget raises
 The engine's per-node half-plane is the $\gamma = 1$ case of a discrete-time
 control-barrier-function constraint $h(x_{k+1}) \ge (1 - \gamma)\, h(x_k)$, which
 couples consecutive nodes for smoother avoidance.
-The coupling requires the **same** obstacle at nodes $k$ and $k+1$, which the
-predictive fill provides by binding each tracked obstacle to a fixed slot across
-the horizon.
-`cbf_gamma` exposes $\gamma$: 1.0 is the pointwise constraint, and a value below 1
-lets the safety margin decay gradually, which makes a dense obstacle field viable
-where the pointwise term would stall the robot (see the verified predictive
-configuration in
-[../../prox_mpc_demo/doc/nav2-simulation.md](../../prox_mpc_demo/doc/nav2-simulation.md)).
+The coupling requires the **same** obstacle at nodes $k$ and $k+1$. Both the
+predictive fill and the costmap (static) fill provide this: the predictive
+fill binds each tracked obstacle to a fixed slot across the horizon, and the
+costmap fill now binds each scanned object to a fixed slot across every node
+it appears at, rather than re-selecting nearest candidates independently per
+node (see [obstacle avoidance](../../prox_mpc_core/doc/obstacle-avoidance.md)
+for the core-side guard this pairs with).
+That stability holds only *within* one control cycle; nothing yet holds a slot
+to the same object *across* cycles, so a `cbf_gamma` below 1 can still couple
+different physical objects at a cycle boundary when two candidates are close
+in rank.
+
+`cbf_gamma` exposes $\gamma$: 1.0 is the pointwise constraint, and a value
+below 1 lets the safety margin decay gradually instead of binding at every
+node. The coupling is enforced through the slack penalty like every other
+obstacle row, not as a hard barrier, so whether a given `cbf_gamma` measurably
+changes a trajectory at the shipped `w_weight` has not yet been benchmarked;
+treat it as a tunable option protected by the core-side guard and the
+within-cycle slot stability above, not as a settled recommendation for dense
+fields.

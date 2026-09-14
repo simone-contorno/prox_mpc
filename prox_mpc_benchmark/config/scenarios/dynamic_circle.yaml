@@ -13,5 +13,9 @@ scenario:
     # center / radius / speed (sign = ccw/cw). Orbits around (1, 0) crossing the path.
     - {type: dynamic, motion: circle, center: {x: 1.0, y: 0.0}, radius: 0.8, speed: 0.5, clearance: 0.45}
   models: [unicycle, bicycle]
-  controllers: [proxmpc, dwb, mppi, regulated_pure_pursuit, graceful, vector_pursuit]   # cross-controller set (b2)
+  controllers: [proxmpc_pred, proxmpc, dwb, mppi, regulated_pure_pursuit, graceful, vector_pursuit]   # cross-controller set (b2)
   run: {repeats: 5, timeout_s: 60, seed: 0}
+  # Recorded clip length (record_scenarios.py). The orbit takes the robot about
+  # 16 s to get round, longer than the 20 s default leaves once a controller
+  # yields to it, so this cell's clip runs longer.
+  video: {duration_s: 25.0}

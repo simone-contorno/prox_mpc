@@ -1,0 +1,20 @@
+# LeakSanitizer suppressions for the sanitizer CI job. Read through
+# LSAN_OPTIONS, not ASAN_OPTIONS: ASan's own suppression parser rejects the
+# leak: type and aborts the process.
+#
+# rosidl's C++ type support registers its message descriptors in static storage
+# that is never torn down, and bringing up any rclcpp node reaches it through
+# rcl_node_init. The allocations are one-time and process-lifetime rather than
+# per-node: the reported total is byte-identical in a 24-test binary and an
+# 87-test one, and no prox_mpc frame appears in any of the leak stacks. The
+# controller fixtures already call on_cleanup() and then reset(), so there is no
+# teardown to add.
+#
+# Scoped deliberately to those two frames: detect_leaks stays on (see
+# ASAN_OPTIONS in .github/workflows/ci.yaml), so a leak in this repository's own
+# allocations still fails the job.
+#
+# print_suppressions=1 reports the hit count per entry, which is how a stale
+# entry here is told apart from one that is still doing work.
+leak:librosidl_typesupport_cpp
+leak:rcl_node_init

@@ -29,7 +29,9 @@
 #include <array>
 #include <chrono>
 #include <cmath>
+#include <cstdarg>
 #include <cstddef>
+#include <functional>
 #include <limits>
 #include <memory>
 #include <mutex>
@@ -51,6 +53,7 @@
 #include <nav2_costmap_2d/costmap_2d_ros.hpp>
 #include <rclcpp/rclcpp.hpp>
 #include <rclcpp_lifecycle/lifecycle_node.hpp>
+#include <rcutils/logging.h>
 #include <tf2_ros/buffer.h>
 
 #include <prox_mpc_msgs/msg/obstacle_array.hpp>
@@ -65,6 +68,10 @@ constexpr double kModelDecel = 0.5;        // bundled-model du bound [m/s^2, rad
 constexpr double kResolution = 0.05;       // test costmap resolution [m]
 constexpr unsigned int kGridCells = 200u;  // 10 m x 10 m grid
 constexpr double kGridOrigin = -5.0;       // centered grid origin [m]
+constexpr double kBicycleWheelbase = 1.6;  // bundled bicycle wheelbase [m]
+// The bundled bicycles are not the default model, so a test that needs one names it.
+constexpr const char * kBicyclePlugin = "prox_mpc_core/BicycleFrontAxle";
+constexpr double kSteerRateBound = 1.0;    // bundled Bicycle u[1] bound [rad/s], bicycle.hpp:41
 
 // Exposes the protected helper and runtime state so the fail-safe and reduction
 // branches can be driven and the safe command asserted (white-box, no production
@@ -88,6 +95,7 @@ public:
   double & lastCmdV() {return last_cmd_v_;}
   double & lastCmdW() {return last_cmd_w_;}
   double & steeringState() {return steering_state_;}
+  VectorXd & lastCmdU() {return last_cmd_u_;}
   std::size_t & planIndex() {return plan_index_;}
   bool cancelling() const {return cancelling_;}
   double vMax() const {return v_max_;}
@@ -95,6 +103,15 @@ public:
   double desiredLinearVel() const {return desired_linear_vel_;}
   std::size_t nDim() const {return n_;}
   std::size_t maxObstacles() const {return static_cast<std::size_t>(max_obstacles_);}
+  int maxSolverFailures() const {return max_solver_failures_;}
+  double safetyMargin() const {return safety_margin_;}
+  double robotRadius() const {return robot_radius_;}
+  double cbfGamma() const {return cbf_gamma_;}
+  double obstacleClusterRadius() const {return obstacle_cluster_radius_;}
+  double obstacleTimeout() const {return obstacle_timeout_;}
+  double dynamicSpeedThreshold() const {return dynamic_speed_threshold_;}
+  double predictionUncertaintyGrowth() const {return prediction_uncertainty_growth_;}
+  double maxDynamicObstacleRadius() const {return max_dynamic_obstacle_radius_;}
   std::shared_ptr<prox_mpc::MPC> mpc() const {return mpc_;}
   std::shared_ptr<prox_mpc::Model> model() const {return model_;}
 };
@@ -113,6 +130,46 @@ public:
     setM(2);
     setIneq("u", 0, -3.0, 3.0);
     setIneq("u", 1, -1.0, 1.0);
+  }
+  void updatec(double, VectorXd) override {}
+  void updateA(double) override {}
+  void updateB() override {}
+};
+
+// A conforming model with exactly one control: a speed channel and nothing else.
+// The planar contract asks for one speed control and no more, so this must be
+// accepted rather than rejected for lacking a second control's rate bound.
+class SingleControlModel : public prox_mpc::Model
+{
+public:
+  SingleControlModel()
+  {
+    setName("single_control");
+    setN(3);
+    setM(1);
+    setIneq("u", 0, -3.0, 3.0);
+    setIneq("du", 0, -0.5, 0.5);
+  }
+  void updatec(double, VectorXd) override {}
+  void updateA(double) override {}
+  void updateB() override {}
+};
+
+// A model that declares the speed bound but pins it shut. required_bound() only
+// rejects an absent entry, so this one is present and useless: v_max would be
+// zero and the cruise speed clamped to it.
+class ZeroSpeedBoundModel : public prox_mpc::Model
+{
+public:
+  ZeroSpeedBoundModel()
+  {
+    setName("zero_speed_bound");
+    setN(3);
+    setM(2);
+    setIneq("u", 0, 0.0, 0.0);
+    setIneq("u", 1, -1.0, 1.0);
+    setIneq("du", 0, -0.5, 0.5);
+    setIneq("du", 1, -0.5, 0.5);
   }
   void updatec(double, VectorXd) override {}
   void updateA(double) override {}
@@ -238,8 +295,14 @@ void addPredictedSamples(
 class StubGoalChecker : public nav2_core::GoalChecker
 {
 public:
+  // Isotropic tolerance: the shape every goal checker Nav2 ships actually
+  // produces (SimpleGoalChecker writes the same scalar into both fields).
   StubGoalChecker(double xy_tol, bool valid)
-  : xy_tol_(xy_tol), valid_(valid) {}
+  : StubGoalChecker(xy_tol, xy_tol, valid) {}
+  // Anisotropic tolerance, for a custom goal checker whose x and y tolerances
+  // differ; the pair equal tests above can never exercise this shape.
+  StubGoalChecker(double x_tol, double y_tol, bool valid)
+  : x_tol_(x_tol), y_tol_(y_tol), valid_(valid) {}
   void initialize(
     const rclcpp_lifecycle::LifecycleNode::WeakPtr &, const std::string &,
     const std::shared_ptr<nav2_costmap_2d::Costmap2DROS>) override {}
@@ -250,15 +313,53 @@ public:
   bool getTolerances(
     geometry_msgs::msg::Pose & pose_tolerance, geometry_msgs::msg::Twist &) override
   {
-    pose_tolerance.position.x = xy_tol_;
-    pose_tolerance.position.y = xy_tol_;
+    pose_tolerance.position.x = x_tol_;
+    pose_tolerance.position.y = y_tol_;
     return valid_;
   }
 
 private:
-  double xy_tol_;
+  double x_tol_;
+  double y_tol_;
   bool valid_;
 };
+
+// Installs a custom rcutils output handler for its lifetime and records every
+// WARN-or-worse message's fully formatted text, so a test can assert on a log
+// message's content directly instead of only inferring that some warning
+// fired. Restores the previous handler on destruction (RAII), so a test that
+// constructs one on the stack cannot leak it into a later test.
+class LogCapture
+{
+public:
+  LogCapture()
+  : previous_(rcutils_logging_get_output_handler())
+  {
+    messages_.clear();
+    rcutils_logging_set_output_handler(&LogCapture::handle);
+  }
+  ~LogCapture() {rcutils_logging_set_output_handler(previous_);}
+
+  static const std::vector<std::string> & messages() {return messages_;}
+
+private:
+  static void handle(
+    const rcutils_log_location_t *, int severity, const char *,
+    rcutils_time_point_value_t, const char * format, va_list * args)
+  {
+    if (severity < RCUTILS_LOG_SEVERITY_WARN) {return;}
+    char buf[512];
+    va_list copy;
+    va_copy(copy, *args);
+    vsnprintf(buf, sizeof(buf), format, copy);
+    va_end(copy);
+    messages_.emplace_back(buf);
+  }
+
+  rcutils_logging_output_handler_t previous_;
+  static std::vector<std::string> messages_;
+};
+std::vector<std::string> LogCapture::messages_;
 }  // namespace
 
 class ProxMpcControllerTest : public ::testing::Test
@@ -367,11 +468,12 @@ protected:
 
 // --- configure() -----------------------------------------------------------
 
-// configure() loads the default Bicycle model, sizes the MPC, and reads the
-// model's speed bound from its declared constraints.
+// configure() loads the named model, sizes the MPC, and reads the model's speed
+// bound from its declared constraints.
 TEST_F(ProxMpcControllerTest, ConfigureLoadsModelAndSizesMpc)
 {
-  auto c = makeConfigured();
+  auto c = makeConfigured(
+    {rclcpp::Parameter("FollowPath.model_plugin", std::string(kBicyclePlugin))});
   ASSERT_NE(c->model(), nullptr);
   ASSERT_NE(c->mpc(), nullptr);
   EXPECT_EQ(c->nDim(), 4u);                  // bicycle state [x, y, theta, delta]
@@ -402,6 +504,105 @@ TEST_F(ProxMpcControllerTest, ConfigureThrowsOnUnknownModelPlugin)
   EXPECT_THROW(
     c->configure(node_, "FollowPath", tf_, costmap_ros_),
     nav2_core::ControllerException);
+}
+
+// nc > np is well-formed dead weight in the core (surplus controls drive no
+// state transition) but is rejected as a configuration error at the plugin
+// boundary, matching the existing np < 1 / nc < 1 / dt <= 0 fatal checks.
+TEST_F(ProxMpcControllerTest, ConfigureThrowsWhenNcExceedsNp)
+{
+  auto c = makeUnconfigured(
+    {rclcpp::Parameter("FollowPath.np", 5), rclcpp::Parameter("FollowPath.nc", 10)});
+  EXPECT_THROW(
+    c->configure(node_, "FollowPath", tf_, costmap_ros_),
+    nav2_core::ControllerException);
+}
+
+// dt <= 0.0 is false for NaN, so the structural horizon-sizing gate needs an
+// explicit finiteness check to catch it.
+TEST_F(ProxMpcControllerTest, ConfigureThrowsOnNonFiniteDt)
+{
+  auto c = makeUnconfigured(
+    {rclcpp::Parameter("FollowPath.dt", std::numeric_limits<double>::quiet_NaN())});
+  EXPECT_THROW(
+    c->configure(node_, "FollowPath", tf_, costmap_ros_),
+    nav2_core::ControllerException);
+}
+
+// A non-finite value at a clamped parameter site (bare "<"/">" comparisons pass
+// NaN through every range check) falls back to the parameter's declared
+// default, for every parameter configure() guards this way. One row per
+// clamp_low/clamp_range call site, plus desired_linear_vel, which is guarded
+// in place because its ceiling is the model's own declared speed bound rather
+// than a literal; each row reads back the result through whichever accessor
+// observes where that configure()-local variable ends up (a stored member, or
+// the MPC weight matrix it seeds).
+TEST_F(ProxMpcControllerTest, ConfigureUsesDefaultForNonFiniteClampedParameter)
+{
+  const double nan = std::numeric_limits<double>::quiet_NaN();
+  using Read = std::function<double (const std::shared_ptr<TestableProxMpcController> &)>;
+  struct Row
+  {
+    const char * param;
+    double expected_default;
+    Read read;
+  };
+  const Row rows[] = {
+    {"q_pos", 10.0, [](const auto & c) {return c->mpc()->getQ()(0, 0);}},
+    {"q_theta", 1.0, [](const auto & c) {return c->mpc()->getQ()(2, 2);}},
+    {"s_factor", 2.0,
+      [](const auto & c) {return c->mpc()->getS()(0, 0) / c->mpc()->getQ()(0, 0);}},
+    {"r_weight", 0.1, [](const auto & c) {return c->mpc()->getR()(0, 0);}},
+    {"w_weight", 1000.0, [](const auto & c) {return c->mpc()->getW()(0, 0);}},
+    {"safety_margin", 0.1, [](const auto & c) {return c->safetyMargin();}},
+    {"robot_radius", 0.5, [](const auto & c) {return c->robotRadius();}},
+    {"cbf_gamma", 1.0, [](const auto & c) {return c->cbfGamma();}},
+    {"obstacle_cluster_radius", 0.3, [](const auto & c) {return c->obstacleClusterRadius();}},
+    {"obstacle_timeout", 0.5, [](const auto & c) {return c->obstacleTimeout();}},
+    {"dynamic_speed_threshold", 0.1, [](const auto & c) {return c->dynamicSpeedThreshold();}},
+    {"prediction_uncertainty_growth", 0.0,
+      [](const auto & c) {return c->predictionUncertaintyGrowth();}},
+    {"max_dynamic_obstacle_radius", 0.0,
+      [](const auto & c) {return c->maxDynamicObstacleRadius();}},
+    {"desired_linear_vel", 1.0, [](const auto & c) {return c->desiredLinearVel();}},
+  };
+  for (const auto & row : rows) {
+    SCOPED_TRACE(row.param);
+    auto c = makeConfigured({rclcpp::Parameter(std::string("FollowPath.") + row.param, nan)});
+    ASSERT_NE(c->mpc(), nullptr);
+    EXPECT_NEAR(row.read(c), row.expected_default, kTol);
+  }
+}
+
+// max_solve_time is a configure()-local wall-clock budget forwarded into the
+// core's MPC, which exposes no getter for it, so its default fallback is not
+// directly observable from the plugin's public surface; the check available
+// here is that a non-finite value does not throw configure() and does not
+// propagate into a non-finite command. (max_solve_time's clamp floor and
+// declared default are both 0.0, so even a getter could not distinguish "fell
+// back to the default" from "clamped to the floor" for this one parameter --
+// both paths return the same number.)
+TEST_F(ProxMpcControllerTest, ConfigureAcceptsNonFiniteMaxSolveTime)
+{
+  std::shared_ptr<TestableProxMpcController> c;
+  EXPECT_NO_THROW(
+    c = makeConfigured(
+      {rclcpp::Parameter("FollowPath.max_solve_time", std::numeric_limits<double>::quiet_NaN())}));
+  ASSERT_NE(c, nullptr);
+  c->activate();
+  c->setPlan(makeStraightPlan(31, 0.2));
+  const auto cmd = c->computeVelocityCommands(
+    makePose(0.0, 0.0, 0.0), geometry_msgs::msg::Twist(), nullptr);
+  EXPECT_TRUE(std::isfinite(cmd.twist.linear.x));
+  EXPECT_TRUE(std::isfinite(cmd.twist.angular.z));
+}
+
+// A negative max_solver_failures is clamped to 0, matching the max_obstacles
+// clamp shape, rather than left as an arbitrary negative value.
+TEST_F(ProxMpcControllerTest, ConfigureClampsNegativeMaxSolverFailuresToZero)
+{
+  auto c = makeConfigured({rclcpp::Parameter("FollowPath.max_solver_failures", -5)});
+  EXPECT_EQ(c->maxSolverFailures(), 0);
 }
 
 // Every log_level keyword (and an unrecognized value) is accepted at configure.
@@ -479,6 +680,82 @@ TEST_F(ProxMpcControllerTest, MissingModelBoundIsFatal)
   // model's own bounds.
   auto configured = makeConfigured();
   EXPECT_NEAR(configured->vMax(), kModelVMax, kTol);
+}
+
+// A declared speed bound of zero is as fatal as an absent one, and for the same
+// reason: the cruise speed is clamped to it and the robot never moves. The
+// message names the model and the bound it read.
+TEST_F(ProxMpcControllerTest, ZeroSpeedBoundIsFatal)
+{
+  auto c = makeUnconfigured();
+  ZeroSpeedBoundModel zero;
+  try {
+    c->readModelBounds(zero, "test/ZeroSpeedBound");
+    FAIL() << "a model whose speed bound is zero must not configure";
+  } catch (const nav2_core::ControllerException & ex) {
+    const std::string what(ex.what());
+    EXPECT_NE(what.find("'u'"), std::string::npos) << what;
+    EXPECT_NE(what.find("test/ZeroSpeedBound"), std::string::npos) << what;
+  }
+}
+
+// A model with one control declares no second control-rate bound, and must not
+// be rejected for it: the second body-twist channel only exists to be ramped
+// when there is a control to source a rate from. Rejecting it would also have
+// named an "angular control" the model never declared.
+TEST_F(ProxMpcControllerTest, SingleControlModelReadsBounds)
+{
+  auto c = makeUnconfigured();
+  SingleControlModel one;
+  EXPECT_NO_THROW(c->readModelBounds(one, "test/SingleControl"));
+  EXPECT_NEAR(c->vMax(), 3.0, kTol);
+}
+
+// robot_radius below the costmap footprint's circumscribed radius is
+// warn-and-continue rather than fatal: configure() must not throw, and
+// robot_radius must not be silently overwritten to match the
+// footprint -- an operator running a deliberately tighter disc keeps it. The
+// fixture's default square footprint (half-extent 0.5 m, padded to 0.51 m)
+// and default robot_radius (0.5 m) already trigger this case; the warning
+// text is asserted directly, naming both values, not merely inferred.
+TEST_F(ProxMpcControllerTest, RobotRadiusWarnsWhenBelowFootprintCircumscribedRadius)
+{
+  LogCapture log;
+  std::shared_ptr<TestableProxMpcController> c;
+  ASSERT_NO_THROW(c = makeConfigured());
+  ASSERT_NE(c, nullptr);
+  EXPECT_NEAR(c->robotRadius(), 0.5, kTol);   // not overwritten to the footprint's radius
+
+  bool found = false;
+  for (const auto & msg : LogCapture::messages()) {
+    if (msg.find("robot_radius 0.500 m") != std::string::npos &&
+      msg.find("circumscribed radius 0.7212 m") != std::string::npos &&
+      // Rounded up to the millimetre it is printed at, so setting exactly what
+      // the message asks for clears the check instead of tripping it again.
+      msg.find("at least 0.722 m") != std::string::npos)
+    {
+      found = true;
+      break;
+    }
+  }
+  EXPECT_TRUE(found) << "expected a robot_radius/circumscribed-radius warning naming both values";
+}
+
+// A footprint within robot_radius configures silently: no warning is emitted,
+// and the parameter is (still) not touched.
+TEST_F(ProxMpcControllerTest, RobotRadiusConfiguresSilentlyWhenWithinFootprint)
+{
+  costmap_ros_->setRobotFootprint(makeSquareFootprint(0.1));   // circumscribed ~0.156 m
+
+  LogCapture log;
+  std::shared_ptr<TestableProxMpcController> c;
+  ASSERT_NO_THROW(c = makeConfigured({rclcpp::Parameter("FollowPath.robot_radius", 0.5)}));
+  ASSERT_NE(c, nullptr);
+  EXPECT_NEAR(c->robotRadius(), 0.5, kTol);
+
+  for (const auto & msg : LogCapture::messages()) {
+    EXPECT_EQ(msg.find("robot_radius"), std::string::npos) << msg;
+  }
 }
 
 // --- lifecycle: activate / deactivate / cleanup ----------------------------
@@ -639,11 +916,14 @@ TEST_F(ProxMpcControllerTest, ComputeTracksAcrossHeadingWrap)
 }
 
 // On a curved plan the bicycle steering reference is pre-positioned to the path
-// curvature (delta_ref = atan(L*kappa) != 0); on a straight plan it stays zero.
-// Read back from the state reference the controller hands the MPC.
+// curvature; on a straight plan it stays zero. Read back from the state
+// reference the controller hands the MPC. The front-axle model's inverse is
+// asin(L*kappa), the rear-axle one's is atan(L*kappa); both are far above the
+// threshold asserted here.
 TEST_F(ProxMpcControllerTest, CurvatureSetsBicycleSteeringReference)
 {
-  auto c = makeConfigured();   // default Bicycle (n = 4, L = 1.6)
+  auto c = makeConfigured(
+    {rclcpp::Parameter("FollowPath.model_plugin", std::string(kBicyclePlugin))});
   c->activate();
   ASSERT_EQ(c->nDim(), 4u);
 
@@ -663,7 +943,7 @@ TEST_F(ProxMpcControllerTest, CurvatureSetsBicycleSteeringReference)
   for (Eigen::Index k = 0; k < gx_arc.rows(); ++k) {
     max_delta_arc = std::max(max_delta_arc, std::abs(gx_arc(k, 3)));
   }
-  EXPECT_GT(max_delta_arc, 0.2);                   // atan(L*kappa) ~ atan(0.8) = 0.675 rad
+  EXPECT_GT(max_delta_arc, 0.2);                   // asin(L*kappa) = asin(0.8) = 0.927 rad
 }
 
 // The unicycle (no steering state, n = 3) keeps the go-straight default even on
@@ -697,6 +977,20 @@ TEST_F(ProxMpcControllerTest, CurvatureGainReducesCruiseOnCurvedPlan)
 
   EXPECT_GT(vref_gain0, 0.0);
   EXPECT_LT(vref_gain, vref_gain0);                // curvature taper slows the cruise
+}
+
+// The curvature estimator seeds its first heading delta from the plan's own
+// sampled tangent, not the robot's yaw: on a straight plan (zero true
+// curvature) a robot heading that differs from the path tangent must not by
+// itself taper the cruise speed.
+TEST_F(ProxMpcControllerTest, CurvatureGainIgnoresInitialHeadingMismatchOnStraightPlan)
+{
+  auto c = makeConfigured({rclcpp::Parameter("FollowPath.curvature_gain", 2.0)});
+  c->activate();
+  c->setPlan(makeStraightPlan(31, 0.2));           // straight plan along +x
+  c->computeVelocityCommands(
+    makePose(0.0, 0.0, 1.0), geometry_msgs::msg::Twist(), nullptr);   // heading far off the path
+  EXPECT_NEAR(c->mpc()->getGoalU()(0, 0), c->desiredLinearVel(), 1e-6);
 }
 
 // goal_checker xy tolerance eases the cruise reference once the robot is inside
@@ -739,6 +1033,69 @@ TEST_F(ProxMpcControllerTest, GoalCheckerToleranceInertOutsideBand)
   StubGoalChecker checker(0.25, true);
   c->computeVelocityCommands(pose, geometry_msgs::msg::Twist(), &checker);
   EXPECT_NEAR(c->mpc()->getGoalU()(0, 0), vref_base, kTol);
+}
+
+// The taper radius is the tolerance itself (std::min of the two axes), not the
+// diagonal upstream's hypot(x, y) would read: SimpleGoalChecker writes the same
+// scalar into both fields, so hypot(T, T) = sqrt(2) * T would start the taper
+// about 41% too far from the goal. StubGoalChecker(t, true) is isotropic
+// (equal x and y), so this pins the sqrt(2) defect specifically, which an
+// equal-tolerance stub run at only one remaining distance cannot: one point
+// where the true tolerance is already satisfied (no easing) but hypot's
+// inflated radius would still ease, and one where both ease, but by
+// numerically different factors. A short horizon (np * dt) keeps the
+// horizon-based cruise taper from binding at these near-goal poses, isolating
+// the goal-checker term.
+TEST_F(ProxMpcControllerTest, GoalCheckerToleranceIsRadialNotHypotExpanded)
+{
+  auto c = makeConfigured(
+  {
+    rclcpp::Parameter("FollowPath.np", 2),
+    rclcpp::Parameter("FollowPath.nc", 2),
+    rclcpp::Parameter("FollowPath.dt", 0.01),
+  });
+  c->activate();
+  c->setPlan(makeStraightPlan(6, 0.2));            // 1 m plan
+
+  const double t = 0.1;
+  StubGoalChecker checker(t, true);
+
+  // remaining = 0.12 m: inside hypot(t, t) = 0.1414 m (would still ease under
+  // the old reading) but outside the true radial tolerance t = 0.1 m.
+  c->computeVelocityCommands(
+    makePose(0.88, 0.0, 0.0), geometry_msgs::msg::Twist(), &checker);
+  EXPECT_NEAR(c->mpc()->getGoalU()(0, 0), 1.0, kTol);   // desired_linear_vel, unreduced
+
+  // remaining = 0.05 m: inside t, so both readings ease, but the radial factor
+  // (0.05 / 0.1 = 0.5) differs from hypot's (0.05 / 0.14142 = 0.3536).
+  c->computeVelocityCommands(
+    makePose(0.95, 0.0, 0.0), geometry_msgs::msg::Twist(), &checker);
+  EXPECT_NEAR(c->mpc()->getGoalU()(0, 0), 0.5, 1e-6);
+}
+
+// An anisotropic custom goal checker (x and y tolerances differ) is read
+// through std::min of the two axes: the conservative reading for a checker
+// whose y tolerance is tighter than its x, and distinct from both RPP's
+// x-only reading and a hypot diagonal, neither of which an equal-tolerance
+// stub can separate from std::min.
+TEST_F(ProxMpcControllerTest, GoalCheckerToleranceReadsAnisotropicAsMinimum)
+{
+  auto c = makeConfigured(
+  {
+    rclcpp::Parameter("FollowPath.np", 2),
+    rclcpp::Parameter("FollowPath.nc", 2),
+    rclcpp::Parameter("FollowPath.dt", 0.01),
+  });
+  c->activate();
+  c->setPlan(makeStraightPlan(6, 0.2));
+
+  // remaining = 0.08 m; x_tol = 0.3, y_tol = 0.1. std::min gives 0.08 / 0.1 =
+  // 0.8, versus RPP's x-only 0.08 / 0.3 = 0.2667 or a hypot diagonal
+  // 0.08 / hypot(0.3, 0.1) = 0.253 -- both far from 0.8.
+  StubGoalChecker checker(0.3, 0.1, true);
+  c->computeVelocityCommands(
+    makePose(0.92, 0.0, 0.0), geometry_msgs::msg::Twist(), &checker);
+  EXPECT_NEAR(c->mpc()->getGoalU()(0, 0), 0.8, 1e-6);
 }
 
 // The predicted NMPC trajectory is published as a Path (Np+1 poses, costmap
@@ -863,12 +1220,138 @@ TEST_F(ProxMpcControllerTest, ComputeDeceleratesOnNonFinitePose)
   EXPECT_EQ(c->failureCount(), 1);
 }
 
+// A non-finite plan pose beyond the sampled horizon must still reject the whole
+// cycle: the transform loop validates every plan pose up front, not only the
+// ones the horizon happens to sample. Without that check this corrupted point
+// is never read by sample() (it sits well past the ~2 m horizon reach) and the
+// cycle would drive normally, oblivious to the corruption elsewhere in the plan.
+TEST_F(ProxMpcControllerTest, ComputeDeceleratesOnNonFinitePlanPoseBeyondHorizon)
+{
+  auto c = makeConfigured();
+  c->activate();
+  nav_msgs::msg::Path path = makeStraightPlan(50, 0.2);   // 10 m plan; horizon reaches ~2 m
+  path.poses[40].pose.position.x = std::numeric_limits<double>::quiet_NaN();
+  c->setPlan(path);
+
+  const auto cmd = c->computeVelocityCommands(
+    makePose(0.0, 0.0, 0.0), geometry_msgs::msg::Twist(), nullptr);
+  EXPECT_TRUE(std::isfinite(cmd.twist.linear.x));
+  EXPECT_TRUE(std::isfinite(cmd.twist.angular.z));
+  EXPECT_NEAR(cmd.twist.linear.x, 0.0, kTol);   // braked from rest, not a normal cruise command
+  EXPECT_EQ(c->failureCount(), 1);
+}
+
+// A leading run of duplicate plan positions collapses the first segment to zero
+// length; the heading reference at that node must come from the next segment
+// with positive length, not from atan2(0, 0) on the degenerate one.
+TEST_F(ProxMpcControllerTest, ComputeSkipsDuplicateLeadingPlanPointForHeading)
+{
+  auto c = makeConfigured();
+  c->activate();
+
+  nav_msgs::msg::Path path;
+  path.header.frame_id = "map";
+  auto addPose = [&](double x, double y) {
+      geometry_msgs::msg::PoseStamped ps;
+      ps.header.frame_id = "map";
+      ps.pose.position.x = x;
+      ps.pose.position.y = y;
+      ps.pose.orientation.w = 1.0;
+      path.poses.push_back(ps);
+    };
+  addPose(0.0, 0.0);
+  addPose(0.0, 0.0);   // duplicate of the first pose
+  addPose(0.0, 1.0);   // the path actually heads in +y
+  c->setPlan(path);
+
+  c->computeVelocityCommands(makePose(0.0, 0.0, 0.0), geometry_msgs::msg::Twist(), nullptr);
+  const MatrixXd gx = c->mpc()->getGoalX();
+  EXPECT_NEAR(gx(0, 2), M_PI / 2.0, 1e-6);
+}
+
+// A sparse (coarsely spaced) plan is projected onto its true nearest segment
+// point, not snapped to whichever vertex happens to be nearest: at the default
+// 0.05 m costmap resolution, an 8 m vertex spacing is far too coarse for
+// vertex snapping and true segment projection to agree. 1.0.0 compared
+// distance to vertices only, so it could jump the tracked progress straight to
+// the far end of a long segment.
+TEST_F(ProxMpcControllerTest, PlanProjectionSparsePlanUsesTrueSegmentPoint)
+{
+  auto c = makeConfigured();
+  c->activate();
+  nav_msgs::msg::Path path;
+  path.header.frame_id = "map";
+  for (double x : {-4.0, 4.0}) {   // one 8 m segment, within the 10 m x 10 m grid
+    geometry_msgs::msg::PoseStamped ps;
+    ps.header.frame_id = "map";
+    ps.pose.position.x = x;
+    ps.pose.orientation.w = 1.0;
+    path.poses.push_back(ps);
+  }
+  c->setPlan(path);
+
+  // 5 m along the segment (from x = -4), offset toward the far vertex so
+  // vertex-only snapping picks (4, 0) (distance 3.007) over (-4, 0) (5.004).
+  c->computeVelocityCommands(makePose(1.0, 0.2, 0.0), geometry_msgs::msg::Twist(), nullptr);
+
+  // True segment projection: s0 = 5.0 m of 8.0 m, remaining = 3.0 m, well
+  // inside the horizon (np * dt = 2.0 s at the default 1.0 m/s cruise), so the
+  // cruise reference is not tapered. Vertex snapping to (4, 0) (s0 = 8.0 m)
+  // would leave 0 m remaining and collapse the reference to zero.
+  EXPECT_EQ(c->planIndex(), 0u);
+  EXPECT_NEAR(c->mpc()->getGoalU()(0, 0), 1.0, 1e-6);
+}
+
+// A self-intersecting (looping) plan does not jump the tracked progress
+// forward onto a distant later branch merely because that branch happens to
+// have a VERTEX geometrically close to the robot: the true continuous
+// projection onto the segment the robot is actually on stays closer, because
+// it is not restricted to vertices.
+TEST_F(ProxMpcControllerTest, PlanProjectionSelfIntersectingPlanAvoidsForwardJump)
+{
+  auto c = makeConfigured();
+  c->activate();
+
+  nav_msgs::msg::Path path;
+  path.header.frame_id = "map";
+  auto addPose = [&](double x, double y) {
+      geometry_msgs::msg::PoseStamped ps;
+      ps.header.frame_id = "map";
+      ps.pose.position.x = x;
+      ps.pose.position.y = y;
+      ps.pose.orientation.w = 1.0;
+      path.poses.push_back(ps);
+    };
+  addPose(-4.0, 0.0);   // P0
+  addPose(4.0, 0.0);    // P1: the segment the robot is actually on
+  addPose(4.0, 4.0);    // P2
+  addPose(0.0, 1.2);    // P3: a later branch looping back near the robot
+  addPose(0.0, 4.0);    // P4
+  c->setPlan(path);
+
+  // On segment P0-P1, offset 0.05 m: the nearest VERTEX is P3 (distance
+  // 1.524 m), closer than either P0 (5.0 m) or P1 (3.0 m), but the nearest
+  // point on any segment is on P0-P1 itself, 0.05 m away.
+  c->computeVelocityCommands(makePose(1.0, 0.05, 0.0), geometry_msgs::msg::Twist(), nullptr);
+  EXPECT_EQ(c->planIndex(), 0u);   // stays on segment 0, not the P2-P3 branch (index 2)
+}
+
 // A non-converged solve decelerates the last command at the model deceleration
 // limit, then escalates to NoValidControl once the failure budget is spent.
+//
+// The brake ramps the model's own controls through toTwist() rather than
+// ramping the measured twist directly, so the bicycle's angular.z is not a
+// twist-space ramp of the measured yaw rate: the second control is a steering
+// rate, and the yaw rate the command carries is derived from the (decayed)
+// steering state as v * sin(delta) / L. steeringState() is seeded non-zero so
+// the decay (bounded by the model's u[1] steering-rate limit, not the du[1]
+// steering-acceleration bound a twist-space ramp would have used) is what
+// supplies the angle that mapping reads.
 TEST_F(ProxMpcControllerTest, ComputeSolverFailureRampsThenEscalates)
 {
   auto c = makeConfigured(
   {
+    rclcpp::Parameter("FollowPath.model_plugin", std::string(kBicyclePlugin)),
     rclcpp::Parameter("FollowPath.max_int_iter_qp", 1),
     rclcpp::Parameter("FollowPath.max_ext_iter_qp", 1),
     rclcpp::Parameter("FollowPath.max_iter_sqp", 1),
@@ -876,12 +1359,16 @@ TEST_F(ProxMpcControllerTest, ComputeSolverFailureRampsThenEscalates)
   });
   c->activate();
   c->setPlan(makeStraightPlan(31, 0.2));
+  const double delta0 = 0.2;
+  c->steeringState() = delta0;   // non-zero steering belief for the decay to move
 
-  // The brake ramps from the server-measured velocity, so supply a non-zero
-  // measured twist (angular negative to exercise the opposite-sign brake step).
+  // The brake ramps from the server-measured velocity, carried into the model's
+  // own control units, so the measurement is the base_link twist this model
+  // emits for a front-wheel speed of 0.30 at the current steering angle.
+  const double v_front = 0.30;
   geometry_msgs::msg::Twist measured;
-  measured.linear.x = 0.30;
-  measured.angular.z = -0.30;
+  measured.linear.x = v_front * std::cos(delta0);
+  measured.angular.z = v_front * std::sin(delta0) / kBicycleWheelbase;
 
   const auto cmd = c->computeVelocityCommands(makePose(0.0, 0.0, 0.0), measured, nullptr);
 
@@ -890,9 +1377,16 @@ TEST_F(ProxMpcControllerTest, ComputeSolverFailureRampsThenEscalates)
   // if the QP ever converged in a single iteration.
   ASSERT_NE(c->mpc()->qp_info.status, proxsuite::proxqp::QPSolverOutput::PROXQP_SOLVED);
 
-  // v_cmd = max(0, v_meas - a_dec * dt); a_dec = 0.5, dt = 0.1 -> step 0.05.
-  EXPECT_NEAR(cmd.twist.linear.x, 0.30 - kModelDecel * 0.1, 1e-6);
-  EXPECT_NEAR(cmd.twist.angular.z, -0.30 + kModelDecel * 0.1, 1e-6);
+  // The ramped control is v = max(0, v_meas - a_dec * dt); a_dec = 0.5, dt = 0.1
+  // -> step 0.05. delta decays toward zero at the u[1] rate bound:
+  // 0.2 - 1.0 * 0.1 = 0.1 rad. The front-axle model's twist is the base_link one,
+  // so linear.x is v cos(delta) rather than the front-wheel speed v, and
+  // angular.z is v sin(delta) / L rather than a ramp of the measured yaw rate.
+  const double expected_delta = delta0 - kSteerRateBound * 0.1;
+  const double expected_v = v_front - kModelDecel * 0.1;
+  EXPECT_NEAR(cmd.twist.linear.x, expected_v * std::cos(expected_delta), 1e-9);
+  EXPECT_NEAR(
+    cmd.twist.angular.z, expected_v * std::sin(expected_delta) / kBicycleWheelbase, 1e-9);
   EXPECT_EQ(c->failureCount(), 1);
 
   // Second consecutive failure exceeds max_solver_failures = 1 -> escalate.
@@ -950,10 +1444,26 @@ TEST_F(ProxMpcControllerTest, ComputeFootprintVetoBrakesWithoutFailure)
   EXPECT_EQ(c->failureCount(), 0);               // veto is not a solver failure
 }
 
-// An empty footprint skips the polygon veto (size < 3) and still commands.
+// A footprint the polygon veto cannot use (fewer than 3 points) is skipped, and
+// the command still passes through.
+//
+// The degenerate footprint is two points rather than none: nav2 1.3.13 rejects an
+// empty footprint outright ("a footprint must contain at least one point") and
+// keeps the previous one, so setting none leaves the fixture's real footprint in
+// place, the veto runs against the lethal cost below, and the command is braked -
+// which is what this test would then be asserting the opposite of. Two points
+// clears nav2's own guard while still failing the controller's `size() >= 3`, so
+// the branch under test is reached on 1.3.12 and 1.3.13 alike.
 TEST_F(ProxMpcControllerTest, ComputeSkipsVetoWithoutFootprint)
 {
-  costmap_ros_->setRobotFootprint(std::vector<geometry_msgs::msg::Point>{});
+  geometry_msgs::msg::Point a;
+  geometry_msgs::msg::Point b;
+  b.x = 0.1;
+  costmap_ros_->setRobotFootprint(std::vector<geometry_msgs::msg::Point>{a, b});
+  // The premise, asserted rather than assumed: a future nav2 that also refuses a
+  // two-point footprint must fail here, saying why, instead of as a braked command.
+  ASSERT_LT(costmap_ros_->getRobotFootprint().size(), 3u);
+
   auto c = makeConfigured({rclcpp::Parameter("FollowPath.max_obstacles", 0)});
   c->activate();
   c->setPlan(makeStraightPlan(31, 0.2));
@@ -988,6 +1498,100 @@ TEST_F(ProxMpcControllerTest, PersistentFootprintVetoEscalates)
   EXPECT_THROW(
     c->computeVelocityCommands(makePose(0.0, 0.0, 0.0), geometry_msgs::msg::Twist(), nullptr),
     nav2_core::NoValidControl);
+}
+
+// The veto threshold matches upstream Nav2 (RPP collision_checker.cpp:150-154,
+// MPPI cost_critic.hpp:71-78): INSCRIBED_INFLATED_OBSTACLE alone no longer
+// vetoes, because a real polygon check has already been performed and an
+// inflated cell is not by itself a collision; only LETHAL_OBSTACLE does.
+TEST_F(ProxMpcControllerTest, FootprintVetoMatchesUpstreamLethalThreshold)
+{
+  {
+    auto c = makeConfigured({rclcpp::Parameter("FollowPath.max_obstacles", 0)});
+    c->activate();
+    c->setPlan(makeStraightPlan(31, 0.2));
+    fillCost(-0.6, -0.6, 0.6, 0.6, nav2_costmap_2d::INSCRIBED_INFLATED_OBSTACLE);
+    const auto cmd = c->computeVelocityCommands(
+      makePose(0.0, 0.0, 0.0), geometry_msgs::msg::Twist(), nullptr);
+    EXPECT_GT(cmd.twist.linear.x, 0.0);          // no veto: command passes through
+  }
+  {
+    auto c = makeConfigured({rclcpp::Parameter("FollowPath.max_obstacles", 0)});
+    c->activate();
+    c->setPlan(makeStraightPlan(31, 0.2));
+    fillCost(-0.6, -0.6, 0.6, 0.6, nav2_costmap_2d::LETHAL_OBSTACLE);
+    const auto cmd = c->computeVelocityCommands(
+      makePose(0.0, 0.0, 0.0), geometry_msgs::msg::Twist(), nullptr);
+    EXPECT_NEAR(cmd.twist.linear.x, 0.0, kTol);  // vetoed: brakes
+  }
+}
+
+// NO_INFORMATION does not veto when the layered costmap reports
+// isTrackingUnknown() (RPP collision_checker.cpp:150-154, MPPI
+// cost_critic.hpp:71-78): the robot is allowed to plan into and through
+// genuinely unmeasured space rather than braking at its boundary.
+// LayeredCostmap::isTrackingUnknown() reads the costmap's stored default value
+// directly, so setting it is enough to flip the policy; the fixture otherwise
+// starts every cell at FREE_SPACE (SetUp()).
+TEST_F(ProxMpcControllerTest, FootprintVetoIgnoresUnknownWhenCostmapTracksUnknown)
+{
+  auto c = makeConfigured({rclcpp::Parameter("FollowPath.max_obstacles", 0)});
+  c->activate();
+  c->setPlan(makeStraightPlan(31, 0.2));
+  costmap_ros_->getCostmap()->setDefaultValue(nav2_costmap_2d::NO_INFORMATION);
+  fillCost(-0.6, -0.6, 0.6, 0.6, nav2_costmap_2d::NO_INFORMATION);
+
+  const auto cmd = c->computeVelocityCommands(
+    makePose(0.0, 0.0, 0.0), geometry_msgs::msg::Twist(), nullptr);
+  EXPECT_GT(cmd.twist.linear.x, 0.0);            // no veto: command passes through
+}
+
+// Nav2's own doc comment for footprintCostAtPose describes an inherited
+// upstream masking property: it takes the maximum cost under the footprint's
+// perimeter, and since NO_INFORMATION (255) is numerically larger than
+// LETHAL_OBSTACLE (254), a footprint spanning both would read NO_INFORMATION
+// and be reported clear. Measured directly against this nav2_costmap_2d
+// release, that does not reproduce: lineCost does not let an unmeasured cell
+// out-rank a lethal one on the same edge, in either traversal order, so a
+// footprint spanning both is reported at LETHAL_OBSTACLE and still vetoes.
+// This test pins the actually observed behaviour rather than the
+// documented-but-unverified one, so a future nav2 release that reintroduces
+// the masking shows up as a failing test here instead of a silent divergence.
+TEST_F(ProxMpcControllerTest, FootprintVetoStillFiresWhenLethalAdjoinsUnknown)
+{
+  auto c = makeConfigured({rclcpp::Parameter("FollowPath.max_obstacles", 0)});
+  c->activate();
+  c->setPlan(makeStraightPlan(31, 0.2));
+  costmap_ros_->getCostmap()->setDefaultValue(nav2_costmap_2d::NO_INFORMATION);
+  // Bottom half of the one-step-ahead footprint lethal, top half unknown: both
+  // values are present under the perimeter regardless of the exact predicted
+  // pose within it.
+  fillCost(-0.6, -0.6, 0.6, 0.6, nav2_costmap_2d::LETHAL_OBSTACLE);
+  fillCost(-0.6, 0.0, 0.6, 0.6, nav2_costmap_2d::NO_INFORMATION);
+
+  const auto cmd = c->computeVelocityCommands(
+    makePose(0.0, 0.0, 0.0), geometry_msgs::msg::Twist(), nullptr);
+  EXPECT_NEAR(cmd.twist.linear.x, 0.0, kTol);    // vetoed: the lethal half still fires
+}
+
+// The threshold change (INSCRIBED_INFLATED_OBSTACLE -> LETHAL_OBSTACLE) still
+// takes effect next to unknown space: since the checker resolves a mixed
+// perimeter to the highest non-unknown cost present (the previous test's
+// finding), an INSCRIBED_INFLATED_OBSTACLE cell mixed with NO_INFORMATION
+// resolves to 253, which the old >= 253 threshold still vetoed but the new
+// >= 254 one does not, independent of the masking property itself.
+TEST_F(ProxMpcControllerTest, FootprintVetoThresholdChangeAppliesNextToUnknown)
+{
+  auto c = makeConfigured({rclcpp::Parameter("FollowPath.max_obstacles", 0)});
+  c->activate();
+  c->setPlan(makeStraightPlan(31, 0.2));
+  costmap_ros_->getCostmap()->setDefaultValue(nav2_costmap_2d::NO_INFORMATION);
+  fillCost(-0.6, -0.6, 0.6, 0.6, nav2_costmap_2d::INSCRIBED_INFLATED_OBSTACLE);
+  fillCost(-0.6, 0.0, 0.6, 0.6, nav2_costmap_2d::NO_INFORMATION);
+
+  const auto cmd = c->computeVelocityCommands(
+    makePose(0.0, 0.0, 0.0), geometry_msgs::msg::Twist(), nullptr);
+  EXPECT_GT(cmd.twist.linear.x, 0.0);   // no veto: 253 no longer meets the threshold
 }
 
 // --- setSpeedLimit() -------------------------------------------------------
@@ -1054,6 +1658,82 @@ TEST_F(ProxMpcControllerTest, SpeedLimitAppliesOnNextControlCycle)
   EXPECT_NEAR(c->model()->getIneq("u").at(0)[2], 0.5 * kModelVMax, kTol);
 }
 
+// A Nav2 speed limit must never broaden the feasible set: it narrows the
+// model's own bounds, it does not replace them. AsymmetricBounds declares an
+// asymmetric reverse limit (v_min = -0.3, tighter than v_max = 2.0), which
+// neither bundled model can express, so this is the only fixture that can show
+// the defect: the old code applied every limit as model_->updateIneq("u", 0,
+// -v_lim, v_lim), replacing v_min outright. A non-negative v_min is not
+// reachable through the controller's own parameters (v_min is always < 0 for
+// a model that can stop), so an asymmetric negative v_min is the strongest
+// reachable form, together with the NO_SPEED_LIMIT restore path.
+TEST_F(ProxMpcControllerTest, SpeedLimitPreservesAsymmetricLowerBound)
+{
+  // allow_reversing is opted into so the model's declared reverse bound survives
+  // configure: with it false the box is narrowed to [0, v_max] up front, and
+  // there would be no negative lower bound left for the speed limit to preserve.
+  // model_params.v_min names the bound explicitly, which is what opts out of the
+  // conservative reverse cap applied when reversing is enabled without one.
+  auto c = makeRunning(
+    {rclcpp::Parameter(
+      "FollowPath.model_plugin", std::string("prox_mpc_test_models/AsymmetricBounds")),
+      rclcpp::Parameter("FollowPath.allow_reversing", true),
+      rclcpp::Parameter("FollowPath.model_params.v_min", -0.3)});
+
+  c->setSpeedLimit(1.0, false);
+  runCycle(c);
+  EXPECT_NEAR(c->maxLinearVel(), 1.0, kTol);
+  EXPECT_NEAR(c->model()->getIneq("u").at(0)[1], -0.3, kTol);   // lower bound untouched
+  EXPECT_NEAR(c->model()->getIneq("u").at(0)[2], 1.0, kTol);    // upper bound narrowed
+
+  // NO_SPEED_LIMIT restores the model's own upper bound; the lower bound must
+  // stay at the model's -0.3, not widen to -v_max (-2.0).
+  c->setSpeedLimit(0.0, false);
+  runCycle(c);
+  EXPECT_NEAR(c->maxLinearVel(), 2.0, kTol);
+  EXPECT_NEAR(c->model()->getIneq("u").at(0)[1], -0.3, kTol);
+  EXPECT_NEAR(c->model()->getIneq("u").at(0)[2], 2.0, kTol);
+}
+
+// allow_reversing gates the control box, not only the reference. With it false
+// the solver must not be able to plan reverse travel at all, so the model's
+// declared negative lower bound is narrowed to zero at configure; with it true
+// the model's own bound is left alone. AsymmetricBounds is used because its
+// -0.3 lower bound is distinguishable from both 0 and -v_max.
+TEST_F(ProxMpcControllerTest, ReversingDisabledNarrowsTheControlBox)
+{
+  auto forward = makeRunning(
+    {rclcpp::Parameter(
+      "FollowPath.model_plugin", std::string("prox_mpc_test_models/AsymmetricBounds")),
+      rclcpp::Parameter("FollowPath.allow_reversing", false)});
+  EXPECT_NEAR(forward->model()->getIneq("u").at(0)[1], 0.0, kTol);
+  EXPECT_NEAR(forward->model()->getIneq("u").at(0)[2], 2.0, kTol);
+
+  auto reversing = makeRunning(
+    {rclcpp::Parameter(
+      "FollowPath.model_plugin", std::string("prox_mpc_test_models/AsymmetricBounds")),
+      rclcpp::Parameter("FollowPath.allow_reversing", true),
+      rclcpp::Parameter("FollowPath.model_params.v_min", -0.3)});
+  EXPECT_NEAR(reversing->model()->getIneq("u").at(0)[1], -0.3, kTol);
+  EXPECT_NEAR(reversing->model()->getIneq("u").at(0)[2], 2.0, kTol);
+}
+
+// Nothing guards the area behind the robot: the keep-out fill skips
+// NO_INFORMATION cells and the footprint veto treats them as clear. Enabling
+// reversing without naming a reverse bound therefore must not inherit the
+// model's own lower bound, which is a modelling limit rather than a safety
+// choice - for AsymmetricBounds that is -0.3, well past the conservative cap.
+// Naming model_params.v_min is the documented way to opt out, covered above.
+TEST_F(ProxMpcControllerTest, ReversingWithoutABoundIsCappedSlow)
+{
+  auto c = makeRunning(
+    {rclcpp::Parameter(
+      "FollowPath.model_plugin", std::string("prox_mpc_test_models/AsymmetricBounds")),
+      rclcpp::Parameter("FollowPath.allow_reversing", true)});
+  EXPECT_NEAR(c->model()->getIneq("u").at(0)[1], -0.15, kTol);
+  EXPECT_NEAR(c->model()->getIneq("u").at(0)[2], 2.0, kTol);
+}
+
 // --- cancel() / reset() ----------------------------------------------------
 
 // cancel() reports done immediately when the robot is already stopped.
@@ -1114,13 +1794,20 @@ TEST_F(ProxMpcControllerTest, ResetClearsRuntimeState)
 // reduceCostmap clusters nearby lethal cells into at most K representatives per
 // node, skips unknown cells and out-of-grid nodes, and leaves empty slots at the
 // far sentinel.
+//
+// The scan is centered on the MPC's own nominal trajectory (mpc()->getX()); no
+// plan reference is passed, because the fill does not use one.
+// Node j's window is centered on nominal row min(j + 2, Np) (the fill runs
+// before solve() shifts the trajectory, so this reads one node ahead to
+// compensate for that staleness). Np = 3 so nodes 0 and 1 read distinct rows
+// (2 and 3); node 2 clamps to the same row as node 1.
 TEST_F(ProxMpcControllerTest, ReduceCostmapClustersAndSentinels)
 {
-  // Np = 2, K = 2; a large robot radius forces the scan window to clamp.
+  // Np = 3, K = 2; a large robot radius forces the scan window to clamp.
   auto c = makeConfigured(
   {
-    rclcpp::Parameter("FollowPath.np", 2),
-    rclcpp::Parameter("FollowPath.nc", 2),
+    rclcpp::Parameter("FollowPath.np", 3),
+    rclcpp::Parameter("FollowPath.nc", 3),
     rclcpp::Parameter("FollowPath.max_obstacles", 2),
     rclcpp::Parameter("FollowPath.robot_radius", 3.0),
     rclcpp::Parameter("FollowPath.safety_margin", 0.1),
@@ -1134,16 +1821,17 @@ TEST_F(ProxMpcControllerTest, ReduceCostmapClustersAndSentinels)
   fillCost(1.0, 2.0, 1.3, 2.3, nav2_costmap_2d::LETHAL_OBSTACLE);   // cluster B
   fillCost(0.8, 0.8, 0.8, 0.8, nav2_costmap_2d::NO_INFORMATION);    // ignored
 
-  const std::size_t np = 2;
+  const std::size_t np = 3;
   const std::size_t k = 2;
-  MatrixXd reference = MatrixXd::Zero(static_cast<Eigen::Index>(np + 1), 4);
-  reference(1, 0) = 1.15;          // node 0: inside the grid, near both clusters
-  reference(1, 1) = 1.0;
-  reference(2, 0) = 100.0;         // node 1: outside the grid -> worldToMap fails
-  reference(2, 1) = 100.0;
+  MatrixXd nominal = MatrixXd::Zero(static_cast<Eigen::Index>(np + 1), c->nDim());
+  nominal(2, 0) = 1.15;    // row read by node 0: inside the grid, near both clusters
+  nominal(2, 1) = 1.0;
+  nominal(3, 0) = 100.0;   // row read by nodes 1 and 2: outside the grid
+  nominal(3, 1) = 100.0;
+  c->mpc()->setX(nominal);
 
   MatrixXd obs(static_cast<Eigen::Index>(np * k), 3);
-  c->reduceCostmap(reference, obs);
+  c->reduceCostmap(obs);
 
   // Node 0: two distinct representatives, each carrying d_safe = radius + margin.
   EXPECT_LT(obs(0, 0), prox_mpc::MPC::kObsFarSentinel);
@@ -1153,9 +1841,170 @@ TEST_F(ProxMpcControllerTest, ReduceCostmapClustersAndSentinels)
   const double sep = std::hypot(obs(0, 0) - obs(1, 0), obs(0, 1) - obs(1, 1));
   EXPECT_GE(sep, 0.3);             // representatives at least a cluster radius apart
 
-  // Node 1: out of grid, both slots stay at the far sentinel.
+  // Nodes 1 and 2: out of grid (nominal row 3), every slot stays at the sentinel.
   EXPECT_NEAR(obs(2, 0), prox_mpc::MPC::kObsFarSentinel, kTol);
   EXPECT_NEAR(obs(3, 0), prox_mpc::MPC::kObsFarSentinel, kTol);
+  EXPECT_NEAR(obs(4, 0), prox_mpc::MPC::kObsFarSentinel, kTol);
+  EXPECT_NEAR(obs(5, 0), prox_mpc::MPC::kObsFarSentinel, kTol);
+}
+
+// A static obstacle near the MPC's nominal predicted state, but well outside a
+// reference-centered scan window, is picked up: 1.0.0 centered the search on
+// reference(node+1), so a lethal cell beyond d_safe +
+// obstacle_cluster_radius of the plan reference position never entered the
+// window at all, no matter how close it was to where the solver actually
+// predicted the robot would be.
+TEST_F(ProxMpcControllerTest, ReduceCostmapCentersOnNominalNotReference)
+{
+  auto c = makeConfigured(
+  {
+    rclcpp::Parameter("FollowPath.np", 1),
+    rclcpp::Parameter("FollowPath.nc", 1),
+    rclcpp::Parameter("FollowPath.max_obstacles", 1),
+    rclcpp::Parameter("FollowPath.robot_radius", 0.3),
+    rclcpp::Parameter("FollowPath.safety_margin", 0.1),
+    rclcpp::Parameter("FollowPath.obstacle_cluster_radius", 0.2),
+  });
+  // search_radius = d_safe + obstacle_cluster_radius = 0.4 + 0.2 = 0.6 m.
+  fillCost(1.9, -0.1, 2.1, 0.1, nav2_costmap_2d::LETHAL_OBSTACLE);   // near (2, 0)
+
+  MatrixXd nominal = MatrixXd::Zero(2, c->nDim());
+  nominal(1, 0) = 2.0;   // node 0 reads row min(0 + 2, Np = 1) = 1: at the obstacle
+  c->mpc()->setX(nominal);
+
+  // reference stays at the origin: more than 0.6 m from the obstacle, so a
+  // reference-centered window would never see it (2.0 m - 0.6 m margin).
+  MatrixXd obs(1, 3);
+  c->reduceCostmap(obs);
+
+  EXPECT_LT(obs(0, 0), prox_mpc::MPC::kObsFarSentinel);
+  EXPECT_NEAR(obs(0, 0), 2.0, 0.15);
+}
+
+// The obstacle-slot ranking keys on the earliest node an object is first seen
+// at, ties broken by closest approach -- not on closest approach anywhere in
+// the horizon. A long np is needed to separate the two rules: at the shipped
+// np and scan radius, every candidate is first seen at the same node, so the
+// tie-break alone reproduces the old (closest-approach) order and no fixture
+// built at those defaults can tell the two rules apart. Object A is seen only
+// at the early node 2, offset ~0.25 m from that node's scan center (moderate
+// approach). Object B is seen only at the late node 15, offset ~0 m (the
+// closer approach overall). Ranking on closest-approach-anywhere would give
+// the single slot to B; ranking on earliest-encounter gives it to A.
+TEST_F(ProxMpcControllerTest, ObstacleSlotRankingPrefersEarliestEncounter)
+{
+  auto c = makeConfigured(
+  {
+    rclcpp::Parameter("FollowPath.np", 20),
+    rclcpp::Parameter("FollowPath.nc", 20),
+    rclcpp::Parameter("FollowPath.max_obstacles", 1),
+    rclcpp::Parameter("FollowPath.robot_radius", 0.3),
+    rclcpp::Parameter("FollowPath.safety_margin", 0.1),
+    rclcpp::Parameter("FollowPath.obstacle_cluster_radius", 0.3),
+  });
+  // search_radius = d_safe + obstacle_cluster_radius = 0.4 + 0.3 = 0.7 m. Both
+  // clusters stay well inside the 10 m x 10 m grid (+/-5 m): a cluster placed
+  // at the grid edge would silently fail to paint (worldToMap rejects it).
+  fillCost(2.25, -0.05, 2.35, 0.05, nav2_costmap_2d::LETHAL_OBSTACLE);   // A: near (2.3, 0)
+  fillCost(3.5, -0.05, 3.55, 0.05, nav2_costmap_2d::LETHAL_OBSTACLE);    // B: near (3.5, 0)
+
+  const std::size_t np = 20;
+  MatrixXd nominal = MatrixXd::Zero(static_cast<Eigen::Index>(np + 1), c->nDim());
+  // node 2 reads row min(2 + 2, np) = 4: centered on A, ~0.25 m away.
+  nominal(4, 0) = 2.0;
+  // node 15 reads row min(15 + 2, np) = 17: centered on B, ~0 m away (closer).
+  nominal(17, 0) = 3.5;
+  // Every other node's row is left at (0, 0): more than 0.7 m from both A and
+  // B, so no other node picks up either one.
+  c->mpc()->setX(nominal);
+
+  MatrixXd obs(static_cast<Eigen::Index>(np), 3);
+  c->reduceCostmap(obs);
+
+  EXPECT_LT(obs(2, 0), prox_mpc::MPC::kObsFarSentinel);      // node 2: A wins the slot
+  EXPECT_NEAR(obs(2, 0), 2.3, 0.1);
+  EXPECT_NEAR(obs(15, 0), prox_mpc::MPC::kObsFarSentinel, kTol);   // node 15: B did not
+}
+
+// The footprint the veto uses is read fresh each cycle rather than cached at
+// configure() time -- it is the one "in force at the start of the cycle", the
+// hoisted-out-of-the-lock read node 28 chose, and the same per-cycle read RPP
+// and MPPI both perform to keep a runtime footprint update taking effect.
+TEST_F(ProxMpcControllerTest, FootprintVetoUsesFootprintInForceAtCycleStart)
+{
+  auto c = makeConfigured({rclcpp::Parameter("FollowPath.max_obstacles", 0)});
+  c->activate();
+  c->setPlan(makeStraightPlan(31, 0.2));
+
+  // A lethal block straddling the default footprint's right edge (half-extent
+  // 0.5 m, padded to ~0.51 m): footprintCostAtPose checks the polygon
+  // perimeter only, not its interior, so the block must cross an edge to be
+  // seen at all. The much smaller footprint used below does not reach it.
+  fillCost(0.4, -0.05, 0.6, 0.05, nav2_costmap_2d::LETHAL_OBSTACLE);
+
+  const auto cmd_default = c->computeVelocityCommands(
+    makePose(0.0, 0.0, 0.0), geometry_msgs::msg::Twist(), nullptr);
+  EXPECT_NEAR(cmd_default.twist.linear.x, 0.0, kTol);   // default footprint reaches it: vetoed
+
+  // Shrink the footprint before the next cycle; the veto must use this new
+  // footprint, not the one configure() saw.
+  costmap_ros_->setRobotFootprint(makeSquareFootprint(0.05));
+  const auto cmd_small = c->computeVelocityCommands(
+    makePose(0.0, 0.0, 0.0), geometry_msgs::msg::Twist(), nullptr);
+  EXPECT_GT(cmd_small.twist.linear.x, 0.0);   // the shrunk footprint no longer reaches it
+}
+
+// The costmap-reduction path finds the same candidate obstacle set it did
+// before the critical section was narrowed to the cell reads: the grid lock
+// now closes and reopens once per node instead of once per fill, so this
+// checks that the per-node scans it protects still each find their own
+// cluster and nothing else. This is a regression guard on the invariant node
+// 29 chose (the candidate set, not fill atomicity against a concurrent
+// costmap write) rather than evidence the lock-scope change altered
+// single-threaded behavior, which it does not: the same instructions run
+// either way, just under a narrower held lock.
+TEST_F(ProxMpcControllerTest, CostmapReductionCandidateSetUnaffectedByNarrowedLock)
+{
+  auto c = makeConfigured(
+  {
+    rclcpp::Parameter("FollowPath.np", 4),
+    rclcpp::Parameter("FollowPath.nc", 4),
+    rclcpp::Parameter("FollowPath.max_obstacles", 2),   // >= 2 slots: no cross-node competition
+    rclcpp::Parameter("FollowPath.robot_radius", 0.3),
+    rclcpp::Parameter("FollowPath.safety_margin", 0.1),
+    rclcpp::Parameter("FollowPath.obstacle_cluster_radius", 0.2),
+  });
+  // search_radius = 0.4 + 0.2 = 0.6 m; each cluster sits inside exactly one
+  // node's window and outside every other node's.
+  fillCost(1.9, -0.05, 2.0, 0.05, nav2_costmap_2d::LETHAL_OBSTACLE);   // near (2, 0): node 0
+  fillCost(3.9, -0.05, 4.0, 0.05, nav2_costmap_2d::LETHAL_OBSTACLE);   // near (4, 0): node 1
+
+  const std::size_t np = 4;
+  const std::size_t k = 2;
+  MatrixXd nominal = MatrixXd::Zero(static_cast<Eigen::Index>(np + 1), c->nDim());
+  nominal(2, 0) = 2.0;    // node 0 reads row min(0 + 2, np) = 2
+  nominal(3, 0) = 4.0;    // node 1 reads row min(1 + 2, np) = 3
+  nominal(4, 0) = -4.0;   // nodes 2 and 3 read row min(node + 2, np) = 4: no obstacle there
+  c->mpc()->setX(nominal);
+
+  MatrixXd obs(static_cast<Eigen::Index>(np * k), 3);
+  c->reduceCostmap(obs);
+
+  // The near-(2,0) object is seen only at node 0 and ranks first (earliest
+  // first_node), winning slot 0; row = node * k + slot = 0 * 2 + 0 = 0.
+  EXPECT_LT(obs(0, 0), prox_mpc::MPC::kObsFarSentinel);
+  EXPECT_NEAR(obs(0, 0), 2.0, 0.1);
+  // The near-(4,0) object is seen only at node 1 and ranks second, winning
+  // slot 1; row = 1 * 2 + 1 = 3.
+  EXPECT_LT(obs(3, 0), prox_mpc::MPC::kObsFarSentinel);
+  EXPECT_NEAR(obs(3, 0), 4.0, 0.1);
+  // Node 0's slot 1 and node 1's slot 0 were never assigned either object.
+  EXPECT_NEAR(obs(1, 0), prox_mpc::MPC::kObsFarSentinel, kTol);
+  EXPECT_NEAR(obs(2, 0), prox_mpc::MPC::kObsFarSentinel, kTol);
+  // Nodes 2 and 3 (both centered far from either cluster) stay empty.
+  for (Eigen::Index r = 4; r < obs.rows(); ++r) {
+    EXPECT_NEAR(obs(r, 0), prox_mpc::MPC::kObsFarSentinel, kTol) << "row " << r;
+  }
 }
 
 // --- fillObstacles(): predictive + hybrid fill (white-box) -----------------
@@ -1202,8 +2051,302 @@ TEST_F(ProxMpcControllerTest, PredictiveFillPropagatesObstacleAndKeepsIdentity)
   }
 }
 
+// The forward shadow biases the keep-out along the track's own heading, so the
+// space a mover is about to occupy costs more than the space it is vacating. The
+// centre moves forward by shadow = prediction_forward_shadow_s * speed and the
+// radius grows by the same amount, which keeps the obstacle's own position
+// covered while extending the disc ahead of it.
+TEST_F(ProxMpcControllerTest, ForwardShadowBiasesTheKeepOutAheadOfTheTrack)
+{
+  auto c = makeConfigured(
+  {
+    rclcpp::Parameter("FollowPath.np", 5),
+    rclcpp::Parameter("FollowPath.nc", 5),
+    rclcpp::Parameter("FollowPath.max_obstacles", 1),
+    rclcpp::Parameter("FollowPath.predict_obstacles", true),
+    rclcpp::Parameter("FollowPath.dynamic_speed_threshold", 0.05),
+    rclcpp::Parameter("FollowPath.robot_radius", 0.5),
+    rclcpp::Parameter("FollowPath.safety_margin", 0.1),
+    rclcpp::Parameter("FollowPath.prediction_forward_shadow_s", 0.4),
+  });
+  const std::size_t np = 5;
+  const std::size_t k = 1;
+  const double dt = 0.1;
+  const double vx = 1.0;
+  const double base_d_safe = 0.5 + 0.2 + 0.1;
+  const double shadow = 0.4 * vx;        // prediction_forward_shadow_s * speed
+  const rclcpp::Time now(1000, 0, RCL_ROS_TIME);
+
+  c->injectObstacles(makeObstacleMsg(now, 2.0, 0.0, vx, 0.0, 0.2));
+
+  MatrixXd reference = MatrixXd::Zero(static_cast<Eigen::Index>(np + 1), c->nDim());
+  for (std::size_t i = 0; i <= np; ++i) {
+    reference(static_cast<Eigen::Index>(i), 0) = static_cast<double>(i) * 0.2;
+  }
+  MatrixXd obs(static_cast<Eigen::Index>(np * k), 3);
+  c->fillObstacles(reference, obs, now);
+
+  for (std::size_t node = 0; node < np; ++node) {
+    const double dt_k = static_cast<double>(node + 1) * dt;
+    const Eigen::Index row = static_cast<Eigen::Index>(node * k);
+    const double truth_x = 2.0 + vx * dt_k;   // where the obstacle actually is
+
+    // Centre biased one shadow ahead, along +x, and the radius grown to match.
+    EXPECT_NEAR(obs(row, 0), truth_x + shadow, 1e-9);
+    EXPECT_NEAR(obs(row, 1), 0.0, 1e-9);
+    EXPECT_NEAR(obs(row, 2), base_d_safe + shadow, 1e-9);
+
+    // The obstacle's own position stays inside its keep-out: a bare shift would
+    // open a hole over the object itself once the shadow passed d_safe.
+    EXPECT_LT(std::abs(obs(row, 0) - truth_x), obs(row, 2));
+
+    // And the disc is asymmetric about the obstacle: further ahead than behind.
+    const double reach_ahead = obs(row, 0) + obs(row, 2) - truth_x;
+    const double reach_behind = truth_x - (obs(row, 0) - obs(row, 2));
+    EXPECT_GT(reach_ahead, reach_behind);
+    EXPECT_NEAR(reach_ahead - reach_behind, 2.0 * shadow, 1e-9);
+    // Behind the mover the keep-out is never tighter than the unbiased one.
+    EXPECT_NEAR(reach_behind, base_d_safe, 1e-9);
+  }
+}
+
+// A track with no measurable heading casts no shadow: normalising its velocity
+// would place the disc in an arbitrary direction. Reachable because
+// dynamic_speed_threshold may itself be set to zero.
+TEST_F(ProxMpcControllerTest, ForwardShadowIgnoresATrackWithNoHeading)
+{
+  auto c = makeConfigured(
+  {
+    rclcpp::Parameter("FollowPath.np", 2),
+    rclcpp::Parameter("FollowPath.nc", 2),
+    rclcpp::Parameter("FollowPath.max_obstacles", 1),
+    rclcpp::Parameter("FollowPath.predict_obstacles", true),
+    rclcpp::Parameter("FollowPath.dynamic_speed_threshold", 0.0),
+    rclcpp::Parameter("FollowPath.robot_radius", 0.5),
+    rclcpp::Parameter("FollowPath.safety_margin", 0.1),
+    rclcpp::Parameter("FollowPath.prediction_forward_shadow_s", 0.4),
+  });
+  const rclcpp::Time now(1000, 0, RCL_ROS_TIME);
+  c->injectObstacles(makeObstacleMsg(now, 2.0, 0.0, 0.0, 0.0, 0.2));
+
+  MatrixXd reference = MatrixXd::Zero(3, c->nDim());
+  MatrixXd obs(2, 3);
+  c->fillObstacles(reference, obs, now);
+
+  for (Eigen::Index row = 0; row < 2; ++row) {
+    EXPECT_TRUE(std::isfinite(obs(row, 0)));
+    EXPECT_TRUE(std::isfinite(obs(row, 1)));
+    EXPECT_NEAR(obs(row, 0), 2.0, 1e-9);              // unmoved
+    EXPECT_NEAR(obs(row, 1), 0.0, 1e-9);
+    EXPECT_NEAR(obs(row, 2), 0.5 + 0.2 + 0.1, 1e-9);  // unbiased radius
+  }
+}
+
+// Obstacle-aware cruise. A mover whose predicted path crosses where the robot is
+// heading eases the cruise, so the robot waits for it rather than racing it. The
+// yield reads the predictions the previous cycle's fill retained, so each cycle
+// is primed with one fill before it runs.
+namespace
+{
+// Speed reference at the first control node, one entry per cycle, with a mover
+// at (1.0, -1.0) heading +y at 1 m/s - on the plan's line at t = 1 s, which is
+// where a 1 m/s reference along +x also is. `with_mover` false leaves the
+// retained predictions empty.
+  std::vector<double> cruisePerCycle(
+    const std::function<std::shared_ptr<TestableProxMpcController>(
+      const std::vector<rclcpp::Parameter> &)> & make, double band, bool with_mover, int cycles = 1)
+  {
+    auto c = make(
+    {
+      rclcpp::Parameter("FollowPath.max_obstacles", 1),
+      rclcpp::Parameter("FollowPath.predict_obstacles", true),
+      rclcpp::Parameter("FollowPath.dynamic_speed_threshold", 0.05),
+      rclcpp::Parameter("FollowPath.robot_radius", 0.3),
+      rclcpp::Parameter("FollowPath.safety_margin", 0.1),
+      rclcpp::Parameter("FollowPath.obstacle_yield_band_m", band),
+  });
+    c->activate();
+    c->setPlan(makeStraightPlan(61, 0.2));
+    const rclcpp::Time now(1000, 0, RCL_ROS_TIME);
+    const std::size_t np = c->mpc()->getNp();
+    MatrixXd reference = MatrixXd::Zero(static_cast<Eigen::Index>(np + 1), c->nDim());
+    for (std::size_t i = 0; i <= np; ++i) {
+      reference(static_cast<Eigen::Index>(i), 0) = 0.1 * static_cast<double>(i);
+    }
+    std::vector<double> v;
+    for (int i = 0; i < cycles; ++i) {
+      if (with_mover) {
+        c->injectObstacles(makeObstacleMsg(now, 1.0, -1.0, 0.0, 1.0, 0.2));
+        MatrixXd obs(static_cast<Eigen::Index>(np), 3);
+        c->fillObstacles(reference, obs, now); // prime the retained predictions
+      }
+      c->computeVelocityCommands(makePose(0.0, 0.0, 0.0), geometry_msgs::msg::Twist(), nullptr);
+      v.push_back(c->mpc()->getGoalU()(0, 0));
+    }
+    return v;
+  }
+}  // namespace
+
+TEST_F(ProxMpcControllerTest, ObstacleYieldEasesCruiseForACrossingMover)
+{
+  auto make = [this](const std::vector<rclcpp::Parameter> & o) {return makeConfigured(o);};
+  const double blind = cruisePerCycle(make, 0.0, true).front();
+  const double yielding = cruisePerCycle(make, 0.5, true).front();
+  ASSERT_GT(blind,
+    0.0) << "the obstacle-blind cruise must be moving for the comparison to mean anything";
+  EXPECT_LT(yielding, blind);
+}
+
+// With nothing predicted to cross where the robot is heading, the cruise is
+// exactly the obstacle-blind one: the feature is inert until a mover is in the way.
+TEST_F(ProxMpcControllerTest, ObstacleYieldLeavesCruiseAloneWithNoMover)
+{
+  auto make = [this](const std::vector<rclcpp::Parameter> & o) {return makeConfigured(o);};
+  EXPECT_NEAR(
+    cruisePerCycle(make, 0.5, false).front(), cruisePerCycle(make, 0.0, false).front(), 1e-12);
+}
+
+// The failure the yield has to avoid is snapping back to full cruise while the
+// mover is still there. That happens if a reduction is allowed to clear the
+// breach that caused it - a slower trajectory is a shorter one, which can stop
+// reaching the mover - and the release is instant. With the plan judged at the
+// intended cruise and the release rate-limited, a persisting mover keeps the
+// cruise below the obstacle-blind one on every cycle.
+TEST_F(ProxMpcControllerTest, ObstacleYieldHoldsWhileTheMoverPersists)
+{
+  auto make = [this](const std::vector<rclcpp::Parameter> & o) {return makeConfigured(o);};
+  const double blind = cruisePerCycle(make, 0.0, true).front();
+  for (const double v : cruisePerCycle(make, 0.5, true, 6)) {
+    EXPECT_LT(v, blind);
+  }
+}
+
+// The solver does not follow the plan exactly, so a check on the plan alone can
+// watch a path the robot is not driving. Here the plan runs clear along +x while
+// the trajectory the solver planned last cycle swings up through a mover sitting
+// 1 m off the plan: the yield has to see it on the trajectory.
+TEST_F(ProxMpcControllerTest, ObstacleYieldSeesAMoverOnThePlannedTrajectoryOffThePlan)
+{
+  auto run = [this](double band) {
+      auto c = makeConfigured(
+    {
+      rclcpp::Parameter("FollowPath.max_obstacles", 1),
+      rclcpp::Parameter("FollowPath.predict_obstacles", true),
+      rclcpp::Parameter("FollowPath.dynamic_speed_threshold", 0.05),
+      rclcpp::Parameter("FollowPath.robot_radius", 0.3),
+      rclcpp::Parameter("FollowPath.safety_margin", 0.1),
+      rclcpp::Parameter("FollowPath.obstacle_yield_band_m", band),
+      });
+      c->activate();
+      c->setPlan(makeStraightPlan(61, 0.2));
+      const rclcpp::Time now(1000, 0, RCL_ROS_TIME);
+      const std::size_t np = c->mpc()->getNp();
+      // A slow mover 1 m off the plan: clear of the plan by more than d_safe.
+      c->injectObstacles(makeObstacleMsg(now, 1.0, 1.0, 0.3, 0.0, 0.2));
+      MatrixXd reference = MatrixXd::Zero(static_cast<Eigen::Index>(np + 1), c->nDim());
+      MatrixXd obs(static_cast<Eigen::Index>(np), 3);
+      c->fillObstacles(reference, obs, now);
+      // Last cycle's trajectory heads up the diagonal, through (1.0, 1.0).
+      MatrixXd traj = MatrixXd::Zero(static_cast<Eigen::Index>(np + 1), c->nDim());
+      for (std::size_t k = 0; k <= np; ++k) {
+        traj(static_cast<Eigen::Index>(k), 0) = 0.1 * static_cast<double>(k);
+        traj(static_cast<Eigen::Index>(k), 1) = 0.1 * static_cast<double>(k);
+        traj(static_cast<Eigen::Index>(k), 2) = M_PI / 4.0;
+      }
+      c->mpc()->setX(traj);
+      c->computeVelocityCommands(makePose(0.0, 0.0, 0.0), geometry_msgs::msg::Twist(), nullptr);
+      return c->mpc()->getGoalU()(0, 0);
+    };
+  EXPECT_LT(run(0.5), run(0.0));
+}
+
+// The eased cruise is only a target the obstacle term can override, so with the
+// cap enabled the yield also bounds the forward speed the solver may command.
+namespace
+{
+// The model's current upper bound on the speed control (index 0 for the Unicycle).
+  double speedUpperBound(const TestableProxMpcController & c)
+  {
+    for (const auto & kv : c.model()->getIneq("u")) {
+      if (static_cast<std::size_t>(kv.second[0]) == 0) {return kv.second[2];}
+    }
+    return std::numeric_limits<double>::quiet_NaN();
+  }
+
+// One cycle against the crossing mover used above, with the cap on or off and
+// the previously applied speed set to `last_v`.
+  std::shared_ptr<TestableProxMpcController> capCycle(
+    const std::function<std::shared_ptr<TestableProxMpcController>(
+      const std::vector<rclcpp::Parameter> &)> & make, bool caps, double last_v)
+  {
+    auto c = make(
+    {
+      rclcpp::Parameter("FollowPath.max_obstacles", 1),
+      rclcpp::Parameter("FollowPath.predict_obstacles", true),
+      rclcpp::Parameter("FollowPath.dynamic_speed_threshold", 0.05),
+      rclcpp::Parameter("FollowPath.robot_radius", 0.3),
+      rclcpp::Parameter("FollowPath.safety_margin", 0.1),
+      rclcpp::Parameter("FollowPath.obstacle_yield_band_m", 0.5),
+      rclcpp::Parameter("FollowPath.obstacle_yield_caps_speed", caps),
+  });
+    c->activate();
+    c->setPlan(makeStraightPlan(61, 0.2));
+    const rclcpp::Time now(1000, 0, RCL_ROS_TIME);
+    const std::size_t np = c->mpc()->getNp();
+    MatrixXd reference = MatrixXd::Zero(static_cast<Eigen::Index>(np + 1), c->nDim());
+    for (std::size_t i = 0; i <= np; ++i) {
+      reference(static_cast<Eigen::Index>(i), 0) = 0.1 * static_cast<double>(i);
+    }
+    c->injectObstacles(makeObstacleMsg(now, 1.0, -1.0, 0.0, 1.0, 0.2));
+    MatrixXd obs(static_cast<Eigen::Index>(np), 3);
+    c->fillObstacles(reference, obs, now);
+    c->lastCmdU()(0) = last_v;
+    c->computeVelocityCommands(makePose(0.0, 0.0, 0.0), geometry_msgs::msg::Twist(), nullptr);
+    return c;
+  }
+}  // namespace
+
+TEST_F(ProxMpcControllerTest, ObstacleYieldCapBoundsTheForwardSpeed)
+{
+  auto make = [this](const std::vector<rclcpp::Parameter> & o) {return makeConfigured(o);};
+  auto c = capCycle(make, true, 0.0);
+  EXPECT_LT(speedUpperBound(*c), c->vMax());
+}
+
+// The cap is what makes the yield slow the robot, but it must never make the
+// first control infeasible: the solver holds that control within the model's
+// deceleration times dt of the command last applied, so a bound under that would
+// leave no admissible first control. Here the robot is doing 0.5 m/s into a
+// breach deep enough to ask for a stop, and the bound stops at what it can reach.
+TEST_F(ProxMpcControllerTest, ObstacleYieldCapNeverFallsBelowWhatTheRobotCanReach)
+{
+  auto make = [this](const std::vector<rclcpp::Parameter> & o) {return makeConfigured(o);};
+  auto c = capCycle(make, true, 0.5);
+  double decel = std::numeric_limits<double>::quiet_NaN();
+  for (const auto & kv : c->model()->getIneq("du")) {
+    if (static_cast<std::size_t>(kv.second[0]) == 0) {decel = std::abs(kv.second[1]);}
+  }
+  ASSERT_TRUE(std::isfinite(decel));
+  EXPECT_GE(speedUpperBound(*c), 0.5 - decel * c->mpc()->getdt() - 1e-12);
+  EXPECT_LT(speedUpperBound(*c), c->vMax()) << "a deep breach must still lower the bound";
+}
+
+// Without the cap the yield only lowers the cruise target; the solver's speed
+// bound is left exactly where the speed limit put it.
+TEST_F(ProxMpcControllerTest, ObstacleYieldWithoutTheCapLeavesTheBoundAlone)
+{
+  auto make = [this](const std::vector<rclcpp::Parameter> & o) {return makeConfigured(o);};
+  auto c = capCycle(make, false, 0.0);
+  EXPECT_NEAR(speedUpperBound(*c), c->vMax(), 1e-12);
+}
+
 // The hybrid fill keeps a static costmap obstacle in a remaining slot while a
 // dynamic track occupies the reserved slot.
+//
+// The static scan is centered on the MPC's own nominal trajectory
+// (mpc()->getX()), not on the reference argument: at Np = 2 both nodes read the
+// same clamped nominal row (min(node + 2, Np) = 2 for node 0 and node 1 alike),
+// so setting that one row near the static block reproduces both nodes seeing it.
 TEST_F(ProxMpcControllerTest, HybridFillKeepsStaticObstacle)
 {
   auto c = makeConfigured(
@@ -1221,15 +2364,16 @@ TEST_F(ProxMpcControllerTest, HybridFillKeepsStaticObstacle)
   const std::size_t k = 2;
   const rclcpp::Time now(1000, 0, RCL_ROS_TIME);
 
-  // A static lethal block near node 0's reference position.
+  // A static lethal block near the nominal trajectory's node-0/node-1 row.
   fillCost(1.0, 0.8, 1.3, 1.2, nav2_costmap_2d::LETHAL_OBSTACLE);
   // A dynamic obstacle far away, so its exclusion disc does not cover the block.
   c->injectObstacles(makeObstacleMsg(now, 5.0, 5.0, 1.0, 0.0, 0.2));
 
-  MatrixXd reference = MatrixXd::Zero(3, c->nDim());
-  reference(1, 0) = 1.15; reference(1, 1) = 1.0;     // node 0 near the static block
-  reference(2, 0) = 1.15; reference(2, 1) = 1.0;
+  MatrixXd nominal = MatrixXd::Zero(3, c->nDim());
+  nominal(2, 0) = 1.15; nominal(2, 1) = 1.0;   // row read by both node 0 and node 1
+  c->mpc()->setX(nominal);
 
+  MatrixXd reference = MatrixXd::Zero(3, c->nDim());
   MatrixXd obs(static_cast<Eigen::Index>(2 * k), 3);
   c->fillObstacles(reference, obs, now);
 
@@ -1273,7 +2417,7 @@ TEST_F(ProxMpcControllerTest, StalenessFallbackRestoresCostmapOnly)
   MatrixXd obs_fill(static_cast<Eigen::Index>(2 * k), 3);
   c->fillObstacles(reference, obs_fill, now);
   MatrixXd obs_reduce(static_cast<Eigen::Index>(2 * k), 3);
-  c->reduceCostmap(reference, obs_reduce);
+  c->reduceCostmap(obs_reduce);
 
   for (Eigen::Index r = 0; r < obs_fill.rows(); ++r) {
     EXPECT_NEAR(obs_fill(r, 0), obs_reduce(r, 0), kTol);
@@ -1307,7 +2451,7 @@ TEST_F(ProxMpcControllerTest, PredictDisabledIgnoresTrackedObstacles)
   MatrixXd obs_fill(static_cast<Eigen::Index>(2 * k), 3);
   c->fillObstacles(reference, obs_fill, now);
   MatrixXd obs_reduce(static_cast<Eigen::Index>(2 * k), 3);
-  c->reduceCostmap(reference, obs_reduce);
+  c->reduceCostmap(obs_reduce);
 
   for (Eigen::Index r = 0; r < obs_fill.rows(); ++r) {
     EXPECT_NEAR(obs_fill(r, 0), obs_reduce(r, 0), kTol);
@@ -1319,6 +2463,12 @@ TEST_F(ProxMpcControllerTest, PredictDisabledIgnoresTrackedObstacles)
 // The brake ramp seeds from the server-measured velocity, not the last command:
 // a cycle-1 solver failure while the robot is moving (last command still zero)
 // still ramps down from the measured speed instead of commanding an abrupt zero.
+//
+// Both channels, not just the speed one. The unicycle's controls are [v, omega]
+// and its twist mapping is the identity, so its inverse determines both, and
+// the controller takes every channel the model reports as determined. Seeding
+// the yaw channel from the stale zero command instead would step angular.z to 0
+// in one cycle while linear.x ramped.
 TEST_F(ProxMpcControllerTest, SolverFailureBrakesFromMeasuredVelocity)
 {
   auto c = makeConfigured(
@@ -1331,14 +2481,19 @@ TEST_F(ProxMpcControllerTest, SolverFailureBrakesFromMeasuredVelocity)
   c->activate();
   c->setPlan(makeStraightPlan(31, 0.2));
   ASSERT_NEAR(c->lastCmdV(), 0.0, kTol);   // last command is zero right after activate
+  ASSERT_NEAR(c->lastCmdW(), 0.0, kTol);
 
   geometry_msgs::msg::Twist measured;
   measured.linear.x = 0.40;                // the robot is actually moving
+  measured.angular.z = -0.30;              // and turning, opposite sign to exercise both steps
   const auto cmd = c->computeVelocityCommands(makePose(0.0, 0.0, 0.0), measured, nullptr);
 
   ASSERT_NE(c->mpc()->qp_info.status, proxsuite::proxqp::QPSolverOutput::PROXQP_SOLVED);
   // Ramp from the measured 0.40, not an abrupt 0 off the stale last command.
   EXPECT_NEAR(cmd.twist.linear.x, 0.40 - kModelDecel * 0.1, 1e-6);
+  // Same for the yaw channel: du[1]'s upper bound magnitude brings a negative
+  // rate back toward zero, from the measurement rather than from the command.
+  EXPECT_NEAR(cmd.twist.angular.z, -0.30 + kModelDecel * 0.1, 1e-6);
 }
 
 // A non-finite measured velocity must never survive the brake ramp: +/-inf
@@ -1366,6 +2521,306 @@ TEST_F(ProxMpcControllerTest, SolverFailureNeutralizesNonFiniteMeasuredVelocity)
     ASSERT_NE(c->mpc()->qp_info.status, proxsuite::proxqp::QPSolverOutput::PROXQP_SOLVED);
     EXPECT_DOUBLE_EQ(cmd.twist.linear.x, 0.0);
     EXPECT_DOUBLE_EQ(cmd.twist.angular.z, 0.0);
+  }
+}
+
+// The default (0.0) brake_period_s steps the ramp with the measured
+// inter-cycle period, floored at dt_ = 0.1 s so two back-to-back cycles (a
+// gap of microseconds) never brake faster than the configured design. The
+// first cycle of a task has no previous cycle to measure against and falls
+// back to dt_, which is the same step, so the second cycle is the one that
+// exercises the floor. AsymmetricBounds' asymmetric du[0] (-2.0, +0.5) makes
+// the resulting step size, not just its sign, an observable proxy for which
+// period was used.
+TEST_F(ProxMpcControllerTest, BrakeMeasuredPeriodFloorsAtConfiguredDt)
+{
+  auto c = makeConfigured(
+  {
+    rclcpp::Parameter(
+      "FollowPath.model_plugin", std::string("prox_mpc_test_models/AsymmetricBounds")),
+    rclcpp::Parameter("FollowPath.max_int_iter_qp", 1),
+    rclcpp::Parameter("FollowPath.max_ext_iter_qp", 1),
+    rclcpp::Parameter("FollowPath.max_iter_sqp", 1),
+    rclcpp::Parameter("FollowPath.max_solver_failures", 10),
+  });
+  c->activate();
+  c->setPlan(makeStraightPlan(31, 0.2));
+
+  geometry_msgs::msg::Twist measured;
+  measured.linear.x = 1.0;
+  const auto first = c->computeVelocityCommands(makePose(0.0, 0.0, 0.0), measured, nullptr);
+  ASSERT_NE(c->mpc()->qp_info.status, proxsuite::proxqp::QPSolverOutput::PROXQP_SOLVED);
+  EXPECT_NEAR(first.twist.linear.x, 1.0 - 2.0 * 0.1, 1e-6);   // no measurement: dt_ fallback
+  const auto cmd = c->computeVelocityCommands(makePose(0.0, 0.0, 0.0), measured, nullptr);
+  ASSERT_NE(c->mpc()->qp_info.status, proxsuite::proxqp::QPSolverOutput::PROXQP_SOLVED);
+  EXPECT_NEAR(cmd.twist.linear.x, 1.0 - 2.0 * 0.1, 1e-6);   // floor: |du_low| * dt_ = 2.0 * 0.1
+}
+
+// The brake period is measured once at the top of the cycle, so a braking path
+// taken after the solve reads the real gap since the previous cycle rather
+// than the near-zero one left by a reset that already ran. Both cycles here
+// take the solver-failure path, which brakes past the diagnostics publication:
+// the deliberate stall between them makes the ramp step the capped 2 * dt_
+// instead of the floored dt_ a dead measurement would produce.
+TEST_F(ProxMpcControllerTest, BrakeMeasuredPeriodAppliesOnThePostSolveFailurePath)
+{
+  auto c = makeConfigured(
+  {
+    rclcpp::Parameter(
+      "FollowPath.model_plugin", std::string("prox_mpc_test_models/AsymmetricBounds")),
+    rclcpp::Parameter("FollowPath.max_int_iter_qp", 1),
+    rclcpp::Parameter("FollowPath.max_ext_iter_qp", 1),
+    rclcpp::Parameter("FollowPath.max_iter_sqp", 1),
+    rclcpp::Parameter("FollowPath.max_solver_failures", 10),
+  });
+  c->activate();
+  c->setPlan(makeStraightPlan(31, 0.2));
+
+  geometry_msgs::msg::Twist measured;
+  measured.linear.x = 1.0;
+  c->computeVelocityCommands(makePose(0.0, 0.0, 0.0), measured, nullptr);
+  ASSERT_NE(c->mpc()->qp_info.status, proxsuite::proxqp::QPSolverOutput::PROXQP_SOLVED);
+
+  std::this_thread::sleep_for(std::chrono::milliseconds(300));   // far past 2 * dt_ = 0.2 s
+
+  const auto cmd = c->computeVelocityCommands(makePose(0.0, 0.0, 0.0), measured, nullptr);
+  ASSERT_NE(c->mpc()->qp_info.status, proxsuite::proxqp::QPSolverOutput::PROXQP_SOLVED);
+  // Capped at 2 * dt_: step = 2.0 * 0.2 = 0.4. A dead measurement would floor
+  // the step at 2.0 * 0.1 = 0.2 and leave 0.8 here.
+  EXPECT_NEAR(cmd.twist.linear.x, 1.0 - 2.0 * 0.2, 1e-6);
+}
+
+// The measured period is capped at kMaxBrakePeriodFactor * dt_ = 0.2 s so a
+// real stall does not collapse one ramp step into an abrupt stop. This case
+// takes the non-finite-pose fail path, which brakes before the solve, and its
+// sibling above takes the solver-failure path, which brakes after it: the
+// period is measured once at the top of the cycle, so both see the same gap.
+TEST_F(ProxMpcControllerTest, BrakeMeasuredPeriodCapsAtTwiceConfiguredDt)
+{
+  auto c = makeConfigured(
+    {rclcpp::Parameter(
+      "FollowPath.model_plugin", std::string("prox_mpc_test_models/AsymmetricBounds"))});
+  c->activate();
+  c->setPlan(makeStraightPlan(31, 0.2));
+
+  // A normal converged cycle, so this cycle's start is recorded as the
+  // reference point the next cycle's stall is measured against.
+  const auto ok = c->computeVelocityCommands(
+    makePose(0.0, 0.0, 0.0), geometry_msgs::msg::Twist(), nullptr);
+  ASSERT_TRUE(std::isfinite(ok.twist.linear.x));
+
+  std::this_thread::sleep_for(std::chrono::milliseconds(500));   // far past 2 * dt_ = 0.2 s
+
+  geometry_msgs::msg::Twist measured;
+  measured.linear.x = 1.0;
+  geometry_msgs::msg::PoseStamped bad = makePose(0.0, 0.0, 0.0);
+  bad.pose.position.x = std::numeric_limits<double>::quiet_NaN();
+  const auto cmd = c->computeVelocityCommands(bad, measured, nullptr);
+
+  // An unclamped ~0.5 s period would apply step = 2.0 * 0.5 = 1.0, saturating
+  // the ramp at zero; the ceiling caps it at 2.0 * 0.2 = 0.4.
+  EXPECT_NEAR(cmd.twist.linear.x, 1.0 - 2.0 * 0.2, 1e-6);
+}
+
+// A positive brake_period_s pins the ramp step and bypasses the measured
+// period entirely, even across a real stall far longer than the pinned value.
+TEST_F(ProxMpcControllerTest, BrakePinnedPeriodIgnoresElapsedTime)
+{
+  auto c = makeConfigured(
+  {
+    rclcpp::Parameter(
+      "FollowPath.model_plugin", std::string("prox_mpc_test_models/AsymmetricBounds")),
+    rclcpp::Parameter("FollowPath.brake_period_s", 0.05),
+    rclcpp::Parameter("FollowPath.max_int_iter_qp", 1),
+    rclcpp::Parameter("FollowPath.max_ext_iter_qp", 1),
+    rclcpp::Parameter("FollowPath.max_iter_sqp", 1),
+    rclcpp::Parameter("FollowPath.max_solver_failures", 10),
+  });
+  c->activate();
+  c->setPlan(makeStraightPlan(31, 0.2));
+
+  geometry_msgs::msg::Twist measured;
+  measured.linear.x = 1.0;
+  c->computeVelocityCommands(makePose(0.0, 0.0, 0.0), measured, nullptr);
+
+  std::this_thread::sleep_for(std::chrono::milliseconds(300));   // far past 0.05 s
+  const auto cmd = c->computeVelocityCommands(makePose(0.0, 0.0, 0.0), measured, nullptr);
+  ASSERT_NE(c->mpc()->qp_info.status, proxsuite::proxqp::QPSolverOutput::PROXQP_SOLVED);
+  EXPECT_NEAR(cmd.twist.linear.x, 1.0 - 2.0 * 0.05, 1e-6);
+}
+
+// The ramp saturates at zero rather than reversing: an over-large step (here,
+// a deliberately oversized pinned period) shortens the stop instead of
+// overshooting past zero into the opposite sign, which is what makes an
+// uncapped or mis-tuned step benign rather than a new failure mode.
+TEST_F(ProxMpcControllerTest, BrakeSaturatesAtZeroRatherThanReversing)
+{
+  auto c = makeConfigured(
+  {
+    rclcpp::Parameter(
+      "FollowPath.model_plugin", std::string("prox_mpc_test_models/AsymmetricBounds")),
+    rclcpp::Parameter("FollowPath.brake_period_s", 1.0),   // step = 2.0 * 1.0 = 2.0
+    rclcpp::Parameter("FollowPath.max_int_iter_qp", 1),
+    rclcpp::Parameter("FollowPath.max_ext_iter_qp", 1),
+    rclcpp::Parameter("FollowPath.max_iter_sqp", 1),
+    rclcpp::Parameter("FollowPath.max_solver_failures", 10),
+  });
+  c->activate();
+  c->setPlan(makeStraightPlan(31, 0.2));
+
+  geometry_msgs::msg::Twist measured;
+  measured.linear.x = 0.5;      // step (2.0) is 4x the measured speed
+  const auto cmd = c->computeVelocityCommands(makePose(0.0, 0.0, 0.0), measured, nullptr);
+  ASSERT_NE(c->mpc()->qp_info.status, proxsuite::proxqp::QPSolverOutput::PROXQP_SOLVED);
+  EXPECT_DOUBLE_EQ(cmd.twist.linear.x, 0.0);    // saturates, never crosses to negative
+}
+
+// Each direction ramps at its own declared rate: braking a forward-moving
+// robot uses du[0]'s lower bound magnitude (2.0), while returning to zero from
+// a reversing robot uses its upper bound magnitude (0.5). brake_period_s is
+// pinned so the comparison is not sensitive to test execution timing. Neither
+// bundled model can show this because both declare symmetric du bounds.
+TEST_F(ProxMpcControllerTest, BrakePreservesAsymmetricDecelerationBoundsPerDirection)
+{
+  auto c = makeConfigured(
+  {
+    rclcpp::Parameter(
+      "FollowPath.model_plugin", std::string("prox_mpc_test_models/AsymmetricBounds")),
+    rclcpp::Parameter("FollowPath.brake_period_s", 0.1),
+    rclcpp::Parameter("FollowPath.max_int_iter_qp", 1),
+    rclcpp::Parameter("FollowPath.max_ext_iter_qp", 1),
+    rclcpp::Parameter("FollowPath.max_iter_sqp", 1),
+    rclcpp::Parameter("FollowPath.max_solver_failures", 10),
+  });
+  c->activate();
+  c->setPlan(makeStraightPlan(31, 0.2));
+
+  geometry_msgs::msg::Twist forward;
+  forward.linear.x = 1.0;
+  const auto cmd_fwd = c->computeVelocityCommands(makePose(0.0, 0.0, 0.0), forward, nullptr);
+  ASSERT_NE(c->mpc()->qp_info.status, proxsuite::proxqp::QPSolverOutput::PROXQP_SOLVED);
+  EXPECT_NEAR(cmd_fwd.twist.linear.x, 1.0 - 2.0 * 0.1, 1e-6);    // du[0] low = -2.0
+
+  geometry_msgs::msg::Twist reverse;
+  reverse.linear.x = -1.0;
+  const auto cmd_rev = c->computeVelocityCommands(makePose(0.0, 0.0, 0.0), reverse, nullptr);
+  ASSERT_NE(c->mpc()->qp_info.status, proxsuite::proxqp::QPSolverOutput::PROXQP_SOLVED);
+  EXPECT_NEAR(cmd_rev.twist.linear.x, -1.0 + 0.5 * 0.1, 1e-6);   // du[0] upp = +0.5
+}
+
+// The bicycle's brake maps through the model's own toTwist physics - for the
+// front-axle model linear.x = v cos(delta) and angular.z = v sin(delta) / L, both
+// the base_link twist - rather than a twist-space ramp of the measured yaw rate,
+// and a pinned brake_period_s steps both the speed ramp and the steering decay by
+// the same pinned amount rather than the measured period
+// BrakeMeasuredPeriodCapsAtTwiceConfiguredDt exercises.
+//
+// The speed channel of this model is the front-wheel speed, so the ramp starts
+// from the speed the model's own inverse recovers from the measured base_link
+// twist, not from that twist's linear.x: the measurement below is exactly what
+// the model emits for a front-wheel speed of 1.0 at the current steering angle,
+// and the ramp is expected to start from 1.0. Seeding the channel with
+// linear.x instead would start it at 1.0 * cos(0.5) and project it a second
+// time on the way out.
+TEST_F(ProxMpcControllerTest, BicycleBrakeMapsThroughToTwistWithPinnedPeriod)
+{
+  auto c = makeConfigured(
+  {
+    rclcpp::Parameter("FollowPath.model_plugin", std::string(kBicyclePlugin)),
+    rclcpp::Parameter("FollowPath.brake_period_s", 0.2),
+    rclcpp::Parameter("FollowPath.max_int_iter_qp", 1),
+    rclcpp::Parameter("FollowPath.max_ext_iter_qp", 1),
+    rclcpp::Parameter("FollowPath.max_iter_sqp", 1),
+    rclcpp::Parameter("FollowPath.max_solver_failures", 10),
+  });
+  c->activate();
+  c->setPlan(makeStraightPlan(31, 0.2));
+  const double delta0 = 0.5;
+  c->steeringState() = delta0;
+
+  const double v_front = 1.0;
+  geometry_msgs::msg::Twist measured;
+  measured.linear.x = v_front * std::cos(delta0);
+  measured.angular.z = v_front * std::sin(delta0) / kBicycleWheelbase;
+  const auto cmd = c->computeVelocityCommands(makePose(0.0, 0.0, 0.0), measured, nullptr);
+  ASSERT_NE(c->mpc()->qp_info.status, proxsuite::proxqp::QPSolverOutput::PROXQP_SOLVED);
+
+  const double expected_v = v_front - kModelDecel * 0.2;         // du[0] bound, pinned period
+  const double expected_delta = delta0 - kSteerRateBound * 0.2;  // u[1] bound, pinned period
+  EXPECT_NEAR(cmd.twist.linear.x, expected_v * std::cos(expected_delta), 1e-9);
+  EXPECT_NEAR(
+    cmd.twist.angular.z, expected_v * std::sin(expected_delta) / kBicycleWheelbase, 1e-9);
+}
+
+// The rear-axle model's speed control is already the base_link speed, so its
+// brake starts from the measured linear.x exactly as it did before the speed
+// channel was seeded through the model's inverse: the base class inverse reads
+// linear.x straight out. Its steering rate is not observable in a twist, so
+// that channel still decays from the steering belief at the model's own rate
+// bound and the emitted yaw rate is v tan(delta) / L.
+TEST_F(ProxMpcControllerTest, RearAxleBrakeSeedsFromMeasuredBaseLinkSpeed)
+{
+  auto c = makeConfigured(
+  {
+    rclcpp::Parameter(
+      "FollowPath.model_plugin", std::string("prox_mpc_core/BicycleRearAxle")),
+    rclcpp::Parameter("FollowPath.brake_period_s", 0.2),
+    rclcpp::Parameter("FollowPath.max_int_iter_qp", 1),
+    rclcpp::Parameter("FollowPath.max_ext_iter_qp", 1),
+    rclcpp::Parameter("FollowPath.max_iter_sqp", 1),
+    rclcpp::Parameter("FollowPath.max_solver_failures", 10),
+  });
+  c->activate();
+  c->setPlan(makeStraightPlan(31, 0.2));
+  const double delta0 = 0.5;
+  c->steeringState() = delta0;
+
+  geometry_msgs::msg::Twist measured;
+  measured.linear.x = 1.0;
+  measured.angular.z = 1.0 * std::tan(delta0) / kBicycleWheelbase;
+  const auto cmd = c->computeVelocityCommands(makePose(0.0, 0.0, 0.0), measured, nullptr);
+  ASSERT_NE(c->mpc()->qp_info.status, proxsuite::proxqp::QPSolverOutput::PROXQP_SOLVED);
+
+  const double expected_v = 1.0 - kModelDecel * 0.2;
+  const double expected_delta = delta0 - kSteerRateBound * 0.2;
+  EXPECT_NEAR(cmd.twist.linear.x, expected_v, 1e-9);
+  EXPECT_NEAR(
+    cmd.twist.angular.z, expected_v * std::tan(expected_delta) / kBicycleWheelbase, 1e-9);
+}
+
+// Both bicycles declare their steering rate undetermined in a body twist, so
+// that channel is never seeded from the measurement however large the measured
+// yaw rate is: it decelerates from its last commanded value under the model's
+// own du[1] bound. The channel is read back directly because the emitted twist
+// derives its yaw rate from the decayed steering angle rather than from control
+// 1, so nothing on the wire distinguishes the two seeds.
+TEST_F(ProxMpcControllerTest, BicycleBrakeHoldsTheUndeterminedSteeringRate)
+{
+  for (const char * plugin : {kBicyclePlugin, "prox_mpc_core/BicycleRearAxle"}) {
+    SCOPED_TRACE(plugin);
+    auto c = makeConfigured(
+    {
+      rclcpp::Parameter("FollowPath.model_plugin", std::string(plugin)),
+      rclcpp::Parameter("FollowPath.brake_period_s", 0.2),
+      rclcpp::Parameter("FollowPath.max_int_iter_qp", 1),
+      rclcpp::Parameter("FollowPath.max_ext_iter_qp", 1),
+      rclcpp::Parameter("FollowPath.max_iter_sqp", 1),
+      rclcpp::Parameter("FollowPath.max_solver_failures", 10),
+    });
+    c->activate();
+    c->setPlan(makeStraightPlan(31, 0.2));
+    ASSERT_EQ(c->lastCmdU().size(), 2);
+    c->lastCmdU()(1) = 0.4;      // last commanded steering rate [rad/s]
+
+    geometry_msgs::msg::Twist measured;
+    measured.linear.x = 1.0;
+    measured.angular.z = 1.0;    // a body yaw rate the steering channel must not adopt
+    c->computeVelocityCommands(makePose(0.0, 0.0, 0.0), measured, nullptr);
+    ASSERT_NE(c->mpc()->qp_info.status, proxsuite::proxqp::QPSolverOutput::PROXQP_SOLVED);
+
+    // 0.4 ramped toward zero at du[1] over the pinned period, not 1.0 ramped.
+    EXPECT_NEAR(c->lastCmdU()(1), 0.4 - kModelDecel * 0.2, 1e-9);
+    c->cleanup();
   }
 }
 

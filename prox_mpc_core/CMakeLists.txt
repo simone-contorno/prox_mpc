@@ -10,9 +10,20 @@ if(NOT CMAKE_BUILD_TYPE)
   set(CMAKE_BUILD_TYPE "Release")
 endif()
 
-# Compiler warnings
-if(CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
-  add_compile_options(-Wall -Wextra -Wpedantic)
+# Compiler warnings, matching upstream Nav2's package-level policy
+# (nav2_common/cmake/nav2_package.cmake) so this package is held to the same
+# bar as every other Nav2 plugin it ships alongside.
+if(CMAKE_CXX_COMPILER_ID MATCHES "GNU" OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+  add_compile_options(-Wall -Wextra -Wpedantic -Werror -Wdeprecated -fPIC -Wshadow -Wnull-dereference)
+  # GCC 13 raises -Wnull-dereference inside libstdc++'s own <regex> headers
+  # (stl_algobase.h, reached through regex_traits::transform_primary) once
+  # --coverage changes its inlining decisions, which is how the coverage build
+  # hits it and an ordinary build does not. The report is attributed to the
+  # translation unit that instantiates the template, so -Wno-system-headers
+  # does not reach it. Keep the diagnostic, but do not let a false positive in
+  # the standard library fail the build.
+  add_compile_options(-Wno-error=null-dereference)
+  add_compile_options("$<$<COMPILE_LANGUAGE:CXX>:-Wnon-virtual-dtor>")
 endif()
 
 # Remove Eigen's internal assertions in the hot path (safe under Release)
@@ -81,7 +92,8 @@ ament_target_dependencies(${PROJECT_NAME}_models
 )
 
 # Export prox_mpc::Model as a pluginlib base so models are selected outside the
-# core (no core edit per new model). Bicycle/Unicycle are the bundled plugins.
+# core (no core edit per new model). The bundled plugins are BicycleFrontAxle,
+# BicycleRearAxle, the deprecated Bicycle alias, and Unicycle.
 pluginlib_export_plugin_description_file(prox_mpc_core prox_mpc_core_plugins.xml)
 
 # Install
@@ -123,14 +135,24 @@ if(BUILD_TESTING)
   find_package(ament_cmake_gtest REQUIRED)
 
   # (a) model interface, (b) regression baseline, (c) custom model, (d) obstacle K,
-  # (e) ROS-facing utils helpers
+  # (e) ROS-facing utils helpers, (f) transactional solve/commit contract,
+  # (g) post-init configuration lifecycle and goal/obstacle shape validation,
+  # (h) the deprecated alias's once-per-process warning, which needs a process
+  #     where nothing else has constructed the alias first
   foreach(test_name
       test_model_interface
       test_mpc_regression
       test_custom_model
       test_obstacle_k
-      test_utils)
-    ament_add_gtest(${test_name} test/${test_name}.cpp)
+      test_utils
+      test_transactional_solve
+      test_config_lifecycle
+      test_deprecated_alias)
+    # None of these targets fit inside CTest's 60 s default once ASan/UBSan
+    # instrumentation is linked in (test_obstacle_k alone needs ~57 s), so every
+    # target in this loop gets the same generous budget rather than singling one
+    # out; a slower CI runner is covered too.
+    ament_add_gtest(${test_name} test/${test_name}.cpp TIMEOUT 300)
     target_link_libraries(${test_name}
       ${PROJECT_NAME}
       Eigen3::Eigen

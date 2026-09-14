@@ -111,6 +111,9 @@ controller_server:
       model_plugin: "prox_mpc_core/Unicycle"
       model_params:
         L: 0.0              # unused by the unicycle; kept for interface symmetry
+        # Reverse bound [m/s]. Naming it explicitly is what states this platform's
+        # real reverse envelope, rather than inheriting the model literal.
+        v_min: -0.15
 
       # Horizons and step.
       np: 20
@@ -128,12 +131,12 @@ controller_server:
       q_theta: 1.0
       s_factor: 2.0
       r_weight: 0.1
-      w_weight: 100.0
+      w_weight: 1000.0
 
       # Solver limits (core defaults).
       max_int_iter_qp: 1500
       max_ext_iter_qp: 10000
-      max_iter_sqp: 100
+      max_iter_sqp: 1
       qp_type: false
       guess: true
       max_solver_failures: 3
@@ -144,8 +147,10 @@ controller_server:
       # feature is opt-in and lives in nav2_prox_mpc_predictive.yaml; enable it with
       # `predictive:=True`.
       max_obstacles: 0
-      safety_margin: 0.1
-      robot_radius: 0.22
+      # 0.085 with robot_radius 0.235 keeps d_safe at 0.320 m; the radius is the
+      # footprint's circumscribed value and the margin is the discretionary part.
+      safety_margin: 0.085
+      robot_radius: 0.235
       cbf_gamma: 1.0
       costmap_cost_threshold: 200
       obstacle_cluster_radius: 0.3
@@ -153,6 +158,20 @@ controller_server:
       # Predictive obstacle avoidance is disabled in the baseline (inert while
       # max_obstacles is 0). See nav2_prox_mpc_predictive.yaml to enable it.
       predict_obstacles: false
+
+
+      # Whether the solver may plan reverse travel at all. False narrows the
+      # linear control bound to [0, v_max]. On, so the demo shows the robot
+      # backing up to adjust and then pursuing the path forward, the way a
+      # vehicle manoeuvres. Reverse stays capped at 0.15 m/s by the controller's
+      # own guard: both guards follow the predicted trajectory and so do cover a
+      # reversing one, but they see only what the costmap holds, and whether the
+      # platform sweeps behind itself is a property of its sensor. The waffle's
+      # lidar is 360 degrees, so the rear is covered here. The goal
+      # region no longer alternates on an open reverse bound - the reference is
+      # pinned to the goal pose there, and the robot turns on the spot for the
+      # last of the heading. See doc/nav2-simulation.md.
+      allow_reversing: true
 
       log_level: "info"
 
@@ -164,6 +183,9 @@ local_costmap:
       global_frame: odom
       robot_base_frame: base_link
       rolling_window: true
+      # Unobserved cells are marked NO_INFORMATION rather than defaulting to
+      # free space, so the costmap does not claim to have seen what it has not.
+      track_unknown_space: true
       width: 3
       height: 3
       resolution: 0.05

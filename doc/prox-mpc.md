@@ -33,7 +33,8 @@ The dynamics of a real vehicle are nonlinear, so the optimal-control problem is 
 ProxMPC solves it with **Sequential Quadratic Programming (SQP)**: it linearises the dynamics around the current guess, assembles a **Quadratic Program (QP)**, and solves that QP with the [ProxQP](https://github.com/Simple-Robotics/proxsuite) solver, re-linearising and retrying only while the sub-problem fails to converge. In the nominal case that is one linearise-solve-update pass per control cycle, with the linearisation refined across cycles through the trajectory warm start ([nmpc.md](../prox_mpc_core/doc/nmpc.md)).
 A useful consequence falls out for free: if the model is already linear, the first QP is exact and the SQP converges in a single solve.
 
-Safety is split into two layers that recur throughout the stack: a **fast, convex** keep-out constraint lives *inside* the optimisation so the solver shapes a trajectory that avoids obstacles, and an **exact, conservative** check sits *outside* it as a veto, so a command that would actually collide is never issued.
+Safety is split into two layers that recur throughout the stack: a **fast, convex** keep-out constraint lives *inside* the optimisation so the solver shapes a trajectory that avoids obstacles, and an **outline-only footprint veto** sits *outside* it as a backstop on the single pose the solver predicts one step ahead.
+The veto rasterises only the footprint perimeter and reports the maximum edge cost, with no interior fill and no sweep between the current and the next commanded pose, so it is a backstop rather than a guarantee: it earns its keep only when costmap inflation is sized to the robot's real footprint and the local costmap's unknown-space tracking matches the deployment ([Section 4](#4-prox_mpc_controller---the-nav2-plugin)).
 
 The full derivation - cost function, the Euler linearisation, the KKT/QP assembly, convergence, and the obstacle constraints - is in the engine's own docs:
 
@@ -51,11 +52,11 @@ Three classes in the `prox_mpc` namespace do the work:
 
 - `prox_mpc::Model` - the vehicle interface.
   A model supplies the Euler linearisation (`updateA`, `updateB`, `updatec`) and, optionally, `configure(params)` (set constants by name) and `toTwist(u)` (map a control vector to a `geometry_msgs/msg/Twist`).
-  `Model` is a `pluginlib` base type; the bundled `prox_mpc_core/Bicycle` (4-state, with a steering angle) and `prox_mpc_core/Unicycle` (3-state) are registered against it.
+  `Model` is a `pluginlib` base type; the bundled `prox_mpc_core/BicycleFrontAxle` and `prox_mpc_core/BicycleRearAxle` (4-state, with a steering angle) and `prox_mpc_core/Unicycle` (3-state) are registered against it, along with `prox_mpc_core/Bicycle` as a deprecated alias for the front-axle model.
 - `prox_mpc::ProxQP` - assembles the QP for one linearisation and solves it with ProxQP.
 - `prox_mpc::MPC` - the SQP driver: it holds the horizons, weights, and obstacle capacity, runs the SQP loop, and exposes the solution plus the solver telemetry (`qp_info`, `sqp_iter`, `qp_iter_ext`, and the peak obstacle slack).
 
-Because the model is loaded *by name*, adding a vehicle needs no change to the engine or its consumers - that is the extension seam the whole workspace is organised around.
+Because the model is loaded *by name*, adding a vehicle needs no change to the engine or its consumers - that is the extension seam the whole workspace is organised around. That holds with obstacle avoidance on as well: the obstacle-constraint assembly reads the planar position's state indices from the model's declared mapping rather than assuming a layout.
 
 **How to use it.**
 Construct an `MPC`, set the horizons/weights/obstacle capacity, `init()` it with a `Model`, then each cycle set the reference, pose, and obstacles and call `solve()`.
@@ -94,9 +95,9 @@ Each `computeVelocityCommands` cycle the plugin:
 1. transforms the global plan into the costmap global frame and samples a state/control reference along it by arc length (continuous, unwrapped heading; a curvature-aware steering reference for the bicycle; goal-approach easing);
 2. reduces the local costmap to the engine's obstacle triples - a clustered, windowed scan for occupied cells - and, when predictive avoidance is on, propagates tracked dynamic obstacles over the horizon and binds each to a constraint slot (hybrid fill);
 3. solves one SQP cycle, times it, and (opt-in) publishes a `SolverDiagnostics`;
-4. gates the result: a non-converged or non-finite solve, or a command that fails the **exact polygon-footprint veto**, decelerates from the measured velocity at the model's limit and escalates to a Nav2 recovery after `max_solver_failures` consecutive faults (the veto counting on its own budget).
+4. gates the result: a non-converged or non-finite solve, or a command that fails the **outline-only footprint veto**, decelerates from the measured velocity at the model's limit and escalates to a Nav2 recovery after `max_solver_failures` consecutive faults (the veto counting on its own budget).
 
-This is the two-layer safety split in practice: the in-loop disc constraint shapes the trajectory; the footprint veto is the conservative backstop.
+This is the two-layer safety split in practice: the in-loop disc constraint shapes the trajectory; the footprint veto is an outline-only backstop, not a guarantee.
 
 **How to use it.**
 Point `controller_server`'s `FollowPath` at the plugin and load its parameters; the bundled config is the single source of truth.
@@ -107,7 +108,7 @@ controller_server:
     controller_plugins: ["FollowPath"]
     FollowPath:
       plugin: "prox_mpc_controller::ProxMpcController"
-      model_plugin: "prox_mpc_core/Unicycle"   # or prox_mpc_core/Bicycle
+      model_plugin: "prox_mpc_core/Unicycle"   # or prox_mpc_core/BicycleFrontAxle / BicycleRearAxle
       # horizons, weights, solver limits, obstacle settings:
       # see config/prox_mpc_controller.yaml and doc/architecture.md
 ```
@@ -186,7 +187,7 @@ The scenario-driven harness that *measures* the stack across three metric classe
 A controller-agnostic C++ live metrics node measures pose-based accuracy (cross-track against the scenario reference polyline, goal error, time-to-goal, path length) from generic signals (TF pose) and taps the `SolverDiagnostics` stream for the real-time/feasibility class, writing one per-run JSON.
 Installed Python tooling orchestrates the matrix, generates scaled maps, sends goals, and aggregates the per-run JSONs into mean ± std tables.
 A small C++ **kinematic plant** integrates a controller's body twist as a unicycle and publishes `/odom` + TF, so the stock Nav2 controllers and ProxMPC can be compared on the identical plant without Gazebo (mode b2).
-On that comparison a **resource sampler** records the `controller_server` process's CPU and memory (from `/proc`) and the achieved control rate, and a **`nav2_core::Controller` timing decorator** wraps whichever controller is under test and wall-clock times its `computeVelocityCommands` identically, so the cross-controller comparison covers the embedded cost (per-cycle compute, CPU, RAM, frequency) at a fairly-matched operating point, not only tracking - see the [comparison results](controller-comparison-results.md#4-per-cycle-compute-cost-and-process-resources).
+On that comparison a **resource sampler** records the `controller_server` process's CPU and memory (from `/proc`) and the achieved control rate, and a **`nav2_core::Controller` timing decorator** wraps whichever controller is under test and wall-clock times its `computeVelocityCommands` identically, so the cross-controller comparison covers the runtime cost (per-cycle compute, CPU, RAM, frequency) at a fairly-matched operating point, not only tracking - see the [comparison results](controller-comparison-results.md#4-per-cycle-compute-cost-and-process-resources).
 
 **How to use it.**
 
@@ -218,10 +219,10 @@ The [architecture overview](architecture.md) draws the runtime data flow for eac
 
 ## 10. Extending ProxMPC: add a vehicle model
 
-The `prox_mpc::Model` interface is the one seam you extend to support a new vehicle, and it ripples nowhere else:
+The `prox_mpc::Model` interface is the one seam you extend to support a new vehicle:
 
-1. Derive from `prox_mpc::Model` and implement `updateA`/`updateB`/`updatec` (the Euler linearisation), plus `configure(params)` and `toTwist(u)`.
-2. Register it as a `pluginlib` plugin against the `prox_mpc::Model` base (as `prox_mpc_core` does for `Bicycle`/`Unicycle` and `prox_mpc_test_models` does for its fixture).
+1. Derive from `prox_mpc::Model` and implement `updateA`/`updateB`/`updatec` (the Euler linearisation), plus `configure(params)` and `toTwist(u)`. A model whose state is not ordered `[x, y, yaw, ...]` overrides `getPlanarMapping()` to say where each planar quantity sits; the engine's obstacle-constraint assembly indexes through that declaration, so obstacle avoidance works for any ordering.
+2. Register it as a `pluginlib` plugin against the `prox_mpc::Model` base (as `prox_mpc_core` does for `BicycleFrontAxle`/`BicycleRearAxle`/`Unicycle` and `prox_mpc_test_models` does for its fixture).
 3. Select it by name (`model_plugin`) in the controller or the demo - no consumer code changes.
 
 The model interface details are in [`prox_mpc_core/README.md`](../prox_mpc_core/README.md) and [`prox_mpc_core/doc/architecture.md`](../prox_mpc_core/doc/architecture.md); `prox_mpc_test_models` is a minimal worked example of a third-party model registered against the core base.
@@ -231,7 +232,7 @@ The model interface details are in [`prox_mpc_core/README.md`](../prox_mpc_core/
 These hold across the workspace and are documented once in the [architecture overview](architecture.md#cross-cutting-conventions):
 
 - **Frames** - REP-103 conventions; the tracker estimates velocity in a fixed, non-rotating frame and the controller transforms plans and obstacles into the costmap global frame via `tf2`.
-- **Safety split** - a fast convex disc constraint inside the optimisation, plus an exact polygon-footprint veto and a limit-respecting deceleration outside it.
+- **Safety split** - a fast convex disc constraint inside the optimisation, plus an outline-only, single-endpoint footprint veto and a limit-respecting deceleration outside it.
 - **Types** - all MPC quantities are `double`; ROS parameters are `double` / `int` / `bool` / `string` only.
 - **Build** - `Release` (`-O3 -DNDEBUG`) by default behind an `if(NOT CMAKE_BUILD_TYPE)` guard; never `-Ofast` / `-ffast-math` for the solver (it breaks the IEEE-754 semantics the convergence and finiteness guards rely on); per-board CPU tuning stays out of the source.
 - **License** - Apache-2.0 across the workspace, with a short `SPDX-License-Identifier` header per file and the full text in `LICENSE`.

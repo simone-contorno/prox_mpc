@@ -29,6 +29,8 @@ driving a TurtleBot3 waffle under a full Nav2 stack in Gazebo Harmonic (see
 
 ## Documentation
 
+- [doc/migration.md](doc/migration.md) - what changed on the released surface
+  since 1.0.0, and what a deployment has to do about it.
 - [doc/architecture.md](doc/architecture.md) - the Nav2 integration design:
   responsibility split, the controller lifecycle, the per-cycle data flow, the
   interfaces and QoS, the full parameter reference, and the two safety layers.
@@ -43,20 +45,28 @@ driving a TurtleBot3 waffle under a full Nav2 stack in Gazebo Harmonic (see
 - **NMPC behind `nav2_core::Controller`:** one SQP cycle per control step over the
   ProxQP solver; linear models converge in a single QP solve.
 - **Model selected by configuration:** the vehicle model is loaded with
-  `pluginlib` (`model_plugin`, e.g. `prox_mpc_core/Bicycle` or
+  `pluginlib` (`model_plugin`, e.g. `prox_mpc_core/BicycleFrontAxle` or
   `prox_mpc_core/Unicycle`), so switching the robot model needs no code change.
 - **Plan-following reference:** arc-length sampling of the global plan with a
   continuous (unwrapped) heading, a curvature-aware steering reference for the
   bicycle, optional curvature-based cruise reduction, and goal-checker approach
   easing.
 - **Two-layer obstacle avoidance:** a fast in-loop disc constraint built from the
-  local costmap (clustered, windowed scan) shapes the trajectory, and an exact
-  polygon-footprint check vetoes any command that would collide.
-- **Predictive (dynamic) obstacle avoidance (opt-in):** consumes tracked
+  local costmap (clustered, windowed scan) shapes the trajectory, and an
+  outline-only footprint check, walked along the predicted trajectory as far as
+  the robot's own stopping distance, vetoes a command whose rasterised footprint
+  perimeter crosses a lethal cell.
+  It is a backstop, not a guarantee: it depends on costmap inflation sized to
+  the robot and on the local costmap's unknown-space tracking to be effective.
+- **Predictive (dynamic) obstacle avoidance (on by default):** consumes tracked
   obstacles, follows each track's tracker-sampled predicted trajectory over the
   horizon (a constant-velocity ray when no samples are provided), binds it to a
   fixed constraint slot, and fills the remaining slots from the costmap (hybrid);
-  off by default, reproducing the costmap-only behavior bit-for-bit.
+  `predict_obstacles: false` reproduces the costmap-only behavior bit-for-bit.
+  The costmap-only fill reads one present-time costmap for every horizon node, so
+  a moving obstacle is constrained where it was rather than where it will be.
+  It is validated for single-obstacle environments; with more than one mover the
+  error closes the gap the plan was routed through, and the tracker is required.
 - **Safe failure handling:** a non-converged or non-finite solve decelerates from
   the measured velocity at the robot's limit and escalates to a Nav2 recovery
   after `max_solver_failures` consecutive failures; `cancel()` ramps to a stop
@@ -145,7 +155,7 @@ disabled (single formatter, and a short SPDX header per file with the full text 
   overlay is not sourced, or the package failed to build against Nav2.
 - **`controller_server` aborts at configure with a model-load error:** the
   `model_plugin` name is wrong or its package is not on the overlay; the valid
-  bundled names are `prox_mpc_core/Bicycle` and `prox_mpc_core/Unicycle`.
+  bundled names are `prox_mpc_core/Unicycle`, `prox_mpc_core/BicycleFrontAxle` and `prox_mpc_core/BicycleRearAxle`, plus `prox_mpc_core/Bicycle` as a deprecated alias for the front-axle model.
 - **Robot rotates in place instead of translating:** the cruise speed samples the
   reference too close to the robot; raise `desired_linear_vel` toward the model's
   speed bound (see the config notes in the

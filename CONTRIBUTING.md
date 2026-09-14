@@ -62,9 +62,12 @@ that pattern.
 
 ## Commit conventions
 
-- **Branching follows GitHub Flow**: `main` is the stable branch, `dev` is the
-  integration branch, and topic work happens on `feat/*`, `fix/*`, `chore/*`,
-  or `test/*` branches merged in via pull request.
+- **Branching follows GitHub Flow**: `main` is the stable branch, and topic work
+  happens on `feat/*`, `fix/*`, `chore/*`, or `test/*` branches merged in via
+  pull request. A release is prepared on a `release/<version>` branch, which is
+  squash-merged into `main` so that `main` carries one commit per release; the
+  release branch is kept, not deleted, because it is where that release's
+  reviewable and bisectable history lives.
 - **Commit messages follow Conventional Commits**, scoped to the package or
   area they touch, matching real history in this repo, for example:
   - `feat(controller): predictive dynamic-obstacle avoidance and model speed-cap forwarding`
@@ -142,7 +145,24 @@ that pattern.
   Clang and `-Wthread-safety` - it does not run tests, only the
   thread-safety-annotated build, so a change to mutex-guarded state in
   `prox_mpc_controller` or `prox_mpc_obstacle_tracker` should also be checked
-  against that build if you touch shared/guarded state.
+  against that build if you touch shared/guarded state. A third CI job,
+  `sanitizers`, rebuilds Debug with AddressSanitizer and
+  UndefinedBehaviorSanitizer and cancels every package's directory-scope
+  `EIGEN_NO_DEBUG` define, so Eigen's own bounds assertions run alongside the
+  sanitizers - the ordinary `build-and-test` job cannot see an out-of-range
+  Eigen access, because `EIGEN_NO_DEBUG` stays defined there for solver-hot-path
+  performance. Reproduce it locally with:
+
+  ```bash
+  colcon build --symlink-install --build-base build_asan --install-base install_asan \
+    --cmake-args -DCMAKE_BUILD_TYPE=Debug \
+      -DCMAKE_CXX_FLAGS="-UEIGEN_NO_DEBUG -fsanitize=address,undefined -fno-omit-frame-pointer -fno-sanitize-recover=all -O1 -g" \
+      -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=address,undefined" \
+      -DCMAKE_SHARED_LINKER_FLAGS="-fsanitize=address,undefined" \
+    --no-warn-unused-cli
+  UBSAN_OPTIONS=print_stacktrace=1 colcon test --build-base build_asan --install-base install_asan \
+    --return-code-on-test-failure
+  ```
 - **Coverage: aspirational target, not an enforced CI gate.** The house
   convention (see the `ros2-testing-ci` skill) targets >= 95% line coverage.
   In this repo today, CI generates a filtered `lcov` report
