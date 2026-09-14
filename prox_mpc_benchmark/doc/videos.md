@@ -234,6 +234,7 @@ All artifacts land under `results/videos/` (gitignored):
 | `--goal-delay` | `3` | wait after the capture starts before the goal is sent [s]; the clip is cut at first motion, so this is not dead time in the clip |
 | `--timeout` | `55` | goal timeout passed to `goal_sender.py` [s] |
 | `--out-dir` | `results/videos` | clip output directory |
+| `--gpu-offload` | off | render RViz on the NVIDIA GPU through PRIME render offload (`__NV_PRIME_RENDER_OFFLOAD=1`, `__GLX_VENDOR_LIBRARY_NAME=nvidia`, set for RViz alone); needs a real X server running the NVIDIA driver and does not work on a virtual Xvfb display, which has no hardware GL |
 
 `combine_grid.sh`:
 
