@@ -81,11 +81,25 @@ default on Ubuntu 24.04) the X server is rootless `Xwayland`: the compositor dra
 each window through Wayland, so the grabbable X root stays **black** and every clip
 records black regardless of what is on screen. Pick one of:
 
-- **Xorg session (simplest, GPU-rendered):** log in via the GDM gear menu as
-  "Ubuntu on Xorg", then run the recorder unchanged (it captures `$DISPLAY`, `:0`).
-- **Virtual Xvfb display (headless, scriptable - how the bundled clips were made):**
+- **Xorg session (GPU-rendered - how the bundled clips are made):** log in via the
+  GDM gear menu as "Ubuntu on Xorg". On a desktop session RViz has to run
+  fullscreen - the window manager keeps a normal window off its panels, so a
+  windowed capture picks up the dock, the top bar and the title bar - and the grab
+  has to cover the whole screen; the grid combiner scales each clip to its cell. On a
+  hybrid-graphics laptop add `--gpu-offload` so RViz renders on the NVIDIA GPU:
+
+  ```bash
+  ros2 run prox_mpc_benchmark record_scenarios.py --display :0 \
+    --resolution 2560x1440 --fullscreen --gpu-offload
+  ```
+
+  Set `--resolution` to your screen size. The capture includes the mouse pointer and
+  anything that appears on screen, so leave the desktop alone while it records.
+- **Virtual Xvfb display (headless, scriptable, no screen taken over):**
   start a virtual X server sized to the capture, then point the recorder at it with
-  `--display`. RViz falls back to software GL (llvmpipe), which renders correctly:
+  `--display`. RViz falls back to software GL (llvmpipe), which renders correctly but
+  on the CPU: alongside the Nav2 stack it draws well below the capture rate, so
+  frames repeat and the clips look choppy:
 
   ```bash
   Xvfb :99 -screen 0 1920x1080x24 +extension GLX +render -nolisten tcp &
@@ -111,10 +125,12 @@ Xvfb :99 -screen 0 1920x1080x24 +extension GLX +render -nolisten tcp &
 ros2 run prox_mpc_benchmark record_scenarios.py --display :99
 ```
 
-On a native Xorg session the no-argument form captures `:0` directly:
+On a native Xorg desktop session record fullscreen over the whole screen, adding
+`--gpu-offload` on a hybrid-graphics laptop:
 
 ```bash
-ros2 run prox_mpc_benchmark record_scenarios.py
+ros2 run prox_mpc_benchmark record_scenarios.py --display :0 \
+  --resolution 2560x1440 --fullscreen --gpu-offload
 ```
 
 The equivalent fully-explicit invocation:
