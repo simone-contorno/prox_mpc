@@ -4,8 +4,8 @@
 
 | Version | Supported |
 | --- | --- |
-| 1.0.0 | Yes |
-| < 1.0.0 | No |
+| 2.0.0 | Yes |
+| < 2.0.0 | No |
 
 This repository ships seven ROS 2 Jazzy packages from a single source tree and
 releases them together, so a fix lands for all of them at once. Only the latest
@@ -84,8 +84,12 @@ Stated plainly so nobody assumes a scan is catching things it is not.
 **Runs today** (`.github/workflows/ci.yaml`): least-privilege
 `permissions: contents: read`; every third-party action pinned by full commit
 SHA; `ament_cppcheck` under `colcon test` with
-`AMENT_CPPCHECK_ALLOW_SLOW_VERSIONS` set so it does not silently no-op; and a
-separate `clang-tsa` job that rebuilds the workspace under `-Wthread-safety`.
+`AMENT_CPPCHECK_ALLOW_SLOW_VERSIONS` set so it does not silently no-op; a
+`sanitizers` job that rebuilds the workspace `Debug` under AddressSanitizer and
+UndefinedBehaviorSanitizer with `-fno-sanitize-recover=all`, leak detection on,
+and Eigen's own bounds assertions live, then runs the full test suite; and a
+separate `clang-tsa` job that rebuilds the workspace under
+`-Werror=thread-safety`, so an unguarded access to shared state fails the build.
 
 **Does not run:** no secret scanner, no CodeQL or other deep SAST, and no
 dependency-CVE audit (`pip-audit` / `trivy` / `grype` / OSV).
