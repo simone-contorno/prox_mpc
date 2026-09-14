@@ -10,7 +10,7 @@ diff and is not stated here.
 | Change | Source compatible | ABI compatible | Wire compatible |
 | --- | --- | --- | --- |
 | `model_plugin` defaults to `prox_mpc_core/Unicycle` | yes | yes | yes |
-| New `allow_reversing` parameter, default `false` | yes | yes | yes |
+| New `allow_reversing` parameter, default `false`, closes the reverse travel 1.0.0 always allowed | yes | yes | yes |
 | New `reverse_from_plan_orientation` parameter, default `false` | yes | yes | yes |
 | New `direction_switch_standstill_speed_mps` / `direction_switch_dwell_s` parameters | yes | yes | yes |
 | New `goal_settle_hysteresis_m` parameter, default `0.10` | yes | yes | yes |
@@ -19,6 +19,7 @@ diff and is not stated here.
 | The reference is pinned to the goal pose inside the goal-checker xy tolerance | yes | yes | yes |
 | New `brake_period_s` parameter, default `0.0` | yes | yes | yes |
 | `ProxMpcController` gains `readModelMapping()` and cached mapping members | yes | **no** | yes |
+| `fillStaticObstacles`, `reduceCostmap` and `publishDiagnostics` change signature; `a_dec_lin_`/`a_dec_ang_` are renamed | **no, for a class deriving from `ProxMpcController`** | **no** | yes |
 | The model contract is validated at `configure()` and rejects what cannot be driven | yes | yes | yes |
 | The in-loop keep-out is centred on `base_link` | yes | yes | yes |
 | The deceleration ramp runs in control space, through the model's `toTwist()` | yes | yes | yes |
@@ -49,6 +50,23 @@ FollowPath:
 Choose by where the model's state refers: `BicycleFrontAxle` puts `(x, y)` at the
 front axle, `BicycleRearAxle` at the rear axle, which is the `base_link` origin
 for a car-like base. `prox_mpc_core/Bicycle` maps to the front-axle model.
+
+## Reverse travel is now opt-in
+
+1.0.0 had no reverse switch. Its reference only asked for forward travel, but the
+solver's linear control bound was symmetric, `[-v_max, v_max]`, so the solver
+could plan reverse on its own - backing out of a closing gap, for instance.
+
+The new `allow_reversing` parameter defaults to `false`, which narrows that bound
+to `[0, v_max]`. A deployment that upgrades without setting it no longer reverses
+at all.
+
+To keep reverse travel, set `allow_reversing: true`. Without an explicit negative
+`model_params.v_min`, reverse is then capped at 0.15 m/s, because the footprint
+veto and the keep-out see only what the costmap holds, and whether the platform
+senses behind itself is a property of its sensor rather than of this plugin. Set
+`model_params.v_min` to allow a faster reverse once the platform's rear coverage
+is known.
 
 ## Closed-loop behaviour of a bicycle model changed
 
@@ -206,9 +224,11 @@ direction switching are inert unless `reverse_from_plan_orientation` is set.
 | `obstacle_yield_caps_speed` | bool | `false` | - | Makes that yield cap the solver's forward speed bound rather than only lowering a cruise target the obstacle term can override. Requires `obstacle_yield_band_m > 0`. |
 | `brake_period_s` | double | `0.0` | s | Step the deceleration ramp advances by on a braking cycle. `0.0` measures the inter-cycle period instead and clamps it into `[dt, 2 * dt]`; a positive value overrides the measurement and is used as-is. |
 
-`allow_reversing`'s default reproduces the previous forward-only reference. With
-it on, a model that declares no reverse travel keeps the forward-only reference
-and logs a warning at `configure()`.
+`allow_reversing`'s default keeps 1.0.0's forward-only reference and, unlike
+1.0.0, also closes the solver's reverse bound: see
+[Reverse travel is now opt-in](#reverse-travel-is-now-opt-in). With it on, a
+model that declares no reverse travel keeps the forward-only reference and logs
+a warning at `configure()`.
 
 `reverse_from_plan_orientation` is the switch that reads travel direction out of
 the plan. It defaults `false` because only a planner that sets pose orientations
@@ -249,17 +269,20 @@ will differ from 1.0.0.
 
 ## Object layout
 
-`ProxMpcController` gains two protected methods and eighteen protected members,
-which changes `sizeof(ProxMpcController)`. The pluginlib load path is unaffected,
-because the class is allocated and freed inside the same library. A downstream
-package that links the exported target and derives from or holds
+`ProxMpcController` gains three protected methods and twenty-nine protected
+members, which changes `sizeof(ProxMpcController)`. The pluginlib load path is
+unaffected, because the class is allocated and freed inside the same library. A
+downstream package that links the exported target and derives from or holds
 `ProxMpcController` directly must be rebuilt.
 
-Two protected names changed with it. `fillStaticObstacles` and `reduceCostmap`
-lose their leading plan-reference parameter, which the scan stopped reading when
-it moved onto the solver's own nominal trajectory, and `a_dec_lin_`/`a_dec_ang_`
-become `fallback_ramp_lin_`/`fallback_ramp_ang_`, which is what they hold: the
-rates the last-resort twist ramp steps by, not a linear/angular acceleration
-pair. A derived controller that overrode or called either must be updated, which
-it must be rebuilt for in any case. Two protected methods, `readModelMapping`
-and `keepOutShift`, are added.
+Its protected surface also changes in ways a derived class sees at compile time,
+so the release is not source compatible for such a class. `fillStaticObstacles`
+and `reduceCostmap` lose their leading plan-reference parameter, which the scan
+stopped reading when it moved onto the solver's own nominal trajectory;
+`publishDiagnostics` gains a `period_ms` parameter after `solve_ms`, so the
+telemetry and the deceleration ramp report the same measured period; and
+`a_dec_lin_`/`a_dec_ang_` become `fallback_ramp_lin_`/`fallback_ramp_ang_`,
+which is what they hold: the rates the last-resort twist ramp steps by, not a
+linear/angular acceleration pair. A derived controller that overrode or called
+any of them must be updated. The three added protected methods are
+`readModelMapping`, `keepOutShift` and `markCycleStart`.

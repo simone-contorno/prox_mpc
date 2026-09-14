@@ -10,24 +10,27 @@ Changelog for package prox_mpc_controller
   ``false`` to reproduce the previous behavior bit-for-bit.
 * **Breaking:** ``model_plugin`` defaults to ``prox_mpc_core/Unicycle`` rather
   than ``prox_mpc_core/Bicycle``.
-* ``allow_reversing`` now gates the control box, not only the reference: with it
-  ``false`` the linear bound is narrowed to ``[0, v_max]`` so the solver cannot
-  plan reverse travel at all. With it ``true`` and no explicit
+* **Breaking:** new ``allow_reversing`` parameter, default ``false``, bounds the
+  solver's linear control to ``[0, v_max]``, so it cannot plan reverse travel at
+  all. 1.0.0 had no such switch; its reference was forward-only, but its solver
+  always admitted reverse down to ``-v_max``, so a deployment that upgrades
+  without setting it loses reverse. With it ``true`` and no explicit
   ``model_params.v_min``, reverse is capped at 0.15 m/s: both guards follow the
   predicted trajectory and so do cover a reversing one, but they see only what
   the costmap holds, and whether the platform sweeps behind itself is a property
   of its sensor rather than of this plugin.
   ``model_params.v_min`` is also forwarded on its own when negative.
-* New ``reverse_from_plan_orientation`` parameter, default ``false``, splits
-  reading travel direction out of the plan from opening the control box. Only a
-  planner that sets pose orientations means anything by them, and a plan carries
-  nothing that reports which planner produced it: NavFn and Smac 2D emit the
-  identity quaternion on every pose, which is indistinguishable from a straight
-  reverse plan. Trusting them read any path running against that one fixed
-  heading as a reverse traverse, so the robot drove the whole path backwards
-  instead of turning around, and a path whose heading component changed sign
-  flipped the reference from cycle to cycle. Set it ``true`` with a cusp-emitting
-  planner (Smac Hybrid-A*, State Lattice) to restore the previous reading.
+* New ``reverse_from_plan_orientation`` parameter, default ``false``: with it
+  and ``allow_reversing`` set, the plan's pose orientations sign the reference
+  into reverse and truncate it at the first direction change. It defaults off
+  because only a planner that sets pose orientations means anything by them, and
+  a plan carries nothing that reports which planner produced it: NavFn and Smac
+  2D emit the identity quaternion on every pose, which is indistinguishable from
+  a straight reverse plan. Trusting them would read any path running against
+  that one fixed heading as a reverse traverse, so the robot would drive the
+  whole path backwards instead of turning around, and a path whose heading
+  component changes sign would flip the reference from cycle to cycle. Set it
+  ``true`` with a cusp-emitting planner (Smac Hybrid-A*, State Lattice).
 * The reference is pinned to the goal pose inside the goal-checker xy tolerance
   instead of tracking the robot's own projection onto the plan. The cruise taper
   and the sampling step composed to give the reference horizon an arc reach of

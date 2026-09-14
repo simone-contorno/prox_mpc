@@ -7,7 +7,7 @@ Changelog for package prox_mpc_demo
 * The local costmap tracks unknown space, so cells the sensor has not swept are
   marked ``NO_INFORMATION`` instead of being published as free.
 * Nav2 parameter files follow the controller's changed defaults.
-* The Nav2 parameter files keep ``allow_reversing: true``, so the demo shows the
+* The Nav2 parameter files set ``allow_reversing: true``, so the demo shows the
   robot backing up to adjust and then pursuing the path forward. Reverse used to
   read as a shuffle near the goal; that was the reference collapsing to a stub
   ahead of the robot's own projection inside the goal tolerance, not reverse
