@@ -183,7 +183,7 @@ def build_trim_cmd(raw_path, offset, duration, out_path):
 GPU_OFFLOAD_ENV = ('__NV_PRIME_RENDER_OFFLOAD=1', '__GLX_VENDOR_LIBRARY_NAME=nvidia')
 
 
-def rviz_command(rviz_cfg, gpu_offload):
+def rviz_command(rviz_cfg, gpu_offload, fullscreen):
     """
     Return the RViz launch argv, at the lowest scheduling priority.
 
@@ -191,9 +191,15 @@ def rviz_command(rviz_cfg, gpu_offload):
     env(1), so only the renderer moves to the discrete GPU and the Nav2 stack keeps
     its environment. Offload needs a real X server running the NVIDIA driver; a
     virtual display such as Xvfb has no hardware GL for it to reach.
+
+    With fullscreen RViz covers the whole screen, which on a desktop session is the
+    only way to keep the window manager's panels and the window's own title bar out
+    of the capture: a managed window cannot be moved over them.
     """
-    cmd = ['nice', '-n', '19', 'rviz2', '-d', str(rviz_cfg),
-           '--ros-args', '-p', 'use_sim_time:=false']
+    cmd = ['nice', '-n', '19', 'rviz2', '-d', str(rviz_cfg)]
+    if fullscreen:
+        cmd.append('--fullscreen')
+    cmd += ['--ros-args', '-p', 'use_sim_time:=false']
     return ['env', *GPU_OFFLOAD_ENV, *cmd] if gpu_offload else cmd
 
 
@@ -350,14 +356,16 @@ def record_one(scenario, args, rn, out_dir, logs_dir, description):
     # bt_navigator action-acknowledge timeout) and the local costmap (obstacle clearing
     # lags, leaving a moving-obstacle inflation trail). --gpu-offload takes the
     # rendering off the CPU entirely, on a real X server with the NVIDIA driver.
-    launch('rviz', rviz_command(rviz_cfg, args.gpu_offload))
+    launch('rviz', rviz_command(rviz_cfg, args.gpu_offload, args.fullscreen))
 
     watch = MotionWatch()
     capture_start = None
     try:
         time.sleep(args.warmup)  # let the lifecycle manager activate the servers
-        with open(logs_dir / f'{scenario}.xdotool.log', 'w') as xlog:
-            place_rviz_window(args.offset, args.resolution, xlog)
+        # A fullscreen window already covers the screen, so it is not moved or resized.
+        if not args.fullscreen:
+            with open(logs_dir / f'{scenario}.xdotool.log', 'w') as xlog:
+                place_rviz_window(args.offset, args.resolution, xlog)
         cmd = build_ffmpeg_cmd(args.display, args.offset, args.resolution,
                                args.framerate, raw_len, raw_path)
         print(f'[record] {scenario} ffmpeg: {shlex.join(cmd)}', flush=True)
@@ -444,6 +452,10 @@ def main() -> int:
     ap.add_argument('--gpu-offload', action='store_true',
                     help='render RViz on the NVIDIA GPU through PRIME render offload; '
                          'needs a real X server with the NVIDIA driver, not Xvfb')
+    ap.add_argument('--fullscreen', action='store_true',
+                    help='start RViz fullscreen and skip the window placement, so the panels '
+                         'of a desktop session stay out of the capture; set --resolution to '
+                         'the full screen size')
     args = ap.parse_args()
 
     rn = load_run_nav2()

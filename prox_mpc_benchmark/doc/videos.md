@@ -235,6 +235,7 @@ All artifacts land under `results/videos/` (gitignored):
 | `--timeout` | `55` | goal timeout passed to `goal_sender.py` [s] |
 | `--out-dir` | `results/videos` | clip output directory |
 | `--gpu-offload` | off | render RViz on the NVIDIA GPU through PRIME render offload (`__NV_PRIME_RENDER_OFFLOAD=1`, `__GLX_VENDOR_LIBRARY_NAME=nvidia`, set for RViz alone); needs a real X server running the NVIDIA driver and does not work on a virtual Xvfb display, which has no hardware GL |
+| `--fullscreen` | off | start RViz fullscreen and skip the window placement; on a desktop session this is what keeps the panels and the window's title bar out of the capture, so pair it with `--resolution` set to the full screen size |
 
 `combine_grid.sh`:
 
