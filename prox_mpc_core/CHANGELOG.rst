@@ -8,10 +8,10 @@ Changelog for package prox_mpc_core
   built once and updated in place, so the factorization and the previous
   primal/dual iterate carry over between cycles instead of being rebuilt every
   solve. Set it ``false`` to restore the previous behavior.
-* ``max_iter_sqp`` defaults to 1, making the real-time iteration scheme
-  unconditional and per-cycle latency bounded by a single QP. The previous
-  default of 100 could spend 99 further linearizations around a corrupted
-  iterate after a failed solve.
+* **Breaking:** ``max_iter_sqp`` defaults to 1, making the real-time iteration
+  scheme unconditional and per-cycle latency bounded by a single QP. The
+  previous default of 100 could spend 99 further linearizations around a
+  corrupted iterate after a failed solve.
 * The horizon shift no longer overwrites the warm start's first control with the
   control already executed, which had left it violating its own control-rate
   chain on every cycle.

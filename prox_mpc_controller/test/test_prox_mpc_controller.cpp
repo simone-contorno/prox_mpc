@@ -14,7 +14,8 @@
 //     reduction, and the footprint veto;
 //   - setSpeedLimit(): absolute, percentage, clamping, NO_SPEED_LIMIT restore,
 //     the cache-before-model case, and the deferred apply-on-next-cycle contract;
-//   - cancel()/reset(): graceful-stop ramp and runtime-state clearing.
+//   - cancel()/reset(): graceful-stop ramp, runtime-state clearing, and the clear
+//     of the drawn obstacle predictions.
 //
 // Fail-safe branches each assert the safe command the plan specifies, not merely
 // that the call returns: an empty plan throws nav2_core::InvalidPath; a TF
@@ -55,6 +56,8 @@
 #include <rclcpp_lifecycle/lifecycle_node.hpp>
 #include <rcutils/logging.h>
 #include <tf2_ros/buffer.h>
+#include <visualization_msgs/msg/marker.hpp>
+#include <visualization_msgs/msg/marker_array.hpp>
 
 #include <prox_mpc_msgs/msg/obstacle_array.hpp>
 
@@ -1787,6 +1790,63 @@ TEST_F(ProxMpcControllerTest, ResetClearsRuntimeState)
   EXPECT_FALSE(c->cancelling());
   EXPECT_NE(c->mpc(), nullptr);              // owned handles intact
   EXPECT_NE(c->model(), nullptr);
+}
+
+// reset() removes the obstacle predictions the last cycle drew: the controller
+// server stops cycling when a task ends, so nothing else clears them from RViz. The
+// server also resets on deactivate, when the inactive publisher must stay silent.
+TEST_F(ProxMpcControllerTest, ResetClearsDrawnObstaclePredictions)
+{
+  auto c = makeRunning(
+  {
+    rclcpp::Parameter("FollowPath.predict_obstacles", true),
+    rclcpp::Parameter("FollowPath.dynamic_speed_threshold", 0.05),
+  });
+
+  visualization_msgs::msg::MarkerArray received;
+  int count = 0;
+  auto sub = node_->create_subscription<visualization_msgs::msg::MarkerArray>(
+    "prox_mpc_predicted_obstacles", 10,
+    [&](visualization_msgs::msg::MarkerArray::SharedPtr msg) {received = *msg; ++count;});
+
+  rclcpp::executors::SingleThreadedExecutor exec;
+  exec.add_node(node_->get_node_base_interface());
+  const auto spin_for = [&](int iterations) {
+      for (int i = 0; i < iterations; ++i) {
+        exec.spin_some();
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+      }
+    };
+  const auto drawn_predictions = [&]() {
+      std::size_t n = 0;
+      for (const auto & m : received.markers) {
+        if (m.action == visualization_msgs::msg::Marker::ADD && !m.points.empty()) {++n;}
+      }
+      return n;
+    };
+
+  // The publish is skipped until a subscriber connects, so re-drive the cycle with a
+  // fresh track until a drawn prediction is delivered, then drain in-flight arrays.
+  for (int i = 0; i < 100 && drawn_predictions() == 0u; ++i) {
+    c->injectObstacles(makeObstacleMsg(node_->get_clock()->now(), 2.0, 0.5, -0.5, 0.0, 0.2));
+    runCycle(c);
+    spin_for(1);
+  }
+  spin_for(20);
+  ASSERT_GT(drawn_predictions(), 0u);
+
+  c->reset();
+  for (int i = 0; i < 100 && received.markers.size() != 1u; ++i) {
+    spin_for(1);
+  }
+  ASSERT_EQ(received.markers.size(), 1u);
+  EXPECT_EQ(received.markers.front().action, visualization_msgs::msg::Marker::DELETEALL);
+
+  c->deactivate();
+  const int after_deactivate = count;
+  c->reset();
+  spin_for(20);
+  EXPECT_EQ(count, after_deactivate);
 }
 
 // --- reduceCostmap(): obstacle reduction (white-box) -----------------------

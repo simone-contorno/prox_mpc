@@ -367,6 +367,7 @@ controller into its own folder, then combine per scenario:
 ```bash
 for c in proxmpc_pred dwb mppi regulated_pure_pursuit; do
   ros2 run prox_mpc_benchmark record_scenarios.py --controller "$c" \
+    --display :0 --resolution 2560x1440 --fullscreen --gpu-offload \
     --out-dir results/videos/"$c"
 done
 ros2 run prox_mpc_benchmark combine_grid.sh \

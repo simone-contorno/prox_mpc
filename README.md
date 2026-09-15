@@ -164,8 +164,12 @@ enabled - is **the most reliable avoider measured here: 6 % collisions across 50
 obstacle runs against 16 % for the next best**. Every cycle in 100 runs stayed
 inside the 50 ms budget, which was not true of the previous release.
 
-That predictive path is the configuration to deploy, and is now the default. The
-costmap-only path should be treated as a single-obstacle configuration: it
+That predictive configuration is the one to deploy. Only prediction itself is on
+by default (`predict_obstacles: true`): the result above also relies on the
+obstacle-aware yield and its speed cap (`obstacle_yield_band_m`,
+`obstacle_yield_caps_speed`) and on `allow_reversing`, all off by default and set
+in the [predictive preset](prox_mpc_benchmark/config/controllers/proxmpc_pred.yaml).
+The costmap-only path should be treated as a single-obstacle configuration: it
 constrains obstacles where they were rather than where they will be, which one
 free corridor absorbs and two closing movers do not. Neither variant is
 collision-free among two simultaneous movers, so an environment with several

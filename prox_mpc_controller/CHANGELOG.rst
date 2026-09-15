@@ -90,6 +90,10 @@ Changelog for package prox_mpc_controller
   the model's declared inverse in its own units, with a configurable step.
 * Perception state is mutex-guarded on every path, the costmap lock is narrowed
   to the cell reads, and the footprint read is hoisted out of the grid lock.
+* ``reset()`` clears the predicted-obstacle markers. They were cleared only by
+  the next control cycle, and the controller server stops cycling when a task
+  ends, so RViz kept drawing the last prediction after the goal while the
+  obstacle moved on.
 * ``configure()`` validates its parameters, warns when ``robot_radius``
   undersizes the costmap footprint, rejects a zero model speed bound and a
   non-finite ``desired_linear_vel``, and clamps a Nav2 speed limit into the

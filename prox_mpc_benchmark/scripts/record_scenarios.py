@@ -178,6 +178,31 @@ def build_trim_cmd(raw_path, offset, duration, out_path):
     ]
 
 
+# NVIDIA PRIME render offload for a single process on a hybrid-graphics host, whose X
+# server otherwise renders every GL client on the integrated GPU.
+GPU_OFFLOAD_ENV = ('__NV_PRIME_RENDER_OFFLOAD=1', '__GLX_VENDOR_LIBRARY_NAME=nvidia')
+
+
+def rviz_command(rviz_cfg, gpu_offload, fullscreen):
+    """
+    Return the RViz launch argv, at the lowest scheduling priority.
+
+    With gpu_offload the PRIME offload variables are set for RViz alone through
+    env(1), so only the renderer moves to the discrete GPU and the Nav2 stack keeps
+    its environment. Offload needs a real X server running the NVIDIA driver; a
+    virtual display such as Xvfb has no hardware GL for it to reach.
+
+    With fullscreen RViz covers the whole screen, which on a desktop session is the
+    only way to keep the window manager's panels and the window's own title bar out
+    of the capture: a managed window cannot be moved over them.
+    """
+    cmd = ['nice', '-n', '19', 'rviz2', '-d', str(rviz_cfg)]
+    if fullscreen:
+        cmd.append('--fullscreen')
+    cmd += ['--ros-args', '-p', 'use_sim_time:=false']
+    return ['env', *GPU_OFFLOAD_ENV, *cmd] if gpu_offload else cmd
+
+
 class MotionWatch:
     """
     Record the monotonic time of the robot's first motion, from odom.
@@ -324,22 +349,23 @@ def record_one(scenario, args, rn, out_dir, logs_dir, description):
     launch('obstacle_markers', [
         'python3', str(markers_py),
         '--ros-args', '--params-file', str(marker_params)])
-    # RViz renders on software GL under a virtual display (llvmpipe), which is
-    # CPU-heavy. Run it at the lowest scheduling priority so the time-sensitive Nav2
-    # servers (planner acknowledge, controller solve, costmap clearing) always win
-    # the CPU: at normal priority the contention starves the planner (goals abort on
-    # the bt_navigator action-acknowledge timeout) and the local costmap (obstacle
-    # clearing lags, leaving a moving-obstacle inflation trail).
-    launch('rviz', [
-        'nice', '-n', '19', 'rviz2', '-d', str(rviz_cfg),
-        '--ros-args', '-p', 'use_sim_time:=false'])
+    # RViz on a virtual display renders in software (llvmpipe), which is CPU-heavy, so
+    # it runs at the lowest scheduling priority and the time-sensitive Nav2 servers
+    # (planner acknowledge, controller solve, costmap clearing) always win the CPU: at
+    # normal priority the contention starves the planner (goals abort on the
+    # bt_navigator action-acknowledge timeout) and the local costmap (obstacle clearing
+    # lags, leaving a moving-obstacle inflation trail). --gpu-offload takes the
+    # rendering off the CPU entirely, on a real X server with the NVIDIA driver.
+    launch('rviz', rviz_command(rviz_cfg, args.gpu_offload, args.fullscreen))
 
     watch = MotionWatch()
     capture_start = None
     try:
         time.sleep(args.warmup)  # let the lifecycle manager activate the servers
-        with open(logs_dir / f'{scenario}.xdotool.log', 'w') as xlog:
-            place_rviz_window(args.offset, args.resolution, xlog)
+        # A fullscreen window already covers the screen, so it is not moved or resized.
+        if not args.fullscreen:
+            with open(logs_dir / f'{scenario}.xdotool.log', 'w') as xlog:
+                place_rviz_window(args.offset, args.resolution, xlog)
         cmd = build_ffmpeg_cmd(args.display, args.offset, args.resolution,
                                args.framerate, raw_len, raw_path)
         print(f'[record] {scenario} ffmpeg: {shlex.join(cmd)}', flush=True)
@@ -423,6 +449,13 @@ def main() -> int:
                          'the clip is cut at first motion, so this is not dead time')
     ap.add_argument('--timeout', type=float, default=55.0, help='goal timeout [s]')
     ap.add_argument('--out-dir', default='', help='clip output dir')
+    ap.add_argument('--gpu-offload', action='store_true',
+                    help='render RViz on the NVIDIA GPU through PRIME render offload; '
+                         'needs a real X server with the NVIDIA driver, not Xvfb')
+    ap.add_argument('--fullscreen', action='store_true',
+                    help='start RViz fullscreen and skip the window placement, so the panels '
+                         'of a desktop session stay out of the capture; set --resolution to '
+                         'the full screen size')
     args = ap.parse_args()
 
     rn = load_run_nav2()

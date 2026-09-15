@@ -61,3 +61,25 @@ def test_dynamic_circle_records_long_enough_to_finish():
     assert rs.clip_duration(scn, 20.0) == 25.0
     scn = yaml.safe_load((SCENARIOS / 'static_box.yaml').read_text())['scenario']
     assert rs.clip_duration(scn, 20.0) == 20.0
+
+
+def test_rviz_runs_at_the_lowest_priority_without_offload():
+    cmd = rs.rviz_command(Path('recording.rviz'), False, False)
+    assert cmd[:4] == ['nice', '-n', '19', 'rviz2']
+    assert not any(arg.startswith(('__NV_', '__GLX_')) for arg in cmd)
+    assert '--fullscreen' not in cmd
+
+
+def test_gpu_offload_moves_only_rviz_to_the_nvidia_gpu():
+    cmd = rs.rviz_command(Path('recording.rviz'), True, False)
+    assert cmd[0] == 'env'
+    assert '__NV_PRIME_RENDER_OFFLOAD=1' in cmd
+    assert '__GLX_VENDOR_LIBRARY_NAME=nvidia' in cmd
+    # Apart from the offload variables it is the same niced RViz launch.
+    assert cmd[cmd.index('nice'):] == rs.rviz_command(Path('recording.rviz'), False, False)
+
+
+def test_fullscreen_is_an_rviz_option_not_a_ros_argument():
+    cmd = rs.rviz_command(Path('recording.rviz'), True, True)
+    # RViz options have to precede --ros-args, which hands the rest to ROS.
+    assert cmd.index('--fullscreen') < cmd.index('--ros-args')
