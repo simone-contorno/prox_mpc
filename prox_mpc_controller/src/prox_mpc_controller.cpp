@@ -1803,6 +1803,17 @@ void ProxMpcController::reset()
   dir_hold_s_ = direction_switch_dwell_s_;
   settling_ = false;
   yield_factor_ = 1.0;
+  /* The controller server stops cycling when a task ends, so the predictions the
+   * last cycle drew are cleared here; RViz would otherwise keep drawing them while
+   * the obstacles move on. The server also resets on deactivate, when the
+   * publisher is already inactive and a publish would only log a warning. */
+  {
+    std::lock_guard<std::mutex> lock(obstacles_mutex_);
+    predicted_obstacles_.clear();
+  }
+  if (marker_pub_ && marker_pub_->is_activated()) {
+    publishPredictedObstacleMarkers(clock_->now());
+  }
 }
 
 void ProxMpcController::obstacleCallback(prox_mpc_msgs::msg::ObstacleArray::ConstSharedPtr msg)

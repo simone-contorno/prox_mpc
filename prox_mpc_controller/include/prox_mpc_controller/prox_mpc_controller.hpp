@@ -85,7 +85,8 @@ public:
   /// Request a graceful stop; returns true only once the robot has decelerated.
   bool cancel() override;
 
-  /// Clear runtime state between tasks (keeps owned handles intact).
+  /// Clear runtime state between tasks and remove the obstacle predictions the
+  /// last cycle drew (keeps owned handles intact).
   void reset() override;
 
 protected:
