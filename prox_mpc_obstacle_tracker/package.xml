@@ -12,6 +12,7 @@
   <license>Apache-2.0</license>
   <url type="repository">https://github.com/simone-contorno/prox_mpc</url>
   <url type="bugtracker">https://github.com/simone-contorno/prox_mpc/issues</url>
+  <author email="simone.contorno@outlook.it">Simone Contorno</author>
 
   <buildtool_depend>ament_cmake</buildtool_depend>
 
