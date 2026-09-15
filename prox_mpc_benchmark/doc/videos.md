@@ -209,6 +209,7 @@ mode (the four paths and four cell labels, top-left -> bottom-right):
 # one folder per controller (the tracker starts only for proxmpc_pred)
 for c in proxmpc_pred dwb mppi regulated_pure_pursuit; do
   ros2 run prox_mpc_benchmark record_scenarios.py --controller "$c" \
+    --display :0 --resolution 2560x1440 --fullscreen --gpu-offload \
     --out-dir results/videos/"$c"
 done
 
