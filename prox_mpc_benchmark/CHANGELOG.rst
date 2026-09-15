@@ -11,6 +11,11 @@ Changelog for package prox_mpc_benchmark
   clip, and a retried goal no longer shortens it. A scenario may set its own
   clip length with ``video.duration_s``; ``dynamic_circle`` sets 25 s so the
   orbit is seen through to the goal.
+* ``record_scenarios.py --gpu-offload`` renders RViz on the NVIDIA GPU through
+  PRIME render offload, set for the RViz process alone; it needs a real X server
+  running the NVIDIA driver. ``--fullscreen`` starts RViz fullscreen and skips
+  the window placement, which keeps a desktop session's panels and the window's
+  title bar out of the capture. Both are off by default.
 * The mode-(b2) run index is rebuilt from the records on disk, so a re-run of a
   subset no longer leaves stale rows from a previous campaign in the index.
 * Per-run metrics record the QP status histogram and the SQP / QP external
